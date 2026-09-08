@@ -19,9 +19,14 @@ from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
+# `import support` / `import test_dbus_mini` resolve only with the tests
+# directory itself on sys.path: running this file by path puts it there for
+# free, `python3 -m unittest tests/<file>.py` does not (tests/test_passthrough.py
+# fails over a file that imports one of them without this line).
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from test_dbus_mini import MockBus
 from wxprop import cli, core
-from wxprop import fmt as fmtmod
 
 # The suite never hands a tool over to the real X11 one: see
 # tests/conftest.py (which covers pytest) and tests/test_passthrough.py.
@@ -115,6 +120,10 @@ class CliTestBase(unittest.TestCase):
         if backend == "fake":
             fake = _FakeSway()
             det = lambda: fake
+        elif backend == "real":
+            # the real detector, patched over itself: the caller has already
+            # arranged the session it should find (or not find)
+            det = core._detect_backend
         else:
             det = lambda: None
         out = _CapStdout()
@@ -174,6 +183,194 @@ class BackendOnAnX11SessionTest(unittest.TestCase):
                                     "DISPLAY": ":0"})
         self.assertEqual(got, "a backend")
         self.assertEqual(called, [True])
+
+
+    # -- T36: the session the detector believes it is on ---------------------
+
+    def _detect_without(self, env, drop=()):
+        """`_detect()` with `drop` removed from the environment as well:
+        mock.patch.dict cannot express "unset"."""
+        saved = {k: os.environ.pop(k, None) for k in drop}
+        try:
+            return self._detect(env)
+        finally:
+            for k, v in saved.items():
+                if v is not None:
+                    os.environ[k] = v
+
+    def _seams(self):
+        """A private /tmp/.X11-unix, /run/user and /run/systemd/sessions, so
+        the answer comes from the fixture and not from the box the suite runs
+        on. Returns (x11 dir, run-user dir)."""
+        import shutil
+        import tempfile as _tempfile
+        from fwcommon import passthrough
+        d = _tempfile.mkdtemp(prefix="wxprop_sess_")
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        x11 = os.path.join(d, "X11-unix")
+        run = os.path.join(d, "run-user")
+        logind = os.path.join(d, "logind")
+        for p in (x11, run, logind):
+            os.makedirs(p)
+        for name, value in (("_X11_SOCK_DIR", x11), ("_LOGIND_DIR", logind),
+                            ("_RUN_USER_DIR", run)):
+            p = mock.patch.object(passthrough, name, value)
+            p.start()
+            self.addCleanup(p.stop)
+        passthrough.reset_cache()
+        return x11, run
+
+    def test_a_compositor_on_an_x11_session_is_still_never_asked(self):
+        """The detector goes by the session bus, and a Wayland compositor's
+        bus name is owned on its X11 build too -- KWin on Xorg owns
+        org.kde.KWin, and a GNOME-on-Xorg session owns org.gnome.Shell. So
+        the guard cannot be "is a compositor there": it is the session kind,
+        checked before backend_detect is imported at all."""
+        from fwcommon import passthrough
+        with mock.patch.object(passthrough, "session_kind",
+                               lambda tool=None, **kw: "x11"):
+            got, called = self._detect({"FUCKWAYLAND_PASSTHROUGH": "auto"})
+        self.assertIsNone(got)
+        self.assertEqual(called, [])
+        with mock.patch.object(passthrough, "session_kind",
+                               lambda tool=None, **kw: "wayland"):
+            got, called = self._detect({"FUCKWAYLAND_PASSTHROUGH": "auto"})
+        self.assertEqual((got, called), ("a backend", [True]))
+
+    def test_a_wayland_session_with_a_display_set_still_detects(self):
+        """DISPLAY is set on every Wayland session that runs Xwayland, which
+        is nearly all of them -- it says nothing about the session kind."""
+        self._seams()
+        got, called = self._detect({"FUCKWAYLAND_PASSTHROUGH": "auto",
+                                    "XDG_SESSION_TYPE": "wayland",
+                                    "DISPLAY": ":1"})
+        self.assertEqual((got, called), ("a backend", [True]))
+
+    def _kind(self, env, drop=()):
+        """`passthrough.session_kind("xprop")` under the same environment
+        `_detect_without()` would use. `_detect_backend()` only *refuses* on
+        "x11", so it cannot be asked which of "wayland" and None it saw --
+        and the difference is the whole claim of the two tests below."""
+        from fwcommon import passthrough
+        e = {k: v for k, v in os.environ.items() if k not in drop}
+        e.update(env)
+        passthrough.reset_cache()
+        return passthrough.session_kind("xprop", env=e)
+
+    def test_under_sudo_the_invoking_users_wayland_socket_decides(self):
+        """`sudo wxprop` inherits XDG_SESSION_TYPE=tty (or nothing at all)
+        and drops XDG_RUNTIME_DIR, so the environment says "no graphical
+        session". SUDO_UID names the user whose session it really is, and a
+        wayland-* socket in that user's runtime dir is the evidence.
+
+        The session_kind assertions are what make the socket load-bearing:
+        with an empty /run/user/1000 the answer is None, and None is not
+        "x11", so `_detect_backend()` goes on to detect either way -- this
+        test read as green with no socket at all until they were added."""
+        _x11, run = self._seams()
+        os.makedirs(os.path.join(run, "1000"))
+        sock = os.path.join(run, "1000", "wayland-0")
+        open(sock, "w").close()
+        env = {"FUCKWAYLAND_PASSTHROUGH": "auto", "SUDO_UID": "1000",
+               "XDG_SESSION_TYPE": "tty"}
+        drop = ("DISPLAY", "WAYLAND_DISPLAY", "XDG_RUNTIME_DIR")
+        self.assertEqual(self._kind(env, drop), "wayland")
+        got, called = self._detect_without(env, drop=drop)
+        self.assertEqual((got, called), ("a backend", [True]))
+        with self.subTest("the socket taken away"):
+            os.unlink(sock)
+            self.assertIsNone(self._kind(env, drop))
+
+    def test_under_sudo_with_only_an_x_socket_it_is_an_x11_session(self):
+        """The same fixture with the wayland socket taken away and an X
+        server socket in its place: an X11 session, and the native plane is
+        the whole answer -- no compositor is consulted."""
+        x11, run = self._seams()
+        os.makedirs(os.path.join(run, "1000"))
+        open(os.path.join(x11, "X0"), "w").close()
+        got, called = self._detect_without(
+            {"FUCKWAYLAND_PASSTHROUGH": "auto", "SUDO_UID": "1000",
+             "XDG_SESSION_TYPE": "tty"},
+            drop=("DISPLAY", "WAYLAND_DISPLAY", "XDG_RUNTIME_DIR"))
+        self.assertIsNone(got)
+        self.assertEqual(called, [])
+
+
+class NoSessionErrorTest(CliTestBase):
+    """T36: the error a tool prints when there is no session at all has to
+    carry that tool's own name.
+
+    `backend.set_program()` is process-global: the three CLIs set it at the
+    top of main(), and a suite that runs two mains in one process (or a
+    future `wwmctl` that shells out to a wdotool entry point) would otherwise
+    print the previous tool's name at the user. The originals never do:
+    wmctrl says "wmctrl:", xprop says "xprop:"."""
+
+    def test_wxprop_names_itself_and_not_wdotool(self):
+        """The cheap half: no backend and no X plane at all (WXPROP_NO_X=1
+        from setUp), which is the "nothing to talk to" path through
+        core.root_target()."""
+        from wdotool import backend
+        backend.set_program("wdotool")       # as a wdotool run leaves it
+        code, out, err = self.run_cli("-root", "_NET_CLIENT_LIST")
+        self.assertEqual((code, out), (1, b""))
+        self.assertTrue(err.startswith("xprop: error: "), err)
+        self.assertNotIn("wdotool", err)
+        self.assertEqual(backend.program(), "xprop")
+
+    def test_the_real_detectors_message_names_xprop(self):
+        """The half that matters, driven through the real
+        `wdotool.backend_detect.detect()`: a session bus that answers
+        ListNames with no org.kde.KWin and no org.gnome.Shell, no sway/i3
+        socket, and `_wlr()` refusing -- the state a bare Wayland compositor
+        (or a GNOME session whose Shell has just crashed) leaves behind.
+
+        `detect()` builds its NoSessionError with `wdotool.backend.program()`,
+        a process-global that main() sets: so the message itself, not only
+        the prefix wxprop puts in front of it, has to say "xprop". Seeded
+        with "wdotool" here, as a previous in-process main() would leave it.
+        Session.backend() swallows the exception into `backend_error`, and
+        core.root_target() reports it as "cannot examine the root window"."""
+        from fwcommon.errors import CmdError
+        from fwcommon import session
+        from wdotool import backend, backend_detect
+        bus = MockBus()
+        self.addCleanup(bus.close)
+        backend_detect.reset()               # drop any bus this process kept
+        self.addCleanup(backend_detect.reset)
+        backend.set_program("wdotool")
+        env = {"DBUS_SESSION_BUS_ADDRESS": bus.address,
+               "XDG_SESSION_TYPE": "wayland"}
+        saved = {k: os.environ.pop(k, None)
+                 for k in ("SWAYSOCK", "I3SOCK", "WAYLAND_DISPLAY",
+                           "WDOTOOL_BACKEND")}
+
+        def no_wlr():
+            raise CmdError("the compositor does not offer wlr-foreign-toplevel")
+
+        try:
+            with mock.patch.dict(os.environ, env, clear=False), \
+                    mock.patch.object(backend_detect, "_wlr", no_wlr), \
+                    mock.patch.object(session, "find_sway_socket",
+                                      lambda: None), \
+                    mock.patch.object(backend_detect.session,
+                                      "find_sway_socket", lambda: None):
+                # find_sway_socket is patched as well as unset: this host runs
+                # a headless sway in the live files, and whether one happens to
+                # be up must not decide what this test measures.
+                code, out, err = self.run_cli("-root", "_NET_CLIENT_LIST",
+                                              backend="real")
+        finally:
+            for k, v in saved.items():
+                if v is not None:
+                    os.environ[k] = v
+        self.assertEqual((code, out), (1, b""))
+        self.assertTrue(err.startswith("xprop: error: cannot examine the "
+                                       "root window: "), err)
+        self.assertIn("xprop: no Wayland session found", err)
+        self.assertIn("no KWin or GNOME Shell on the session D-Bus", err)
+        self.assertNotIn("wdotool", err)
+        self.assertEqual(backend.program(), "xprop")
 
 
 class VersionHelpGrammarTest(CliTestBase):

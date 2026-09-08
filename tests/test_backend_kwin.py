@@ -24,17 +24,23 @@ import threading
 import time
 import types
 import unittest
+from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
-sys.path.insert(0, os.path.join(ROOT, "tests"))
+# `import support` / `import wl_fake` resolve only with the tests directory
+# itself on sys.path: running this file by path puts it there for free,
+# `python3 -m unittest tests/<file>.py` does not (tests/test_passthrough.py
+# fails over a file that imports one of them without this line).
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from fwcommon import dbus_mini, session
 from fwcommon.dbus_mini import ERR, Bus, DBusError, Message, Variant
 from fwcommon.errors import CmdError
+import support
 from test_dbus_mini import MockBus
 from wdotool import backend_detect, backend_kwin, kwin_js
-from wdotool.backend import View, Window, Workspace, hit_test
+from wdotool.backend import hit_test
 from wdotool.backend_kwin import (BUS_NAME, IFACE, KWIN_IFACE,
                                   KWIN_NAME, KWIN_PATH, OBJECT_PATH,
                                   SCRIPTING_IFACE, SCRIPTING_PATH,
@@ -83,7 +89,7 @@ def fixture_windows(six=True):
         d["u"], d["so"] = UU[d.pop("key")], d.pop("so")
         return d
 
-    return [
+    rows = [
         win(key="desktop", so=0, t="Desktop", c="plasmashell", n="plasmashell",
             p=900, ty=1, ly=0, sk=True, x=0, y=0, w=1920, h=1080),
         win(key="kate", so=1, t="untitled - Kate", c="org.kde.kate",
@@ -96,6 +102,14 @@ def fixture_windows(six=True):
             p=1201, f=True, x=100, y=80, w=640, h=480,
             xid=0 if six else XTERM_XID),
     ]
+    # `ix` is the row's place in workspace.windowList(), which kwin_js records
+    # before it sorts the payload by stacking order -- here the two orders
+    # happen to agree. _match_xids reads it as _NET_CLIENT_LIST's order (see
+    # Workspace::propagateWindows), which is the only thing that tells two
+    # identical windows of one client apart on Plasma 6.
+    for i, row in enumerate(rows):
+        row["ix"] = i
+    return rows
 
 
 class KwinScriptingService:
@@ -107,7 +121,7 @@ class KwinScriptingService:
                  decoy=False, refuse_load=False, select_uuid=UU["kate"],
                  select_error=None, select_delay=0.05,
                  no_run=False, junk=False, max_desktops=None,
-                 min_desktops=1):
+                 min_desktops=1, slow=0.0):
         self.bus = Bus(address)
         self.bus.serve_calls = True
         self.plasma = plasma
@@ -119,6 +133,11 @@ class KwinScriptingService:
         self.select_uuid = select_uuid
         self.select_error = select_error
         self.select_delay = select_delay
+        # Seconds of thinking before Introspect and loadScript answer: a KWin
+        # busy with its own compositing does not answer either of them
+        # instantly, and those two are where the backend's deadline used to
+        # not apply at all.
+        self.slow = slow
         self.windows = fixture_windows(plasma >= 6)
         self.max_desktops = max_desktops   # KWin's own cap (20 on 5.27, 25 on 6)
         self.min_desktops = min_desktops   # KWin keeps at least one
@@ -223,6 +242,8 @@ class KwinScriptingService:
         a = m.args()
         self.calls.append((m.path, m.member, a))
         if m.interface == "org.freedesktop.DBus.Introspectable":
+            if self.slow:
+                time.sleep(self.slow)
             return self._introspect(m.path)
         if m.interface == dbus_mini.PROPS_IFACE and m.member == "Get":
             return self._prop(*a)
@@ -239,6 +260,8 @@ class KwinScriptingService:
     # -- /Scripting
 
     def s_loadScript(self, path, plugin):
+        if self.slow:
+            time.sleep(self.slow)
         if self.refuse_load or plugin in self.loaded:
             return "i", (-1,)
         self.script_modes.append(os.stat(path).st_mode & 0o777)
@@ -1248,6 +1271,49 @@ class BackendTests(_Base):
         # (900, 700) is inside kate, which is minimized: never a hit
         self.assertEqual(self.window_at(900, 700), 0)
 
+    def test_a_dock_over_a_window_is_looked_through(self):
+        """A Plasma panel is a DOCK at the top of the screen and is in
+        windowList() like anything else. A click there falls through to what
+        is under it on X11, and getmouselocation has to answer the same on
+        every backend -- the rule lives in backend.hit_test and the backend's
+        only job is to fill window_type."""
+        d = self.kwin.find(UU["xterm"])
+        d.update(y=0)                       # the xterm now reaches the top
+        dock = dict(self.kwin.find(UU["konsole"]))
+        dock.update(u="4d0c0000-0000-4000-8000-0000000000dc", t="Panel",
+                    c="plasmashell", n="plasmashell", p=900, ty=2, so=9,
+                    x=0, y=0, w=1920, h=32, d=-1, oc=True, m=False, hi=False)
+        self.kwin.windows.append(dock)
+        wins = {w.id: w for w in self.b.list()}
+        self.assertEqual(wins[backend_kwin._wid(dock["u"])].window_type,
+                         "DOCK")
+        self.assertEqual(self.window_at(200, 10), WID["xterm"])
+        # over the panel with nothing under it: the DESKTOP below is looked
+        # through as well, so no hit at all
+        self.assertEqual(self.window_at(1500, 10), 0)
+
+    def test_every_window_type_code_maps_to_its_name(self):
+        """KWin's NET::WindowType codes, as the script reports them. The gaps
+        are real: 6 is NET::Override, which KWin has not produced since 5.x,
+        and anything unknown is NORMAL rather than an error -- a new code in a
+        future Plasma must not make a listing fail."""
+        rows = {0: "NORMAL", 1: "DESKTOP", 2: "DOCK", 3: "TOOLBAR", 4: "MENU",
+                5: "DIALOG", 7: "MENU", 8: "UTILITY", 9: "SPLASHSCREEN",
+                10: "DROPDOWN_MENU", 11: "POPUP_MENU", 12: "TOOLTIP",
+                13: "NOTIFICATION", 14: "COMBO", 15: "DND",
+                16: "NOTIFICATION", 17: "NOTIFICATION", 18: "POPUP_MENU"}
+        self.assertEqual(backend_kwin._WINDOW_TYPES, rows)
+        for code, name in rows.items():
+            with self.subTest(code=code):
+                self.kwin.find(UU["kate"])["ty"] = code
+                wins = {w.id: w for w in self.b.list()}
+                self.assertEqual(wins[WID["kate"]].window_type, name)
+        for unknown in (6, 99, -1):
+            with self.subTest(code=unknown):
+                self.kwin.find(UU["kate"])["ty"] = unknown
+                wins = {w.id: w for w in self.b.list()}
+                self.assertEqual(wins[WID["kate"]].window_type, "NORMAL")
+
     def test_window_at_prefers_the_focused_window(self):
         d = self.kwin.find(UU["kate"])
         d.update(m=False, hi=False, x=100, y=80, w=640, h=480, so=9)
@@ -1318,9 +1384,9 @@ class BackendTests(_Base):
         self.assertTrue(self.kwin.script_modes)
         for mode in self.kwin.script_modes:
             self.assertEqual(mode & 0o077, 0, oct(mode))
-        src = open(os.path.join(ROOT, "wdotool", "backend_kwin.py")).read()
-        self.assertIn("if os.geteuid() == 0:", src)
-        self.assertIn("os.chown(path, owner, -1)", src)
+        # what happens as root is driven, not grepped: see RootScriptFileTests
+        self.assertEqual(len(self.kwin.script_modes),
+                         len(set(self.kwin.plugins)))
 
     def test_the_events_script_knows_its_own_plugin_name(self):
         """It is the only script that stays loaded, and only the process that
@@ -1520,6 +1586,188 @@ class PayloadShapeTests(_Base):
         with contextlib.redirect_stderr(err):
             self.assertEqual(backend_kwin._match_xids(raw, clients), {})
         self.assertIn("could not be told apart", err.getvalue())
+
+    # -- T18: the three ways the (title, distance, order) score used to slip --
+
+    def _tied_pair(self, extra=()):
+        """Two windows of one client with the same title and the same
+        rectangle, and the two X clients that could each be either.
+
+        Copied from test_a_window_kwin_lists_but_x_does_not_only_shifts_positions:
+        the same numbers, so a difference between the two tests is the extra
+        row and nothing else."""
+        raw = [dict(u="a", c="XTerm", n="xterm", p=900, t="Terminal",
+                    x=300, y=200, w=400, h=328, ix=2),
+               dict(u="b", c="XTerm", n="xterm", p=900, t="Terminal",
+                    x=300, y=200, w=400, h=328, ix=4)]
+        raw = list(extra) + raw
+        clients = [{"xid": 0x1000001, "pid": 900, "inst": "xterm",
+                    "cls": "XTerm", "name": "Terminal",
+                    "geo": (300, 228, 400, 300)},
+                   {"xid": 0x1000003, "pid": 900, "inst": "xterm",
+                    "cls": "XTerm", "name": "Terminal",
+                    "geo": (300, 228, 400, 300)}]
+        return raw, clients
+
+    def test_a_window_ahead_of_a_tied_pair_does_not_shift_it(self):
+        """kde-x-2: an override-redirect popup *below* the pair (ix=3, ix=6)
+        cancelled out, and one *above* it (ix=1) swapped the pair.
+
+        The positions used to be ranked over every candidate at once, so the
+        popup -- which is in workspace.windowList() with its client's pid and
+        class, and never in _NET_CLIENT_LIST -- pushed both windows one place
+        down in the window ranking while the client ranking, which never saw
+        it, stayed where it was: |1-0| beat |2-1| and `a` took `b`'s id.
+        Measured against KWin 6.6.6: a konsole menu is exactly this row."""
+        for ix in (1, 3, 6):
+            with self.subTest(popup_ix=ix):
+                pop = dict(u="pop", c="XTerm", n="xterm", p=900, t="",
+                           x=300, y=228, w=400, h=300, ix=ix)
+                raw, clients = self._tied_pair(extra=[pop])
+                self.assertEqual(backend_kwin._match_xids(raw, clients),
+                                 {"a": 0x1000001, "b": 0x1000003})
+
+    def test_a_native_window_of_the_same_class_ahead_does_not_shift_it(self):
+        """The same shape without any X client at all: a Wayland-native
+        window of the same application (one Konsole started on Wayland beside
+        two on XWayland). It is a candidate -- same pid, same class -- and it
+        is first in windowList(), and it must still not move the pair."""
+        native = dict(u="native", c="XTerm", n="xterm", p=900, t="Terminal",
+                      x=0, y=0, w=200, h=200, ix=0)
+        raw, clients = self._tied_pair(extra=[native])
+        self.assertEqual(backend_kwin._match_xids(raw, clients),
+                         {"a": 0x1000001, "b": 0x1000003})
+
+    def test_a_scaled_xwayland_plane_pairs_the_cascade_correctly(self):
+        """kde-x-1: with a scaled output the X rects are device pixels and
+        KWin's are logical ones, so the distance between a window and *itself*
+        (1500 for a 400x300 window at 100,100 seen at 2x) is larger than the
+        distance between the two windows of a cascade (80 for a 40px offset)
+        -- and every window took its neighbour's id.
+
+        `ratio` is X-root width / workspace.virtualScreenSize width; the rect
+        is divided by it before the distance. 2 is a HiDPI laptop panel, 1.5
+        is what Plasma's own scaling slider offers between 1 and 2."""
+        for r in (2.0, 1.5):
+            with self.subTest(scale=r):
+                raw = [dict(u="a", c="XTerm", n="xterm", p=900, t="",
+                            x=100, y=100, w=400, h=300, ix=0),
+                       dict(u="b", c="XTerm", n="xterm", p=900, t="",
+                            x=140, y=140, w=400, h=300, ix=1)]
+                clients = [
+                    {"xid": 0x1000001, "pid": 900, "inst": "xterm",
+                     "cls": "XTerm", "name": "",
+                     "geo": (int(100 * r), int(100 * r),
+                             int(400 * r), int(300 * r))},
+                    {"xid": 0x1000003, "pid": 900, "inst": "xterm",
+                     "cls": "XTerm", "name": "",
+                     "geo": (int(140 * r), int(140 * r),
+                             int(400 * r), int(300 * r))}]
+                self.assertEqual(backend_kwin._match_xids(raw, clients, r),
+                                 {"a": 0x1000001, "b": 0x1000003})
+                # ...and the ratio is load-bearing: read as 1:1 the same two
+                # rows come out the other way round
+                self.assertEqual(backend_kwin._match_xids(raw, clients, 1.0),
+                                 {"a": 0x1000003, "b": 0x1000001})
+
+    def test_an_inconsistent_ratio_drops_the_distance_and_keeps_the_order(self):
+        """A layout that mixes scales has no one ratio -- the X root is the
+        bounding box at the largest -- so every distance is wrong by a
+        different amount. None drops the distance and leaves the title and
+        the list order, which are still true."""
+        raw = [dict(u="a", c="XTerm", n="xterm", p=900, t="",
+                    x=100, y=100, w=400, h=300, ix=0),
+               dict(u="b", c="XTerm", n="xterm", p=900, t="",
+                    x=140, y=140, w=400, h=300, ix=1)]
+        clients = [{"xid": 0x1000001, "pid": 900, "inst": "xterm",
+                    "cls": "XTerm", "name": "", "geo": (200, 200, 800, 600)},
+                   {"xid": 0x1000003, "pid": 900, "inst": "xterm",
+                    "cls": "XTerm", "name": "", "geo": (280, 280, 800, 600)}]
+        self.assertEqual(backend_kwin._match_xids(raw, clients, None),
+                         {"a": 0x1000001, "b": 0x1000003})
+
+    def test_one_row_without_ix_leaves_the_whole_tie_unresolved(self):
+        """`ix` is all-or-nothing, and that is the pick, not an oversight.
+
+        A payload where one row lacks it (a script half-replaced by an older
+        one, a row a KWin version does not report) could be ranked over the
+        rows that do carry it -- but that puts the others at positions that
+        are not their list positions, which is a wrong order rather than a
+        missing one. So the key stays inert for the whole payload and the
+        tied pair keeps xid 0, with the run saying so."""
+        raw, clients = self._tied_pair()
+        del raw[1]["ix"]
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertEqual(backend_kwin._match_xids(raw, clients), {})
+        self.assertIn("could not be told apart", err.getvalue())
+        self.assertIn("2 XWayland window(s)", err.getvalue())
+
+    def test_the_script_records_its_list_position_before_it_sorts(self):
+        """`ix` has to be taken while the payload is still in
+        workspace.windowList() order: the stacking sort two lines later
+        destroys it, and stacking order is not _NET_CLIENT_LIST's order."""
+        src = _code(kwin_js.SCRIPT)
+        self.assertIn("w.ix = i;", src)
+        self.assertLess(src.index("w.ix = i;"), src.index("out.sort("))
+
+    def test_two_identical_xterms_through_the_backend_keep_their_own_ids(self):
+        """The same tie one layer up: two rows in the fixture, a fake X
+        client list in either order, and `views()` reporting each window
+        under its own X id. `_FakeX` is handed the clients in the X server's
+        order and then reversed, because that order is half the answer."""
+        b = self.backend(plasma=6)
+        twin = dict(self.kwin.find(UU["xterm"]))
+        twin["u"] = "8d0e0000-0000-4000-8000-00000000d00d"
+        twin["so"], twin["ix"] = 4, 4
+        twin["x"], twin["y"] = 100, 80        # the same rect: only ix is left
+        self.kwin.windows.append(twin)
+        first, second = 0x1000001, 0x1000003
+        clients = [{"xid": first, "pid": 1201, "inst": "xterm",
+                    "cls": "XTerm", "name": "test@kde: ~",
+                    "geo": (101, 105, 638, 454)},
+                   {"xid": second, "pid": 1201, "inst": "xterm",
+                    "cls": "XTerm", "name": "test@kde: ~",
+                    "geo": (101, 105, 638, 454)}]
+        for order in ("as X lists them", "reversed"):
+            with self.subTest(order=order):
+                cl = (clients if order == "as X lists them"
+                      else list(reversed(clients)))
+                b._x = _FakeX(cl)
+                b._screen = None
+                views = {v.window.id: v for v in b.views()}
+                # the fixture xterm is ix=3 and the twin ix=4, so the earlier
+                # window takes whichever id is earlier in _NET_CLIENT_LIST --
+                # both ids move when the list is reversed, which is the whole
+                # claim: the order decides, and it is not a coin flip
+                self.assertEqual(views[WID["xterm"]].xid, cl[0]["xid"])
+                self.assertEqual(views[backend_kwin._wid(twin["u"])].xid,
+                                 cl[1]["xid"])
+                self.assertEqual(views[WID["xterm"]].client_type, "x11")
+        self.assertEqual({first, second}, {0x1000001, 0x1000003})
+
+    def test_the_backend_reads_the_scale_off_the_x_root(self):
+        """The seam the fix adds: X root geometry over
+        workspace.virtualScreenSize. The fake KWin says 1920x1080; an X root
+        of 3840x2160 is a 2x plane, one of 1920x1080 is 1:1, and 3840x1080 --
+        two outputs at different scales, the root being the bounding box at
+        the larger -- has no answer."""
+        b = self.backend(plasma=6)
+        self.assertEqual(self.kwin.size, (1920, 1080))
+        for root, want in (((1920, 1080), 1.0), ((3840, 2160), 2.0),
+                           ((2880, 1620), 1.5), ((3840, 1080), None)):
+            with self.subTest(root=root):
+                b._screen = None
+                self.assertEqual(
+                    b._x_ratio(_FakeX([], root_size=root)), want)
+        # nothing readable is 1:1, which is what every unscaled session is
+
+        class _NoRoot:
+            def root(self):
+                raise RuntimeError("no X plane")
+
+        self.assertEqual(b._x_ratio(_NoRoot()), 1.0)
+
 
     def test_two_windows_that_collide_both_keep_an_id(self):
         # 30 bits of the uuid: a collision is a one-in-a-million session,
@@ -1904,11 +2152,208 @@ class DetectTests(_Base):
             backend_detect.reset()
 
 
-class _FakeX:
-    """Stands in for wdotool.x11_mini.X11Conn in the id-matching tests."""
+class ScriptDeadlineTests(_Base):
+    """T35 / fix 33: the deadline `_script()` computes has to cover everything
+    it does, not just run().
 
-    def __init__(self, clients):
+    `_script(timeout=T)` sets one deadline and then made three D-Bus calls that
+    ignored it -- two Introspects and loadScript, each on CALL_TIMEOUT (10 s) --
+    before handing run() `max(0.1, deadline - now)`. A KWin busy enough to be
+    slow on those three (compositing a full-screen video, a stalled GPU) burned
+    the whole budget outside the script and then reported the *script* at fault:
+    30 s of waiting nobody asked for, ending in a wrong diagnosis."""
+
+    def _timeouts(self, b):
+        """Record (member, timeout) for every D-Bus call the backend makes."""
+        seen = []
+        orig = b.bus.call
+
+        def spy(dest, path, iface, member, sig="", args=(), timeout=None,
+                **kw):
+            seen.append((member, timeout))
+            return orig(dest, path, iface, member, sig, args, timeout=timeout,
+                        **kw)
+
+        b.bus.call = spy
+        return seen
+
+    def test_the_deadline_covers_the_introspects_and_the_load(self):
+        b = self.backend(plasma=6)
+        b.script_timeout = 0.5
+        seen = self._timeouts(b)
+        self.assertEqual(len(b.list()), 4)
+        wanted = [(m, t) for m, t in seen
+                  if m in ("Introspect", "loadScript", "run")]
+        self.assertTrue(wanted, seen)
+        for member, timeout in wanted:
+            with self.subTest(member=member):
+                self.assertIsNotNone(timeout, member)
+                # inside the caller's budget, and nowhere near CALL_TIMEOUT
+                self.assertLessEqual(timeout, 0.5, member)
+                self.assertGreater(timeout, 0.0, member)
+        self.assertEqual(backend_kwin.CALL_TIMEOUT, 10.0)
+        self.assertIn("Introspect", [m for m, _t in wanted])
+        self.assertIn("loadScript", [m for m, _t in wanted])
+
+    def test_a_slow_kwin_fails_inside_the_budget_and_leaves_nothing_loaded(self):
+        """0.3 s on every Introspect and loadScript against a 0.5 s budget.
+
+        The wall clock is not the assertion here -- the fake sleeps in one
+        serving thread, so a call that times out on our side still holds the
+        next one up, and the total drifts between 0.6 s and 5 s depending on
+        what else the runner is doing. What is exact is that no single call
+        was ever given longer than the caller's budget: before the fix the
+        three of them were on CALL_TIMEOUT, 10 s each, and a 0.5 s `list()`
+        could have cost 30 s before run() started."""
+        b = self.backend(slow=0.3)
+        seen = self._timeouts(b)
+        b.script_timeout = 0.5
+        with self.assertRaises(CmdError) as cm:
+            b.list()
+        asked = [t for m, t in seen
+                 if m in ("Introspect", "loadScript", "run")]
+        self.assertTrue(asked, seen)
+        self.assertLessEqual(max(asked), 0.5, seen)
+        self.assertEqual(self.kwin.loaded, set())
+        # the call that ran out of time is named; the script is not blamed for
+        # a budget that was spent before it ran
+        self.assertIn("loadScript", str(cm.exception))
+        self.assertNotIn("sent no result", str(cm.exception))
+
+    def test_a_slow_kwin_inside_a_generous_budget_still_answers(self):
+        """The same 0.3 s per call with 5 s to spend: four windows, no error --
+        the deadline shortens the calls, it does not refuse them."""
+        b = self.backend(slow=0.3)
+        seen = self._timeouts(b)
+        b.script_timeout = 5.0
+        self.assertEqual(len(b.list()), 4)
+        asked = [t for m, t in seen
+                 if m in ("Introspect", "loadScript", "run")]
+        self.assertLessEqual(max(asked), 5.0, seen)
+        self.assertGreater(min(asked), 0.3, seen)
+
+    def test_a_silent_kwin_costs_the_script_budget_and_no_more(self):
+        """A KWin that takes the script, answers run() and then says nothing:
+        the whole cost is the script budget. With the shipped SCRIPT_TIMEOUT
+        that is 10 s, not 10 plus three D-Bus calls' worth. Measured here with
+        a 0.6 s budget: 0.60 s."""
+        b = self.backend(silent=True)
+        b.script_timeout = 0.6
+        start = time.monotonic()
+        with self.assertRaises(CmdError):
+            b.list()
+        waited = time.monotonic() - start
+        self.assertLess(waited, 2.0, "%.2fs" % waited)
+        self.assertEqual(self.kwin.loaded, set())
+        self.assertEqual(backend_kwin.SCRIPT_TIMEOUT, 10.0)
+
+
+class RootScriptFileTests(_Base):
+    """T35: what `_write_source()` does about the script file's owner.
+
+    The file carries the reply token, the window titles and the search patterns
+    of the command, and whoever can read the token can answer in KWin's place.
+    As root (the sudo path) KWin still reads it as the session user, so the file
+    is handed to that user -- and only opened to everybody when there is no user
+    to hand it to."""
+
+    def setUp(self):
+        self.b = self.backend()
+
+    def _write_as_root(self, owner):
+        """_write_source() with euid 0 and `owner` as the bus owner (an
+        exception class means _owner_uid() raises)."""
+        calls = []
+        if isinstance(owner, type) and issubclass(owner, Exception):
+            def owner_uid():
+                raise owner("no such name")
+        else:
+            def owner_uid():
+                return owner
+        self.b.bus._owner_uid = owner_uid
+        with mock.patch("os.geteuid", return_value=0), \
+                mock.patch("os.chown", side_effect=lambda *a: calls.append(
+                    ("chown",) + a)), \
+                mock.patch("os.chmod", side_effect=lambda *a: calls.append(
+                    ("chmod",) + a)):
+            path = self.b._write_source("// nothing")
+        self.addCleanup(lambda: os.path.exists(path) and os.unlink(path))
+        return path, calls
+
+    def test_as_root_the_file_is_chowned_to_the_bus_owner(self):
+        path, calls = self._write_as_root(1000)
+        self.assertEqual(calls, [("chown", path, 1000, -1)])
+        # mkstemp's own mode, left alone: nobody else may read it
+        self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
+
+    def test_as_root_with_no_owner_it_falls_back_to_0644(self):
+        """An unreadable script file would fail the call outright, so when
+        there is no uid to hand it to the file is opened instead -- the one
+        case where the token is world-readable, and it is deliberate."""
+        path, calls = self._write_as_root(DBusError)
+        self.assertEqual(calls, [("chmod", path, 0o644)])
+
+    def test_as_a_user_neither_happens(self):
+        calls = []
+        with mock.patch("os.geteuid", return_value=1000), \
+                mock.patch("os.chown",
+                           side_effect=lambda *a: calls.append(a)), \
+                mock.patch("os.chmod",
+                           side_effect=lambda *a: calls.append(a)):
+            path = self.b._write_source("// nothing")
+        self.addCleanup(lambda: os.path.exists(path) and os.unlink(path))
+        self.assertEqual(calls, [])
+        self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
+
+
+class ScriptLockTests(_Base):
+    """T35: the advisory lock over load->run.
+
+    KWin hands back a script id the moment a lower-numbered script is unloaded,
+    so two wdotools sharing a runtime dir must not interleave one's unload with
+    the other's load. The lock is best effort by design: a runtime dir that
+    cannot be written to is not a reason to refuse the command, because the id
+    check in _load_run_locked is what makes the result correct."""
+
+    LOCK = "wdotool-kwin-script.lock"
+
+    def setUp(self):
+        self.b = self.backend()
+
+    def test_the_lock_file_is_0600_under_the_runtime_dir(self):
+        path = os.path.join(self.rtdir, self.LOCK)
+        if os.path.exists(path):
+            os.unlink(path)
+        self.assertEqual(len(self.b.list()), 4)
+        self.assertTrue(os.path.exists(path), os.listdir(self.rtdir))
+        self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
+
+    def test_a_read_only_runtime_dir_still_lists(self):
+        ro = tempfile.mkdtemp(prefix="wdotool-kwin-ro-")
+        self.addCleanup(shutil.rmtree, ro, True)
+        os.chmod(ro, 0o500)
+        self.addCleanup(os.chmod, ro, 0o700)
+        with support.env(XDG_RUNTIME_DIR=ro):
+            self.assertEqual(len(self.b.list()), 4)
+        self.assertEqual(os.listdir(ro), [])
+
+
+class _FakeX:
+    """Stands in for wdotool.x11_mini.X11Conn in the id-matching tests.
+
+    `root_size` is the X root's own geometry -- the whole layout in device
+    pixels, which KwinBackend._x_ratio divides by workspace.virtualScreenSize
+    (the same layout in logical pixels) to learn what units the client rects
+    are in."""
+
+    ROOT = 0x1a5
+
+    def __init__(self, clients, root_size=(1920, 1080)):
         self.clients = clients
+        self.root_size = root_size
+
+    def root(self):
+        return self.ROOT
 
     def client_list(self):
         return [c["xid"] for c in self.clients]
@@ -1924,6 +2369,8 @@ class _FakeX:
         return self._find(xid)["name"] if name == "_NET_WM_NAME" else ""
 
     def get_geometry(self, xid):
+        if xid == self.ROOT:
+            return (0, 0) + tuple(self.root_size)
         return self._find(xid)["geo"]
 
     def get_pid(self, xid):

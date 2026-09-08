@@ -28,7 +28,6 @@ Findings fixed and pinned here (wdotool/x11_mini.py unless noted):
 """
 
 import contextlib
-import io
 import os
 import struct
 import sys
@@ -40,6 +39,7 @@ from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from test_wwmctl_cli import SPECS, FakeSwayBackend, FakeX11, run
 from test_wwmctl_x11 import FakeXServer

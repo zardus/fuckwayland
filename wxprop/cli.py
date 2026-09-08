@@ -454,7 +454,10 @@ def main(argv=None) -> int:
         code = 1
     except Exception as e:
         # X protocol errors print Xlib's classic block; anything else is a
-        # one-line fatal (never a traceback).
+        # one-line fatal (never a traceback).  DEBUG set to anything (including "") is the escape hatch for a
+        # bug report: the exception propagates and Python prints the traceback it would have.
+        if os.environ.get("DEBUG") is not None:
+            raise
         if hasattr(e, "code") and hasattr(e, "major"):
             stdio.warn(core.x_error_report(e))
         else:

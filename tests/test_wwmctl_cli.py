@@ -12,6 +12,7 @@ Documented deviations from wmctrl 1.07 (deliberate, see wwmctl/cli.py):
 - acting on a nonexistent window id exits 1 silently (wmctrl fires the
   ClientMessage into the void and exits 0)."""
 
+import contextlib
 import io
 import os
 import shutil
@@ -231,6 +232,15 @@ SPECS = [
 
 
 def run(argv, backend=None, x11=None, argv0="wmctrl", env=None):
+    # WWMCTL_WMCTRL_GENERATION is forced to "1.07" unless the caller asked
+    # for something else: without it `cli.help_text()` runs `_oracle_generation()`,
+    # which shells out to whatever wmctrl is installed, and six of the tests below
+    # compare against `cli.HELP`. Ubuntu 26.04 ships 1.07+git20240228 (its
+    # --help carries "\n  -j "), so those six went red on this host and green
+    # inside `nix develop`, where wmctrl is the 1.07 the clone is written against.
+    # test_help_generation_follows_the_oracle passes "git"/"1.07" itself.
+    env = dict(env or {})
+    env.setdefault("WWMCTL_WMCTRL_GENERATION", "1.07")
     backend = backend if backend is not None else FakeSwayBackend(
         [dict(s) for s in SPECS])
     old_detect, old_x11 = core._detect_backend, core._x11_connect
@@ -240,7 +250,7 @@ def run(argv, backend=None, x11=None, argv0="wmctrl", env=None):
     core._x11_connect = lambda: x11
     core.hostname = lambda: "testhost"
     sys.argv = [argv0]
-    for k, v in (env or {}).items():
+    for k, v in env.items():
         old_env[k] = os.environ.get(k)
         os.environ[k] = v
     out, err = io.StringIO(), io.StringIO()
@@ -258,6 +268,18 @@ def run(argv, backend=None, x11=None, argv0="wmctrl", env=None):
     return rc, out.getvalue(), err.getvalue(), backend
 
 
+@contextlib.contextmanager
+def _no_forced_generation():
+    """Drop $WWMCTL_WMCTRL_GENERATION for the block: the one place that wants
+    to see what `_oracle_generation()` makes of the wmctrl actually installed."""
+    old = os.environ.pop("WWMCTL_WMCTRL_GENERATION", None)
+    try:
+        yield
+    finally:
+        if old is not None:
+            os.environ["WWMCTL_WMCTRL_GENERATION"] = old
+
+
 class UsageTest(unittest.TestCase):
     def test_help_structure(self):
         self.assertEqual(len(cli.HELP.encode()), 6801)
@@ -267,9 +289,21 @@ class UsageTest(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which("wmctrl"), "real wmctrl not on PATH")
     def test_help_byte_parity_with_oracle(self):
-        p = subprocess.run(["wmctrl", "--help"], capture_output=True,
-                           text=True, timeout=10)
-        self.assertEqual(cli.HELP, p.stdout)
+        """`cli.help_text()` -- not `cli.HELP` -- is what the tool prints, and it
+        follows the installed oracle. Ubuntu 26.04's wmctrl 1.07+git20240228 emits
+        7179 bytes carrying "\n  -j "; the 1.07 in `nix develop` emits 6801 and
+        does not. Branch the same way `_oracle_generation()` does, so this is a
+        byte comparison on both boxes instead of a red test on one of them."""
+        with _no_forced_generation():
+            cli._GENERATION = None
+            try:
+                p = subprocess.run(["wmctrl", "--help"], capture_output=True,
+                                   timeout=10)
+                want = cli.HELP_GIT if b"\n  -j " in p.stdout else cli.HELP
+                self.assertEqual(want.encode(), p.stdout)
+                self.assertEqual(want, cli.help_text())
+            finally:
+                cli._GENERATION = None
 
     def test_no_args_help_to_stderr(self):
         rc, out, err, _b = run([])
@@ -318,7 +352,7 @@ class UsageTest(unittest.TestCase):
         self.assertTrue(cli.HELP_GIT.endswith("Copyright (C) 2003\n"))
         self.assertEqual(len(cli.HELP_GIT.encode()), 7179)
         for opt in ("  -j  ", "  -S  ", "  -Y <WIN>", "  -r <WIN> -y <MVARG>",
-                    "  -r <WIN> -M <PATH>", "  -r <WIN> -L", 
+                    "  -r <WIN> -M <PATH>", "  -r <WIN> -L",
                     "  -k (on|off|toggle)"):
             self.assertIn(opt, cli.HELP_GIT)
             self.assertNotIn(opt, cli.HELP)
@@ -1161,11 +1195,23 @@ class BuildScriptTest(unittest.TestCase):
                                capture_output=True, text=True, timeout=30)
             self.assertEqual((p.returncode, p.stdout),
                              (0, WMCTRL_VERSION + "\n"))
+            # 6801 is the 1.07 help; the zipapp is a real subprocess, so unlike
+            # run() it reads the ambient oracle and would print HELP_GIT's 7179
+            # bytes on Ubuntu 26.04 (wmctrl 1.07+git20240228). Pin the generation
+            # for it the same way.
+            genv = dict(os.environ, WWMCTL_WMCTRL_GENERATION="1.07")
             p = subprocess.run([sys.executable,
                                 os.path.join(tmp, "dist", "wwmctl"), "-h"],
-                               capture_output=True, text=True, timeout=30)
+                               capture_output=True, text=True, timeout=30,
+                               env=genv)
             self.assertEqual(p.returncode, 0)
             self.assertEqual(len(p.stdout.encode()), 6801)
+            p = subprocess.run([sys.executable,
+                                os.path.join(tmp, "dist", "wwmctl"), "-h"],
+                               capture_output=True, text=True, timeout=30,
+                               env=dict(os.environ,
+                                        WWMCTL_WMCTRL_GENERATION="git"))
+            self.assertEqual((p.returncode, len(p.stdout.encode())), (0, 7179))
             p = subprocess.run([sys.executable,
                                 os.path.join(tmp, "dist", "wdotool"),
                                 "version"],
@@ -1282,6 +1328,115 @@ class BrokenStdoutTest(unittest.TestCase):
         self.assertEqual(rc, 0)
         if opened is not None and opened is not old_out:
             opened.close()
+
+
+class NoSessionErrorTest(unittest.TestCase):
+    """T36: with no compositor to be found, nothing wwmctl says names another
+    tool.
+
+    `backend.set_program()` is process-global and every main() sets it first
+    thing, so a process that has already run a wdotool main -- the suite does,
+    and so would any in-process dispatcher -- must not leak that name into
+    wmctrl's diagnostics. wmctrl itself never says another program's name."""
+
+    def _run_with(self, exc):
+        from wdotool import backend
+        backend.set_program("wdotool")           # as a wdotool run leaves it
+
+        def detect():
+            raise exc
+
+        old = core._detect_backend
+        core._detect_backend = detect
+        old_argv, sys.argv = sys.argv, ["wmctrl"]
+        out, err = io.StringIO(), io.StringIO()
+        try:
+            with redirect_stdout(out), redirect_stderr(err):
+                rc = cli.main(["-l"])
+        finally:
+            core._detect_backend, sys.argv = old, old_argv
+        return rc, out.getvalue(), err.getvalue(), backend.program()
+
+    def test_the_detectors_own_error_is_printed_verbatim(self):
+        """A CmdError out of the detector is the documented deviation from
+        the oracle: wmctrl prints "Cannot open display." and we print the
+        reason instead (which in the real thing already names the backend, as
+        in "kwin backend: ..."). What matters here is that the reason arrives
+        whole and unattributed to a tool that did not produce it."""
+        rc, out, err, prog = self._run_with(
+            CmdError("no session: nothing owns a compositor bus name"))
+        self.assertEqual((rc, out), (1, ""))
+        self.assertEqual(err,
+                         "no session: nothing owns a compositor bus name\n")
+        self.assertNotIn("wdotool", err)
+        self.assertEqual(prog, "wwmctl")
+
+    def test_an_unexpected_error_is_prefixed_with_wmctrl(self):
+        """Anything that is not a CmdError goes through main()'s one-line
+        guard, which prefixes argv[0] -- "wmctrl", never the name a previous
+        run left in backend.set_program()."""
+        rc, out, err, prog = self._run_with(RuntimeError("boom"))
+        self.assertEqual((rc, out, err), (1, "", "wmctrl: boom\n"))
+        self.assertNotIn("wdotool", err)
+        self.assertEqual(prog, "wwmctl")
+
+
+class InterruptExitTest(unittest.TestCase):
+    """Ctrl-C during a listing exits 130, a gone reader still exits 1 (fix 30).
+
+    main() caught `(BrokenPipeError, KeyboardInterrupt)` in one handler and
+    returned 1 for both, while wdotool/cli.py and wxprop/cli.py already
+    returned 130 for the interrupt -- so of the three tools in one package
+    `wwmctl -l` alone reported a Ctrl-C to the shell as a plain failure. The
+    oracle dies of SIGINT, which bash reports as 130 as well."""
+
+    class _Raising(FakeSwayBackend):
+        """A backend whose window enumeration is where the signal lands: the
+        long part of `wmctrl -l` is the tree walk, not the printing."""
+
+        def __init__(self, exc):
+            super().__init__([dict(s) for s in SPECS])
+            self.exc = exc
+
+        def _nodes(self):
+            raise self.exc
+
+    def test_keyboard_interrupt_is_130_and_prints_nothing(self):
+        rc, out, err, _b = run(["-l"], backend=self._Raising(KeyboardInterrupt()))
+        self.assertEqual((rc, out, err), (130, "", ""))
+
+    def test_broken_pipe_is_still_1_and_prints_nothing(self):
+        rc, out, err, _b = run(
+            ["-l"], backend=self._Raising(BrokenPipeError(32, "Broken pipe")))
+        self.assertEqual((rc, out, err), (1, "", ""))
+
+
+class DebugTracebackTest(unittest.TestCase):
+    """$DEBUG re-raises instead of printing the one-liner (fix 31).
+
+    Every main() here turns an unexpected exception into `<prog>: <msg>` and
+    rc 1, which is right for users and useless for a bug report: the line
+    names neither the file nor the frame. DEBUG set to anything at all --
+    including the empty string, hence `is not None` -- propagates it."""
+
+    class _Boom(FakeSwayBackend):
+        def __init__(self):
+            super().__init__([dict(s) for s in SPECS])
+
+        def _nodes(self):
+            raise AttributeError("boom")
+
+    def test_without_debug_one_line_and_rc_1(self):
+        rc, out, err, _b = run(["-l"], backend=self._Boom())
+        self.assertEqual((rc, out, err), (1, "", "wmctrl: boom\n"))
+
+    def test_with_debug_the_exception_propagates(self):
+        for val in ("1", ""):
+            with self.subTest(DEBUG=val):
+                with self.assertRaises(AttributeError) as cm:
+                    run(["-l"], backend=self._Boom(),
+                        env={"DEBUG": val})
+                self.assertEqual(str(cm.exception), "boom")
 
 
 class NegativeIntParityTest(unittest.TestCase):

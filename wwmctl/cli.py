@@ -403,11 +403,16 @@ def main(argv=None) -> int:
     except SystemExit as e:
         stdio.exit_after_flush(_prog(), e)
         raise                       # unreachable; the line above raises
-    except (BrokenPipeError, KeyboardInterrupt):
+    except KeyboardInterrupt:
+        rc = 130                    # 128 + SIGINT, what the shell reports and what wdotool/wxprop already return
+    except BrokenPipeError:
         rc = 1
     except Exception as e:
         # never a traceback: a listing whose write to a full stdout
-        # failed, a compositor that went away mid-query.
+        # failed, a compositor that went away mid-query.  DEBUG set to anything (including "") is the escape
+        # hatch for a bug report: the exception propagates and Python prints the traceback it would have.
+        if os.environ.get("DEBUG") is not None:
+            raise
         stdio.warn("%s: %s\n" % (_prog(), e))
         # An OSError here is a write to stdout that failed (a full disk, a quota, `>/dev/full`): the flush below
         # is about to fail with the same errno, and the originals print one line, not two.

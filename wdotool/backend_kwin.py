@@ -202,23 +202,32 @@ class KwinBackend(WindowBackend):
             self.unload(plugin)
         return _payload(raw)
 
-    def _live_script_ids(self):
+    def _live_script_ids(self, deadline: float | None = None):
         """The script ids that own a D-Bus object right now, read off the child nodes of the scripting object;
         None when neither shape answered.
 
         Plasma 6 registers `/Scripting/Script<n>`, 5.27 `/<n>` among KWin's other root objects, and the shape is
-        remembered once a run() has landed so the second introspection is paid for at most once."""
+        remembered once a run() has landed so the second introspection is paid for at most once.
+
+        `deadline` is the whole operation's, not this call's: these two introspections and the loadScript that
+        follows them used to take CALL_TIMEOUT each (10 s) whatever the caller asked for, so a `_script()` given
+        0.5 s could spend 30 s here and then hand run() its `max(0.1, ...)` floor and report the compositor hung
+        -- a wrong diagnosis of a KWin that was merely slow, after a wait nobody asked for."""
         out, got = set(), False
+        def left():
+            if deadline is None:
+                return CALL_TIMEOUT
+            return max(0.1, deadline - time.monotonic())
         if self._path_shape != "root":
             try:
-                xml = self.bus.introspect(KWIN_NAME, SCRIPTING_PATH, timeout=CALL_TIMEOUT)
+                xml = self.bus.introspect(KWIN_NAME, SCRIPTING_PATH, timeout=left())
                 out |= {int(n) for n in re.findall(r'<node name="Script(\d+)"', xml)}
                 got = True
             except DBusError:
                 pass
         if self._path_shape != "scripting":
             try:
-                xml = self.bus.introspect(KWIN_NAME, "/", timeout=CALL_TIMEOUT)
+                xml = self.bus.introspect(KWIN_NAME, "/", timeout=left())
                 out |= {int(n) for n in re.findall(r'<node name="(\d+)"', xml)}
                 got = True
             except DBusError:
@@ -292,8 +301,9 @@ class KwinBackend(WindowBackend):
         for attempt in range(_LOAD_ATTEMPTS):
             path = self._write_source(make_source(name))
             files.append(path)
-            live = self._live_script_ids()
-            (sid,) = self._call(SCRIPTING_PATH, SCRIPTING_IFACE, "loadScript", "ss", (path, name))
+            live = self._live_script_ids(deadline)
+            (sid,) = self._call(SCRIPTING_PATH, SCRIPTING_IFACE, "loadScript", "ss", (path, name),
+                                timeout=max(0.1, deadline - time.monotonic()))
             sid = int(sid)
             if sid < 0:
                 # -1: a script with that pluginName is already loaded. Never run a script id we did not get --
@@ -849,7 +859,37 @@ class KwinBackend(WindowBackend):
         except Exception:  # any X failure: no ids, no crash
             self._x = None
             return {}
-        return _match_xids(raw, clients)
+        return _match_xids(raw, clients, self._x_ratio(x))
+
+    def _x_ratio(self, x) -> "float | None":
+        """X device pixels per KWin logical pixel, or None when the layout has no one answer.
+
+        The X root is the whole layout in device pixels; workspace.virtualScreenSize is the same layout in
+        logical pixels, which is what the script reports every window rect in. On a 2x screen every X rect is
+        exactly twice its KWin rect, so the raw distance between a window and *itself* (1500 for a 400x300
+        window at 100,100) is larger than the distance between the two windows of a tied cascade (80 for a
+        40px offset) -- and the pair came out swapped. Dividing the X rect by the ratio first puts both back in
+        the same units.
+
+        A layout that mixes scales has no single ratio -- the X root is the bounding box at the largest one --
+        and there the distance means nothing: None drops it and leaves the title and the list order to decide.
+        Anything unreadable (no root geometry, no screen info) is 1.0, which is what every unscaled session is
+        and what this did before there was a ratio at all."""
+        try:
+            rw, rh = x.get_geometry(x.root())[2:]
+        except Exception:
+            return 1.0
+        try:
+            s = self._screen_info(soft=True)
+        except Exception:
+            return 1.0
+        vw, vh = int(s.get("w") or 0), int(s.get("h") or 0)
+        if vw <= 0 or vh <= 0 or int(rw) <= 0 or int(rh) <= 0:
+            return 1.0
+        sx, sy = rw / vw, rh / vh
+        if abs(sx - sy) > 0.01:
+            return None
+        return sx
 
     def _x11(self):
         if self._x != "unset":
@@ -1058,7 +1098,8 @@ def _simplified(s: str) -> str:
     return " ".join((s or "").split())
 
 
-def _match_xids(raw: "list[dict]", clients: "list[dict]") -> "dict[str, int]":
+def _match_xids(raw: "list[dict]", clients: "list[dict]",
+                ratio: "float | None" = 1.0) -> "dict[str, int]":
     """Greedy best-first matching of KWin windows to Xwayland's clients.
 
     pid and WM_CLASS are filters (an X client never changes them behind
@@ -1095,7 +1136,17 @@ def _match_xids(raw: "list[dict]", clients: "list[dict]") -> "dict[str, int]":
     A tie the position cannot break either -- two windows that could each
     take the same id, on a session where the script answered without `ix`
     -- is left unresolved: those windows keep xid 0 and say so, rather than
-    being handed one of the two ids at random."""
+    being handed one of the two ids at random. `ix` is all-or-nothing on
+    purpose: ranking over the rows that happen to carry it puts the rest at
+    positions that are not their list positions, which is a wrong order
+    rather than a missing one.
+
+    `ratio` is X device pixels per KWin logical pixel (see
+    KwinBackend._x_ratio): every X rect is divided by it before the distance,
+    because on a 2x screen a window's own X rect is twice its KWin rect and
+    the raw distance between a window and *itself* then exceeds the distance
+    between the two windows of a tied pair. None means the layout has no one
+    ratio, and there the distance says nothing at all and is dropped."""
     cand = []
     for ci, c in enumerate(clients):
         for d in raw:
@@ -1111,23 +1162,43 @@ def _match_xids(raw: "list[dict]", clients: "list[dict]") -> "dict[str, int]":
                     or kinst and kinst.lower() == (c["inst"] or "").lower()):
                 continue
             x, y, w, h = c["geo"]
-            dist = (abs(x - int(d.get("x", 0))) + abs(y - int(d.get("y", 0)))
-                    + abs(w - int(d.get("w", 0))) + abs(h - int(d.get("h", 0))))
+            if ratio is None:
+                dist = 0
+            else:
+                r = ratio or 1.0
+                dist = int(round(
+                    abs(x / r - int(d.get("x", 0))) + abs(y / r - int(d.get("y", 0)))
+                    + abs(w / r - int(d.get("w", 0))) + abs(h / r - int(d.get("h", 0)))))
             same_title = _simplified(c["name"]) == _simplified(d.get("t"))
             cand.append((0 if same_title else 1, dist, ci, d))
-    # Dense positions over what is in play. `ix` is the script's index into workspace.windowList(); a list
-    # without it (an older script, or 5.27, which never reaches here) leaves every position 0 and the key inert.
+    # `ix` is the script's index into workspace.windowList(); a list without it (an older script, or 5.27,
+    # which never reaches here) leaves the key inert.
     have_ix = bool(cand) and all("ix" in d for _t, _d, _c, d in cand)
-    krank: "dict[str, int]" = {}
-    if have_ix:
-        seen = {d["u"]: int(d["ix"]) for _t, _d, _c, d in cand}
-        for i, u in enumerate(sorted(seen, key=lambda k: (seen[k], k))):
-            krank[u] = i
-    crank = {ci: i for i, ci in enumerate(sorted({p[2] for p in cand}))}
-    pairs = [(t, dist,
-              abs(krank.get(d["u"], 0) - crank[ci]) if have_ix else 0,
-              clients[ci]["xid"], d["u"])
-             for t, dist, ci, d in cand]
+    # Positions are ranked *inside* each (title, distance) tie group, over the windows and clients of that group
+    # alone. Ranking them over every candidate instead let a window that is not in the tie shift the ranks of
+    # the two that are: an override-redirect popup listed *ahead* of a tied pair (ix=1 against ix=2 and ix=4)
+    # moved both windows one place down in the window ranking while the client ranking, which never saw it,
+    # stayed put -- and the pair came out swapped. Below the popup (ix=3, ix=6) it happened to cancel out, which
+    # is why the first version of this looked right.
+    pairs = []
+    cand.sort(key=lambda p: (p[0], p[1]))
+    i = 0
+    while i < len(cand):
+        j = i
+        while j < len(cand) and cand[j][0] == cand[i][0] and cand[j][1] == cand[i][1]:
+            j += 1
+        group = cand[i:j]
+        krank: "dict[str, int]" = {}
+        if have_ix:
+            seen = {d["u"]: int(d["ix"]) for _t, _d, _c, d in group}
+            for r, u in enumerate(sorted(seen, key=lambda k: (seen[k], k))):
+                krank[u] = r
+        crank = {ci: r for r, ci in enumerate(sorted({p[2] for p in group}))}
+        for t, dist, ci, d in group:
+            pairs.append((t, dist,
+                          abs(krank[d["u"]] - crank[ci]) if have_ix else 0,
+                          clients[ci]["xid"], d["u"]))
+        i = j
     pairs.sort()
     out: "dict[str, int]" = {}
     used: "set[int]" = set()

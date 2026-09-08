@@ -7,6 +7,7 @@ import json
 import select
 import socket
 import struct
+import time
 
 from fwcommon import session
 from fwcommon.errors import CmdError
@@ -52,22 +53,41 @@ class SwayBackend(WindowBackend):
                 "sway backend: no sway/i3 IPC socket found (SWAYSOCK unset and "
                 "no sway-ipc.* socket in any runtime dir)"
             )
-        self.sock = self._connect()
-        # Only the command socket gets a deadline, and only here: everything it ever waits for is the answer to
-        # a request we have just sent, so silence means the compositor is wedged -- which used to hang every
-        # tool for ever. _connect() itself stays blocking on purpose; select_window() and wxprop's -spy share it
-        # and wait on their own socket for an event that may be minutes away.
-        self.sock.settimeout(IPC_TIMEOUT)
+        # Only the command socket gets a deadline: everything it ever waits for is the answer to a request we
+        # have just sent, so silence means the compositor is wedged -- which used to hang every tool for ever.
+        # The events socket is left blocking (_connect()'s default); select_window() and wxprop's -spy wait on
+        # it for an event that may be minutes away.
+        self.sock = self._connect(IPC_TIMEOUT)
 
     # -- wire ---------------------------------------------------------------
 
-    def _connect(self) -> socket.socket:
-        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        try:
-            s.connect(self.sockpath)
-        except OSError as e:
-            s.close()
-            raise CmdError("sway backend: cannot connect to %s: %s" % (self.sockpath, e)) from None
+    def _connect(self, timeout: float | None = None) -> socket.socket:
+        """A fresh IPC socket, carrying `timeout` once it is up.
+
+        The connect() itself always gets IPC_TIMEOUT, whatever the caller wants afterwards. A compositor wedged
+        inside its own event loop still has a *listening* socket -- the kernel queues connections for it without
+        waking it -- so connecting looks fine right up to the moment the backlog fills. Measured here against a
+        raw AF_UNIX socket with listen(3) that never accepts: four connects succeed, and the fifth blocks in the
+        kernel for ever with no deadline of its own. With one, the fifth is EAGAIN (Linux answers a full
+        AF_UNIX backlog that way rather than making us wait), retried until the deadline, and the tool says the
+        compositor is not responding instead of hanging."""
+        deadline = time.monotonic() + IPC_TIMEOUT
+        while True:
+            s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            s.settimeout(max(0.001, deadline - time.monotonic()))
+            try:
+                s.connect(self.sockpath)
+                break
+            except (TimeoutError, BlockingIOError):
+                # both are OSError subclasses: this arm has to come first
+                s.close()
+                if time.monotonic() >= deadline:
+                    raise _wedged() from None
+                time.sleep(0.01)
+            except OSError as e:
+                s.close()
+                raise CmdError("sway backend: cannot connect to %s: %s" % (self.sockpath, e)) from None
+        s.settimeout(timeout)
         return s
 
     @staticmethod

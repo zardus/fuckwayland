@@ -23,8 +23,14 @@ os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
+# `import support` / `import wl_fake` resolve only with the tests directory
+# itself on sys.path: running this file by path puts it there for free,
+# `python3 -m unittest tests/<file>.py` does not (tests/test_passthrough.py
+# fails over a file that imports one of them without this line).
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from fwcommon.errors import CmdError
+from fwcommon import wayland_mini
 from fwcommon.wayland_mini import Cursor, WlConn
 from wl_fake import msg, wstr
 from wdotool import backend_sway
@@ -333,6 +339,147 @@ class SwayWireGuards(unittest.TestCase):
         s = b._connect()
         self.addCleanup(s.close)
         self.assertIsNone(s.gettimeout())
+
+
+    def test_a_full_backlog_is_the_wedged_message_not_a_hang(self):
+        """A wedged compositor still *listens*: the kernel queues connections for
+        it without waking it, so connecting looks fine until the backlog fills.
+
+        Measured here against a raw AF_UNIX socket with listen(3) and no accept
+        at all (not FakeSway, whose thread does accept): four connects succeed
+        and the fifth is where it used to stop -- `_connect()` had no deadline
+        on the socket, so the fifth connect() blocked in the kernel with nothing
+        to time it out, and every tool that reached a wedged sway sat there. The
+        thread is joined at 2.0 s so this test cannot hang before the fix, only
+        fail."""
+        d = tempfile.mkdtemp(prefix="wire-backlog-")
+        path = os.path.join(d, "sock")
+        srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        srv.bind(path)
+        srv.listen(3)
+        self.addCleanup(srv.close)
+        made, box = [], {}
+
+        def build():
+            try:
+                for _ in range(5):
+                    made.append(backend_sway.SwayBackend(sockpath=path))
+            except BaseException as e:      # noqa: BLE001 -- reported below
+                box["err"] = e
+
+        with mock.patch.object(backend_sway, "IPC_TIMEOUT", 0.4):
+            t = threading.Thread(target=build, daemon=True)
+            start = time.monotonic()
+            t.start()
+            t.join(2.0)
+            waited = time.monotonic() - start
+        for b in made:
+            self.addCleanup(b.sock.close)
+        self.assertFalse(t.is_alive(),
+                         "still inside connect() after %.1fs" % waited)
+        self.assertIsInstance(box.get("err"), CmdError)
+        self.assertIn("not responding", str(box["err"]))
+        self.assertIn("0.4s", str(box["err"]))
+        # backlog 3 -> the kernel holds four (Linux 7.0, measured); the fifth is
+        # the one the deadline has to answer for
+        self.assertEqual(len(made), 4)
+        self.assertLess(waited, 2.0)
+
+    def test_the_command_socket_keeps_its_deadline_after_connecting(self):
+        """_connect() arms the socket for the connect() itself, so the timeout
+        the caller asked for has to be put back afterwards -- otherwise the
+        command socket would carry IPC_TIMEOUT only by accident and the events
+        socket would carry it too (which would break -spy)."""
+        srv = FakeSway("wedged")
+        self.addCleanup(srv.close)
+        b = backend_sway.SwayBackend(sockpath=srv.path)
+        self.addCleanup(b.sock.close)
+        self.assertEqual(b.sock.gettimeout(), backend_sway.IPC_TIMEOUT)
+        for want in (None, 0.25):
+            s = b._connect(want)
+            self.addCleanup(s.close)
+            self.assertEqual(s.gettimeout(), want)
+
+
+class SyncFailure(_Server):
+    """A compositor whose answer to wl_display.sync is not a callback.
+
+    `mode` is "error" (wl_display.error on object 1 -- what a compositor sends
+    when it dislikes a request) or "drop" (the session ends where the callback
+    should have been)."""
+
+    def __init__(self, mode):
+        self.mode = mode
+        super().__init__(self._serve)
+
+    def _serve(self, c):
+        buf = b""
+        while True:
+            data = c.recv(65536)
+            if not data:
+                return
+            buf += data
+            while len(buf) >= 8:
+                oid, so = struct.unpack_from("<II", buf)
+                size, op = so >> 16, so & 0xFFFF
+                if size < 8 or len(buf) < size:
+                    break
+                buf = buf[size:]
+                if oid == 1 and op == 0:            # wl_display.sync(callback)
+                    if self.mode == "drop":
+                        c.close()
+                        return
+                    c.sendall(msg(1, 0, struct.pack("<II", 1, 7)
+                                  + wstr("no such thing")))
+
+
+class RoundtripGuard(unittest.TestCase):
+    """`wayland_mini.roundtrip()` is what every virtual-device module calls
+    after it sends anything, and the one place a protocol error can arrive.
+
+    The daemon must never see a traceback out of vkbd/vptr (B5), so the two
+    ways a roundtrip can fail -- the compositor objecting, and the compositor
+    going away -- both come back as the caller's own exception class with the
+    caller's own word for what it was doing."""
+
+    class MyErr(Exception):
+        pass
+
+    def _conn(self, mode):
+        srv = SyncFailure(mode)
+        self.addCleanup(srv.close)
+        c = WlConn(srv.path, timeout=2.0)
+        self.addCleanup(c.sock.close)
+        return c
+
+    def test_a_protocol_error_is_the_callers_exception(self):
+        c = self._conn("error")
+        with self.assertRaises(self.MyErr) as cm:
+            wayland_mini.roundtrip(c, "x", self.MyErr)
+        self.assertTrue(str(cm.exception).startswith("x refused:"),
+                        str(cm.exception))
+        self.assertIn("no such thing", str(cm.exception))
+
+    def test_a_dropped_socket_is_the_callers_exception(self):
+        c = self._conn("drop")
+        with self.assertRaises(self.MyErr) as cm:
+            wayland_mini.roundtrip(c, "x", self.MyErr)
+        self.assertTrue(str(cm.exception).startswith("x refused:"),
+                        str(cm.exception))
+
+    def test_now_ms_is_a_32_bit_monotonic_millisecond_clock(self):
+        """The `time` argument every input protocol takes. Compositors compare
+        it with their own clock and reject a float or a value that has wrapped
+        differently, so the shape matters as much as the value."""
+        a = wayland_mini.now_ms()
+        self.assertIsInstance(a, int)
+        self.assertNotIsInstance(a, bool)
+        self.assertGreaterEqual(a, 0)
+        self.assertLess(a, 2 ** 32)
+        time.sleep(0.005)
+        d = wayland_mini.now_ms() - a
+        self.assertGreaterEqual(d, 3, d)
+        self.assertLess(d, 200, d)
 
 
 class EventSway(_Server):

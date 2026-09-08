@@ -13,7 +13,6 @@ import time
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-from fwcommon.errors import CmdError
 from wdotool import cli
 from wdotool.misc_cmds import _atof, _atoi, cmd_getdisplaygeometry
 

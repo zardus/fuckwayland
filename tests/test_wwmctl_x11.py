@@ -31,6 +31,11 @@ from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
+# `import support` / `import wl_fake` resolve only with the tests directory
+# itself on sys.path: running this file by path puts it there for free,
+# `python3 -m unittest tests/<file>.py` does not (tests/test_passthrough.py
+# fails over a file that imports one of them without this line).
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from support import HeadlessSway
 
