@@ -1519,8 +1519,20 @@ class ShippedExtension(unittest.TestCase):
                                  "--check", older],
                                 capture_output=True, text=True)
             notes = [ln for ln in rc.stdout.splitlines() if "differ in bytes" in ln]
+            # Which generation is this host's compiler?  24.04's 1.80 writes the
+            # 0x00000001 word itself, so there the reconstruction IS a fresh
+            # compile and there is nothing to be relaxed about: three compared,
+            # no note.  Measured on the CI container, where this asserted three.
+            g0 = gnome_overlap.GENERATIONS[0]["namespace"]
+            fresh = os.path.join(older, "fresh.typelib")
+            subprocess.run(["g-ir-compiler", "--includedir", "/usr/share/gir-1.0", "-o", fresh,
+                            os.path.join(GIR_DIR, "%s-1.0.gir" % g0)], check=True)
+            with open(fresh, "rb") as fh:
+                newer_compiler = fh.read().count(b"\xfd\x0f\xff\x03") == 17
         self.assertEqual(rc.returncode, 0, rc.stdout + rc.stderr)
-        self.assertEqual(len(notes), len(gnome_overlap.GENERATIONS), rc.stdout)
+        self.assertEqual(len(notes), len(gnome_overlap.GENERATIONS) if newer_compiler else 0,
+                         rc.stdout)
+        self.assertIn("--check: %d compared, 0 skipped" % len(gnome_overlap.GENERATIONS), rc.stdout)
         for line in notes:
             self.assertTrue(line.startswith("note: "), line)
         self.assertNotIn("stale:", rc.stdout)
