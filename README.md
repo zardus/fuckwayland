@@ -23,6 +23,12 @@ In the box:
 Yes, this is far too much code for something that just types into a window. Have a
 look at what it is up against.
 
+One rule decides what goes in here, and it is written down in
+[AGENTS.md](AGENTS.md): **if X supports it, we support it.** What Wayland forbids is
+a cost to be paid, never a reason. Where a compositor will not do a thing the X
+tools did, that is a gap in this tree with a route beside it, not a policy, and the
+[per-tool tables](docs/WDOTOOL.md#what-differs-from-x-on-kde-plasma) say which.
+
 - https://www.semicomplete.com/blog/xdotool-and-exploring-wayland-fragmentation/
 - https://daniele.tech/2025/04/how-to-center-the-mouse-between-monitors-in-wayland/
 - https://thelastguardian.me/posts/2026-04-26-screen-control-on-wayland/
