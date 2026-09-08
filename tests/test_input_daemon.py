@@ -8,12 +8,15 @@ import os
 import socket
 import sys
 import tempfile
-import time
 import unittest
 from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
+# ...and the tests directory itself, for the bare `import support`
+# below: running this file by path puts it on sys.path for free,
+# `python3 -m unittest tests/<file>.py` does not.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from fwcommon import session
 from fwcommon.errors import CmdError
@@ -788,6 +791,23 @@ class TestPointerModel(unittest.TestCase):
                 d.handle({"op": "pointer"})
         self.assertIn("uinput", str(cm.exception))
 
+    def test_a_true_delta_never_claims_to_know_where_it_landed(self):
+        """The half of `known` that fix 38's refusal rests on: where the
+        relative move really is a delta (sway, where `_rel_abs` is False and
+        the pointer moves from wherever it is), the model's new x,y is
+        arithmetic on a position nobody established, so it stays unknown and
+        `getmouselocation` keeps refusing. Where it is a warp -- every other
+        compositor, `_rel_abs` True -- it lands somewhere definite and says
+        so."""
+        d = make_daemon((0, 0, 1920, 1080), rel_abs=False)
+        d.op_mousemove_rel(5, 5, [])
+        self.assertEqual((d.px, d.py), (5, 5))
+        self.assertFalse(d.pos_known)
+        self.assertIs(d.handle({"op": "pointer"})["known"], False)
+        warped = make_daemon((0, 0, 1920, 1080), rel_abs=True)
+        warped.op_mousemove_rel(5, 5, [])
+        self.assertTrue(warped.pos_known)
+
     def test_pointer_answers_once_seeded(self):
         os.environ["WDOTOOL_UINPUT_PATH"] = "/nonexistent/wdotool-uinput"
         self.addCleanup(os.environ.pop, "WDOTOOL_UINPUT_PATH", None)
@@ -1085,14 +1105,19 @@ class TestProtocol(unittest.TestCase):
         self.assertEqual(json.loads(rfile.readline())["pid"], self.pid)
 
     def test_pointer_tracking_roundtrip(self):
+        """The third element is `known` (fix 38): a warp establishes the
+        position, and a delta applied to a position that was already known
+        keeps it known."""
         stderr = io.StringIO()
         with contextlib.redirect_stderr(stderr):
             self.client.mousemove_abs(300, 400)
-            self.assertEqual(self.client.pointer(), (300, 400))
+            self.assertEqual(self.client.pointer(), (300, 400, True))
             self.client.mousemove_rel(-100, 50)
-            self.assertEqual(self.client.pointer(), (200, 450))
+            self.assertEqual(self.client.pointer(), (200, 450, True))
             self.client.mousemove_abs(99999, 99999)
-            self.assertEqual(self.client.pointer(), (1919, 1079))
+            self.assertEqual(self.client.pointer(), (1919, 1079, True))
+            # and the wire carries it under that name, not just the client
+            self.assertIs(self.client._rpc(op="pointer")["known"], True)
 
     def test_clear_modifiers_over_the_wire(self):
         # No readable keyboard here (a container has none, and the runner may
@@ -1190,7 +1215,47 @@ class TestProtocol(unittest.TestCase):
             for n, c in enumerate(clients):
                 c.mousemove_abs(n, n)
             for c in clients:
-                self.assertEqual(len(c.pointer()), 2)
+                self.assertEqual(len(c.pointer()), 3)
+
+
+class TestThePointerIsUnknownUntilSomethingMovesIt(unittest.TestCase):
+    """F3.3, fix 38: `known` over the wire, on a daemon nothing has moved.
+
+    Its own runtime directory and its own daemon, because the answer is a
+    property of a *fresh* daemon and TestProtocol's is shared by twenty
+    tests, several of which warp the pointer before this one would run."""
+
+    def client(self):
+        tmp = tempfile.TemporaryDirectory(prefix="wdotool-ptr-")
+        self.addCleanup(tmp.cleanup)
+        self.addCleanup(stop_daemons_under, tmp.name)
+        e = env(XDG_RUNTIME_DIR=tmp.name, WDOTOOL_UINPUT_PATH="/dev/null",
+                WDOTOOL_FAKE_UINPUT="1", WAYLAND_DISPLAY=None, SWAYSOCK=None,
+                I3SOCK=None, **{daemon.NO_KEYSTATE_ENV: "1"})
+        e.__enter__()
+        self.addCleanup(e.__exit__, None, None, None)
+        c = daemon.DaemonClient.connect_or_spawn()
+        self.addCleanup(c.close)
+        return c
+
+    def test_a_fresh_daemon_says_it_does_not_know(self):
+        """/dev/uinput opens (the fake one here, as on any root session), so
+        the daemon does not refuse -- it answers the tablet's own untouched
+        axis state, 0,0, and flags it. The flag is the whole point: 0,0 is a
+        real place on the screen and was reported as if the pointer were
+        there."""
+        c = self.client()
+        resp = c._rpc(op="pointer")
+        self.assertEqual((resp["x"], resp["y"]), (0, 0))
+        self.assertIs(resp["known"], False)
+        self.assertEqual(c.pointer(), (0, 0, False))
+
+    def test_and_says_it_does_once_it_has_been_moved(self):
+        c = self.client()
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            c.mousemove_abs(10, 10)
+        self.assertEqual(c.pointer(), (10, 10, True))
 
 
 if __name__ == "__main__":

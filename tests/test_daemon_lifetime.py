@@ -25,6 +25,10 @@ import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
+# ...and the tests directory itself, for the bare `import support`
+# below: running this file by path puts it on sys.path for free,
+# `python3 -m unittest tests/<file>.py` does not.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import support
 from wdotool import daemon

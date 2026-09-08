@@ -36,19 +36,33 @@ def _activate_settle(ctx, wid):
     time.sleep(0.05)
 
 
-def _backend_pointer(ctx):
-    """The compositor's real pointer position, or None when this compositor
-    has no pointer query (sway/i3 IPC has none) or there is no session."""
+def _backend_pointer_ex(ctx):
+    """(position, why-not): the compositor's real pointer position, or None with the reason it is None.
+
+    Two very different Nones live here and the refusal in _pointer has to tell them apart. A compositor with no
+    pointer query at all -- sway and i3, whose IPC carries no cursor position -- gives (None, None): there is
+    nothing to report and nothing to fix. A compositor that HAS one which failed gives (None, exc), and that
+    exception is the message every other command in the chain prints for the same session: on GNOME 51.beta as
+    shipped the bridge is marked out of date for the running shell and `wdotool search` says so, so
+    getmouselocation there has to say so too rather than lecture a GNOME user about zwlr_virtual_pointer_v1.
+    `ctx.backend()` raising (no session at all) is in the second group for the same reason: its message is the
+    accurate one. Callers that only want the position keep using _backend_pointer()."""
     try:
         fn = getattr(ctx.backend(), "pointer", None)
         if fn is None:
-            return None
+            return None, None
         hit = fn()
-    except CmdError:
-        return None
+    except CmdError as e:
+        return None, e
     if hit is None:
-        return None
-    return (int(hit[0]), int(hit[1]))
+        return None, None
+    return (int(hit[0]), int(hit[1])), None
+
+
+def _backend_pointer(ctx):
+    """The compositor's real pointer position, or None when this compositor
+    has no pointer query (sway/i3 IPC has none) or there is no session."""
+    return _backend_pointer_ex(ctx)[0]
 
 
 def _pointer_opt(ctx, seed=True):
@@ -76,9 +90,28 @@ def _pointer(ctx, seed=True):
     daemon that has just started knows nothing at all. So ask the compositor first and, when it answers, correct
     the daemon's model from it so a following mousemove_relative counts from the real position (B1). Compositors
     without a pointer query keep the tracked model."""
-    real = _backend_pointer(ctx)
+    real, why = _backend_pointer_ex(ctx)
     if real is None:
-        return ctx.daemon().pointer()
+        x, y, known = ctx.daemon().pointer()
+        if not known:
+            # The compositor could not be asked and the daemon has moved nothing: 0,0 is the tablet's own
+            # untouched axis state, not a pointer position. Reporting it as one is the defect -- `wdotool
+            # getmouselocation` printed `x:0 y:0 screen:0 window:0` with rc 0 on a fresh sway daemon while
+            # the cursor sat wherever sway had put it, and docs/WDOTOOL.md has always promised a refusal.
+            # The daemon raises this itself where /dev/uinput is unopenable; here it is the other half, the
+            # one where the devices opened fine and nobody has yet told anyone where the pointer is.
+            # `why` is the compositor's own reason when it had a query that failed (the out-of-date bridge on
+            # GNOME 51, KWin's scripting service refusing): re-raised as it came, so the exit code a
+            # NoSessionError carries survives too, and so the answer names the thing the user can act on.
+            if why is not None:
+                raise why
+            # Local, like ctx.daemon()'s own import of the same module two frames up: importing daemon.py at
+            # module scope pulls keymap/keystate/layoutbox/uinput/vkbd/vptr/xkbmap in behind it, 39 ms
+            # measured here, onto every `wdotool search` that never goes near a daemon. By this line the
+            # module is in sys.modules regardless -- ctx.daemon() just imported it.
+            from wdotool.daemon import POINTER_UNKNOWN
+            raise CmdError(POINTER_UNKNOWN)
+        return (x, y)
     if seed:
         try:
             ctx.daemon().seed_pointer(*real)

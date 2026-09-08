@@ -13,12 +13,17 @@ even where the compositor offers it, and with none available the protocol is
 what types.
 """
 
+import errno
 import os
 import struct
 import sys
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# ...and the tests directory itself, for the bare `import support` /
+# `import wl_fake` below: running this file by path puts it on sys.path
+# for free, `python3 -m unittest tests/<file>.py` does not.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # every test file carries this itself: the suite is run file by file, where
 # conftest.py never loads, and a tool that hands itself over would not be
 # the code under test
@@ -1062,6 +1067,104 @@ class TheWireValidatesIt(unittest.TestCase):
                 os.environ.pop(daemon.VKBD_ENV, None)
             else:
                 os.environ[daemon.VKBD_ENV] = old
+
+
+class ADeviceThatFailsMidRelease(VkbdTest):
+    """T38: every held key is released on the device or named to the user.
+
+    `_own_sink` walks the held keycodes on the device that is holding them.
+    A write to a uinput device that has gone (the daemon respawned its
+    devices, or the kernel dropped them) raises EIO in the middle of that
+    walk, and daemon.py:_own_sink breaks out of the loop there -- the
+    modifiers after the failing one are never written to the device at all.
+    What must not happen is the daemon going on believing they are held --
+    `self.down` would then hide a real shift from the next command, which is
+    the defect `_own_sink` was written for in the first place -- and what
+    must not happen either is the user not being told, because a key stuck
+    down on a device wdotool is no longer typing through is something only
+    they can clear.
+
+    So the property is: released-on-the-device plus named-in-the-warning
+    covers everything that was held, and nothing outside it is written. The
+    exact split between the two halves is today's break-on-first-error
+    implementation and is pinned separately, marked as such.
+
+    One inaccuracy this pins as-is: SINK_SWITCH_WARNING (daemon.py:356) says
+    the named keys "were released", and after an EIO that is true of the
+    first one and a hope about the rest. The message is right about what the
+    daemon no longer holds and wrong about what reached the device. Changing
+    that wording is a product change outside this batch's allowed fixes, so
+    the assertion below matches the shipped text; a follow-up should make it
+    "released, or lost with the device" for the broken-walk case."""
+
+    class FlakyDev(RecorderDev):
+        """RecorderDev that stops taking releases after the `fail_at`th."""
+
+        def __init__(self, fail_at=2):
+            RecorderDev.__init__(self)
+            self.fail_at = fail_at
+            self.releases = 0
+
+        def key(self, code, down):
+            if not down:
+                self.releases += 1
+                if self.releases >= self.fail_at:
+                    raise OSError(errno.EIO, os.strerror(errno.EIO))
+            RecorderDev.key(self, code, down)
+
+    def test_every_held_modifier_is_released_or_named(self):
+        d = self.daemon(uinput=True)
+        d.kb = self.FlakyDev(fail_at=2)
+        d.op_key("ctrl+shift+alt", "down", 0, False, None, None, "off")
+        held = {keymap.KEY_LEFTCTRL, keymap.KEY_LEFTSHIFT, keymap.KEY_LEFTALT}
+        self.assertEqual(d.down, held)          # 29, 42, 56 on the kernel one
+        d.kb.events.clear()
+
+        warns = d.op_type("a", 0, False, None, None, "on")
+        released = {c for _k, c, v in
+                    [e for e in d.kb.events if e[0] == "KEY"] if v == 0}
+        switch = [w for w in warns if "were released" in w]
+        self.assertEqual(len(switch), 1, warns)
+        labels = {keymap.KEY_LEFTCTRL: "ctrl", keymap.KEY_LEFTSHIFT: "shift",
+                  keymap.KEY_LEFTALT: "alt"}
+        named = {c for c, label in labels.items() if label in switch[0]}
+        # the property: no key it never held is written, and between the
+        # device and the warning nothing held is left unaccounted for
+        self.assertLessEqual(released, held)
+        self.assertEqual(released | named, held, (released, named, switch[0]))
+        # ...and today's split, which is break-on-first-error: 29 sorts
+        # before 42 and 56, so the first release lands and the second raises
+        self.assertEqual(released, {keymap.KEY_LEFTCTRL},
+                         "the second write is the one that fails")
+        # the point: nothing is left behind in the model, whatever the
+        # device did with the writes
+        self.assertEqual(d.down, set())
+        self.assertEqual(self.comp.pressed(), [30])   # and the `a` still typed
+
+    def test_the_switch_is_not_reported_twice_for_the_same_hold(self):
+        """The next command has nothing held and nothing to say: the warning
+        is a state change, not a fact about the environment."""
+        d = self.daemon(uinput=True)
+        d.kb = self.FlakyDev(fail_at=2)
+        d.op_key("ctrl+shift+alt", "down", 0, False, None, None, "off")
+        d.op_type("a", 0, False, None, None, "on")
+        warns = d.op_type("b", 0, False, None, None, "on")
+        self.assertEqual([w for w in warns if "were released" in w], [])
+
+
+class ACompositorWithNoSeat(VkbdTest):
+    comp_kw = {"with_seat": False}
+
+    def test_open_says_which_global_is_missing_and_creates_nothing(self):
+        """zwp_virtual_keyboard_manager_v1.create_virtual_keyboard takes the
+        seat as a non-null argument -- unlike zwlr_virtual_pointer_v1, where
+        it is allow-null and tests/test_vptr.py proves a NULL is accepted. So
+        a compositor advertising the manager and no wl_seat is a refusal
+        before anything is created, not a request with a zero in it."""
+        with self.assertRaises(vkbd.VkbdError) as cm:
+            vkbd.VirtualKeyboard.open()
+        self.assertIn("wl_seat", str(cm.exception))
+        self.assertEqual(self.comp.created, [])
 
 
 def _eventually(pred, tries=100):

@@ -16,6 +16,7 @@ import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from support import stop_daemons_under
 
@@ -139,9 +140,9 @@ class TestSwayGeometry(unittest.TestCase):
         self.addCleanup(client.close)
         self.assertEqual(client.geometry(), (1280, 720))
         client.mousemove_abs(99999, 99999)
-        self.assertEqual(client.pointer(), (1279, 719))
+        self.assertEqual(client.pointer(), (1279, 719, True))
         client.mousemove_abs(0, 0)
-        self.assertEqual(client.pointer(), (0, 0))
+        self.assertEqual(client.pointer(), (0, 0, True))
 
 
 if __name__ == "__main__":

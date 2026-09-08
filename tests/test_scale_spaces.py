@@ -25,9 +25,11 @@ the second source that notices.
 
 import io
 import json
+import math
 import os
 import struct
 import sys
+import time
 import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -288,6 +290,25 @@ class FakeSource:
         return self.box
 
 
+class SilentMutter(twm.FakeMutter):
+    """FakeMutter that takes GetCurrentState and never answers it.
+
+    The sleep is what a wedged compositor looks like from the client: the
+    call is in flight, the socket is open, and only the client's own timeout
+    ends it. It is longer than any CALL_TIMEOUT a test here sets and shorter
+    than the file's runtime, so the thread it blocks is gone before
+    teardown."""
+
+    def __init__(self, *a, **kw):
+        self.asked = 0
+        twm.FakeMutter.__init__(self, *a, **kw)
+
+    def state_variant(self):
+        self.asked += 1
+        time.sleep(1.0)
+        return twm.FakeMutter.state_variant(self)
+
+
 class DisplayConfigSource(BboxCase):
     """The second source: org.gnome.Mutter.DisplayConfig, asked only when the
     wire is ambiguous (wdotool/layoutbox.py).
@@ -430,6 +451,68 @@ class DisplayConfigSource(BboxCase):
         self.assertNotIn("import wxrandr", code)
         self.assertNotIn("from wxrandr", code)
 
+    def test_a_hanging_display_config_is_bounded_and_then_backed_off(self):
+        """A Mutter that takes the GetCurrentState call and never answers.
+
+        Not a state anything here has been caught in -- it is the shape a
+        wedged compositor has from the client, which is the only shape a
+        synchronous session-bus call in the middle of a keystroke can defend
+        against. What the numbers are is measured: layoutbox.py:65 sets
+        CALL_TIMEOUT = 2.0 and layoutbox.py:69 RETRY_AFTER = 30.0, so the
+        call is bounded, the pointer command this is only a diagnostic for
+        goes through on the wire's own box, and the source backs off rather
+        than paying the timeout again on the next keystroke. CALL_TIMEOUT is
+        patched to 0.3 here so the test costs 0.3 s and not 2."""
+        mock = twm.MutterMockBus()
+        self.addCleanup(mock.close)
+        mock.mutter = SilentMutter(
+            ["eDP-1"],
+            [(0, 0, 2.0, 0, True, [("eDP-1", "1920x1080@60.020")])],
+            layout_mode=1)
+        src = self.source_on(mock)
+        self.addCleanup(setattr, layoutbox, "CALL_TIMEOUT", layoutbox.CALL_TIMEOUT)
+        layoutbox.CALL_TIMEOUT = 0.3
+
+        said = []
+        t0 = time.monotonic()
+        box = self.checked(self.WIRE, src, warn=lambda t, m: said.append(m))
+        took = time.monotonic() - t0
+        self.assertEqual(box, (0, 0, 1920, 1080))
+        self.assertLess(took, 0.8, "the diagnostic may not hold up the command")
+        self.assertGreaterEqual(took, 0.3, "it really did wait for the answer")
+        self.assertEqual(said, [])            # nothing to compare, nothing to say
+        self.assertGreater(src.next_try, time.monotonic())
+        self.assertEqual(mock.mutter.asked, 1)
+
+        self.assertEqual(self.checked(self.WIRE, src,
+                                      warn=lambda t, m: said.append(m)),
+                         (0, 0, 1920, 1080))
+        self.assertEqual(mock.mutter.asked, 1, "backed off, not asked again")
+
+    @unittest.expectedFailure
+    def test_one_wire_state_is_one_display_config_call(self):
+        """DEFERRED: fix 39 (layoutbox.py:158-178 -- cache the DisplayConfig
+        box keyed on the `outs` tuple, 2-5 s TTL), F3.4.
+
+        Nothing about the layout has changed between two `mousemove`s of the
+        same script, and the gate that keeps ordinary sessions out of here
+        does not help the one session that is in it: a stale-state GNOME 46
+        pays a synchronous session-bus round trip per pointer command, which
+        is the state the warning exists for and therefore the state where the
+        cost is guaranteed. Twenty checks over one unchanged wire state make
+        twenty GetCurrentState calls today; the fix makes them one, and a
+        changed wire state makes a second."""
+        src = self.gnome(layout_mode=1)
+        counted = []
+        real = src._bbox_over
+        src._bbox_over = lambda bus: (counted.append(1), real(bus))[1]
+        for _ in range(20):
+            self.checked(self.WIRE, src, warn=lambda t, m: None)
+        self.assertEqual(len(counted), 1)
+        other = [head(2560, 1600, 2, 0, 0, 2560, 1600)]
+        self.checked(other, src, warn=lambda t, m: None)
+        self.assertEqual(len(counted), 2)
+
     def test_a_rotated_head_is_compared_in_the_orientation_it_is_drawn(self):
         """The signature is "logical size == raw mode size", and a head at
         90 degrees is drawn 1080x1920.  Comparing against the unrotated mode
@@ -441,6 +524,156 @@ class DisplayConfigSource(BboxCase):
         self.assertFalse(layoutbox.wire_is_ambiguous([dict(rot, lw=540, lh=960)]))
         # and unrotated, the same head is 1920x1080 drawn
         self.assertFalse(layoutbox.wire_is_ambiguous([dict(rot, transform=0)]))
+
+
+class RecordedLandings(BboxCase):
+    """The twelve other capture files under tests/fixtures/scaling, which
+    nothing read until now.
+
+    Each is one run of `repro/scale-probe.py` inside a guest at one scaling
+    state: the monitor layout `wxrandr --query` reported, the box the daemon
+    computed there, and per target the coordinate `mousemove` was asked for,
+    the coordinate the daemon then reported, and -- where the compositor uses
+    the KMS cursor plane rather than drawing its own cursor -- where that
+    plane really was, in device pixels on the scanout, read out of
+    /sys/kernel/debug/dri/*/state.
+
+    Three claims, over every file:
+
+    * replaying the recorded monitor layout as wl_output + zxdg_output_v1
+      gives back the box the daemon reported in the guest, so what the wire
+      code here computes is what the guest computed;
+    * every landing is the coordinate that was asked for, clamped into that
+      box -- the whole point of the pointer mapping, at 1, 1.5 and 2 and on
+      mixed-scale pairs;
+    * the cursor plane is at that coordinate times the head's own device
+      factor, less one constant cursor hotspot per head.
+
+    Two of the four tests below execute no wdotool code: they are
+    consistency checks over recorded output -- the daemon's own answers from
+    inside the guest against the KMS planes read out beside them -- and they
+    are here as oracles for the captures, not as coverage of the pointer
+    mapping. What they catch is a capture edited or replaced with one that
+    does not hold together. Only
+    test_the_wire_replays_to_the_box_the_daemon_reported runs product code
+    (the wl_output/zxdg_output_v1 wire through layoutbox), and
+    test_every_capture_in_the_directory_is_read_by_a_test is a ratchet on the
+    directory.
+
+    The hotspots are the measurement, not a rule: GNOME 50 draws the cursor
+    with a 4/6/8 device-pixel hotspot at scale 1/1.5/2 (it scales the cursor
+    image with the head), GNOME 46 with 6 at scale 2 in both layout modes and
+    3-4 on an unscaled second head, and KWin 6.6 with 5 at scale 1 and 7-8 at
+    1.5 -- and at scale 2 KWin drew its own cursor instead, so
+    resolute-kde-1h-kde-scale2.json has no plane reading at all. The one
+    device pixel of slack is the fractional cases' rounding: at 1.5 a logical
+    coordinate does not land on a device pixel and the compositor and this
+    arithmetic may round it opposite ways.
+    """
+
+    DIR = os.path.join(ROOT, "tests", "fixtures", "scaling")
+    #: the stale-state capture, which DivergedLandings above owns: its
+    #: landings are the same coordinates, but its cursor plane is off in a
+    #: way that is the bug, not a hotspot.
+    OWNED_ELSEWHERE = "noble-gnome-iso-DIVERGED.json"
+    #: measured hotspot, in device pixels, per capture and crtc index
+    HOTSPOT = {
+        "noble-gnome-iso-1h-frac-scale2": {0: 6},
+        "noble-gnome-iso-1h-nofrac-scale2": {0: 6},
+        "noble-gnome-iso-2h-nofrac-s2-s1": {0: 6, 1: 4},
+        "resolute-gnome-iso-1h-frac-scale1": {0: 4},
+        "resolute-gnome-iso-1h-frac-scale1.5": {0: 6},
+        "resolute-gnome-iso-1h-frac-scale2": {0: 8},
+        "resolute-gnome-iso-2h-frac-s2-s1": {0: 8, 1: 4},
+        "resolute-gnome-iso-seam-sweep": {0: 4, 1: 4},
+        "resolute-kde-1h-kde-scale1": {0: 5},
+        "resolute-kde-1h-kde-scale1.5": {0: 8},
+        "resolute-kde-1h-kde-scale2": {},        # KWin drew its own cursor
+        "resolute-kde-2h2-kde-s2-s1": {1: 5},    # nothing landed on crtc-0
+    }
+
+    @classmethod
+    def setUpClass(cls):
+        cls.caps = {}
+        for name in sorted(os.listdir(cls.DIR)):
+            if not name.endswith(".json") or name == cls.OWNED_ELSEWHERE:
+                continue
+            with io.open(os.path.join(cls.DIR, name), encoding="utf-8") as f:
+                cls.caps[name[:-5]] = json.load(f)
+
+    @staticmethod
+    def modes(cap):
+        """crtc index -> the scanout size, from the primary plane's own
+        crtc rectangle. The cursor plane is in that same space."""
+        out = {}
+        for plane in cap.get("planes_first") or []:
+            crtc, pos = plane.get("crtc"), plane.get("crtc_pos")
+            if (isinstance(crtc, str) and crtc.startswith("crtc-")
+                    and isinstance(pos, list) and int(crtc[5:]) not in out):
+                out[int(crtc[5:])] = (pos[0], pos[1])
+        return out
+
+    def wire(self, cap):
+        """The recorded layout as this file's `head()` table. The integer
+        wl_output.scale is Mutter's ceil() of the fractional one and never
+        reaches the box: `_wayland_bbox` takes the xdg_output logical
+        geometry wherever it is advertised, which is every capture here."""
+        modes = self.modes(cap)
+        return [head(modes[m["index"]][0], modes[m["index"]][1],
+                     math.ceil(m["scale"]), m["x"], m["y"], m["width"], m["height"])
+                for m in cap["monitors"]]
+
+    def test_the_wire_replays_to_the_box_the_daemon_reported(self):
+        for name, cap in self.caps.items():
+            with self.subTest(name):
+                self.assertEqual(list(self.bbox(self.wire(cap))),
+                                 cap["daemon_bbox"])
+
+    def test_every_landing_is_the_coordinate_that_was_asked_for(self):
+        """Clamped into the box, and nothing else done to it: no scale is
+        applied to the coordinate anywhere on the way."""
+        for name, cap in self.caps.items():
+            x, y, w, h = cap["daemon_bbox"]
+            with self.subTest(name):
+                for t in cap["targets"]:
+                    ax, ay = t["asked"]
+                    self.assertEqual(
+                        t["daemon"],
+                        [min(max(ax, x), x + w - 1), min(max(ay, y), y + h - 1)],
+                        t)
+                    self.assertEqual(t["move_rc"], 0, t)
+
+    def test_the_cursor_plane_is_the_landing_times_the_heads_own_factor(self):
+        seen = set()
+        for name, cap in self.caps.items():
+            mons = cap["monitors"]
+            modes = self.modes(cap)
+            want = self.HOTSPOT[name]
+            with self.subTest(name):
+                for t in cap["targets"]:
+                    for crtc, box in (t.get("hw") or {}).items():
+                        i = int(crtc.split("-")[1])
+                        m, mode = mons[i], modes[i]
+                        ax, ay = t["daemon"]
+                        dx = round((ax - m["x"]) * mode[0] / m["width"])
+                        dy = round((ay - m["y"]) * mode[1] / m["height"])
+                        self.assertAlmostEqual(dx - box[0], want[i], delta=1,
+                                               msg=(name, crtc, t))
+                        self.assertAlmostEqual(dy - box[1], want[i], delta=1,
+                                               msg=(name, crtc, t))
+                        seen.add((name, i))
+        self.assertEqual(
+            seen, {(n, i) for n, heads in self.HOTSPOT.items() for i in heads},
+            "a head whose plane readings vanished from a capture")
+
+    def test_every_capture_in_the_directory_is_read_by_a_test(self):
+        """The reason this class exists: twelve of these thirteen files were
+        in the tree with nothing reading them, so a capture that contradicted
+        the code would have sat there saying so to nobody."""
+        onwire = {n for n in os.listdir(self.DIR) if n.endswith(".json")}
+        self.assertEqual(onwire,
+                         {n + ".json" for n in self.caps} | {self.OWNED_ELSEWHERE})
+        self.assertEqual(set(self.caps), set(self.HOTSPOT))
 
 
 class DivergedLandings(unittest.TestCase):

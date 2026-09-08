@@ -14,14 +14,23 @@ import contextlib
 import io
 import os
 import re
+import shutil
 import socket
+import struct
 import sys
+import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
+# ...and the tests directory itself, for the bare `import support` and
+# `from test_dbus_mini import MockBus` below: running this file by path
+# puts it on sys.path for free, `python3 -m unittest tests/<file>.py`
+# does not.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from fwcommon import dbus_mini
 from fwcommon.dbus_mini import ERR, Bus, DBusError, Variant
@@ -725,6 +734,42 @@ class TestTypingThroughTheLayout(unittest.TestCase):
                          de.lookup_char("\u20ac")[0])
         self.assertEqual(keymap.resolve_token("0x010020ac", gr),
                          gr.lookup_char("\u20ac")[0])
+
+    def test_a_unicode_keysym_presses_the_layouts_key_not_the_us_one(self):
+        """The keysym form of the same rule, all the way through the daemon:
+        `wdotool key 0x01000079` is U+0079, the letter y, and on a German
+        board that is <AB01> = 44 -- where a US board has z. 21 (<AB03>) is
+        what the built-in table would have pressed, and it is the wrong
+        letter, silently: xdotool's own `key 0x01000079` is a keysym lookup
+        in the *active* layout too."""
+        d = self.daemon_for("de")
+        d.op_key("0x01000079", "press", 0, False)
+        self.assertEqual(taps(d.kb), [(44, 1), (44, 0)])
+        self.assertNotIn(21, [c for c, _ in taps(d.kb)])
+
+    def test_a_unicode_keysym_the_layout_cannot_reach_warns_and_presses_nothing(self):
+        """`key 0x0100004c` is U+004C, capital L, and the Greek layout has no
+        Latin letter on any level of any key. The named form (`key L`) has
+        warned since the Greek session was measured; the numeric form is the
+        same question and must not fall through to the US table's <AB09>,
+        which on gr is lambda."""
+        d = self.daemon_for("kde_gr")
+        warns = d.op_key("0x0100004c", "press", 0, False)
+        self.assertEqual(taps(d.kb), [])
+        self.assertIn("key '0x0100004c' is not reachable on the Greek layout."
+                      " Ignoring it.", warns)
+
+    def test_a_layout_with_no_characters_at_all_falls_back_to_the_table(self):
+        """The guard on that rule. `layout.chars` empty is not "this layout
+        cannot type anything", it is a ReverseMap that carries no character
+        table -- and refusing every keysym there would take the numeric form
+        away from a session whose keymap parsed into nothing. So the built-in
+        US table answers, exactly as it did before any of this existed."""
+        empty = rmap("de")
+        empty.chars = {}
+        self.assertEqual(keymap.resolve_token("0x01000061", empty),
+                         keymap.CHAR_TO_KEY["a"])
+        self.assertEqual(keymap.resolve_token("0x01000041", empty), (30, True))
 
     def test_a_chord_on_kwins_german_moves_with_the_layout(self):
         """Ctrl+Z is the physical <AB01> on a US board and <AB03> on a German
@@ -1948,6 +1993,19 @@ class PortalService(_FakeService):
         return "a{sa{sv}}", ({self.NS: self.values()},)
 
 
+def symbols_groups(body: str) -> list:
+    """The layout codes an `xkb_symbols` section name lists, in group order.
+
+    libxkbcommon writes the whole configured set into that one name:
+    `pc_us_de_2_fr_3_gr_4_inet(evdev)` is us,de,fr,gr and
+    `pc_ru_es_2_us_3_inet(evdev)` is ru,es,us -- the bare digits are the
+    group numbers of everything after the first. `pc` and the trailing
+    `inet(evdev)` are the model and the compat section, not layouts."""
+    line = re.search(r'xkb_symbols\s+"([^"]+)"', body).group(1)
+    return [tok for tok in line.split("_")
+            if tok != "pc" and not tok.isdigit() and "(" not in tok]
+
+
 class ShellName(_FakeService):
     """`org.gnome.Shell` owning its name and nothing else. The reader checks
     it before it asks the portal anything, so that a KDE or sway box is one
@@ -2064,6 +2122,100 @@ class TestTheActiveGroupFromGnome(unittest.TestCase):
             {"sources": [("xkb", "de")], "mru-sources": [("xkb", "de")]}), 1)
 
     # -- it answers
+
+    def test_the_first_three_sources_agree_under_both_rules(self):
+        """`four_us_de_fr_gr.xkb` (xkbcli compile-keymap --layout us,de,fr,gr,
+        libxkbcommon 1.13.2) is the shape a four-source GNOME session
+        compiles: four groups and no appended `us`, because the user already
+        has one. For the first three sources the chunk arithmetic and the
+        keymap's own `xkb_symbols` name give the same group, which is what
+        the live measurement on 51.beta says must not change."""
+        four = [("xkb", n) for n in ("us", "de", "fr", "gr")]
+        svc = self.portal(sources=four)
+        self.assertEqual(symbols_groups(text("four_us_de_fr_gr")),
+                         ["us", "de", "fr", "gr"])
+        for i, want in enumerate((1, 2, 3)):
+            svc.switch_to(i)
+            self.assertEqual(xkbmap.gnome_group(text("four_us_de_fr_gr")), want,
+                             four[i])
+
+    def test_five_sources_on_51_beta_still_follow_the_chunk_arithmetic(self):
+        """The live refutation, pinned so that a symbols-name guard cannot
+        quietly overturn it: measured on GNOME 51.beta with sources
+        us,de,fr,gr,es and Spanish picked by Super+Space, `keys explain` said
+        "group 2 of 3" and `type 'yz@'` arrived byte-exact.
+
+        The two sessions are not the same five sources and it matters that
+        they need not be. `five_es.xkb` was compiled from the session
+        keymaps/README.md records for it, de,fr,gr,ru,es, which is what
+        produced `xkb_symbols "pc_ru_es_2_us_3_inet(evdev)"` -- three groups,
+        ru,es,us, around the one in use. The live 51.beta session was
+        us,de,fr,gr,es. Spanish is index 4 in both, so both take the second
+        chunk and 4 % 3 + 1 = 2 either way, and es really is group 2 of that
+        keymap's three: the arithmetic and the symbols name agree here. That
+        is the whole point -- the chunk rule stays the primary route and any
+        name-based cross-check is a guard, not a replacement."""
+        self.assertEqual(symbols_groups(text("five_es")), ["ru", "es", "us"])
+        five = [("xkb", n) for n in ("de", "fr", "gr", "ru", "es")]
+        svc = self.portal(sources=five)
+        svc.switch_to(4)                                   # es
+        self.assertEqual(xkbmap.gnome_group(text("five_es")), 2)
+        self.assertEqual(symbols_groups(text("five_es"))[1], "es")
+
+    @unittest.expectedFailure
+    def test_the_fourth_source_is_the_fourth_group(self):
+        """DEFERRED: fix 37 (xkbmap.py:1399 -- cross-check `i % 3 + 1`
+        against the `xkb_symbols` section name's group list and prefer the
+        name where it resolves the mru head to a different group), F3.0.
+
+        Four sources fit one keymap, so Mutter does not chunk: `us,de,fr,gr`
+        compiles as four groups in that order and Greek is group 4. The
+        arithmetic says 3 % 3 + 1 = 1 -- English (US) -- and, because the
+        setting answered, says it with `group_known` true and no notice. So
+        `wdotool type a` on a Greek desktop presses <AC01> and types a Latin
+        `a` that the layout cannot produce, silently. The right answer is
+        group 4, where `a` is unreachable and says so."""
+        four = [("xkb", n) for n in ("us", "de", "fr", "gr")]
+        svc = self.portal(sources=four)
+        svc.switch_to(3)                                   # gr
+        self.assertEqual(xkbmap.gnome_group(text("four_us_de_fr_gr")), 4)
+        d, warns = self.typed("four_us_de_fr_gr", s="a")
+        self.assertEqual(taps(d.kb), [])
+        self.assertIn("not on the Greek layout", " ".join(warns))
+
+    @unittest.expectedFailure
+    def test_a_five_source_chunk_that_starts_at_the_head(self):
+        """DEFERRED: fix 37, F3.0. `us,de,fr,gr,ru` with Russian picked
+        compiles `ru,us` -- two groups, Russian first -- so Russian is group
+        1. The arithmetic says 4 % 3 + 1 = 2, which fits the keymap (it has
+        two groups) and so is not clamped away: the answer is English (US)
+        with `group_known` true, and nothing warns. The keymap's own
+        `xkb_symbols "pc_ru_us_2_inet(evdev)"` names `ru` first and settles
+        it."""
+        five = [("xkb", n) for n in ("us", "de", "fr", "gr", "ru")]
+        svc = self.portal(sources=five)
+        svc.switch_to(4)                                   # ru
+        self.assertEqual(symbols_groups(text("ru_us")), ["ru", "us"])
+        self.assertEqual(xkbmap.gnome_group(text("ru_us")), 1)
+
+    @unittest.expectedFailure
+    def test_the_answer_never_names_a_layout_the_head_is_not(self):
+        """DEFERRED: fix 37, F3.0. The guard the fix is worth having for,
+        stated over every fixture whose `xkb_symbols` name lists its groups:
+        whatever the arithmetic says, the group the reader hands back must be
+        the position of the mru head's own layout in that list. It holds for
+        every capture here today except the four-source one, which is the
+        finding."""
+        svc = self.portal()
+        for name in ("us_de", "de_fr", "five_es", "ru_us", "four_us_de_fr_gr"):
+            groups = symbols_groups(text(name))
+            for i, layout in enumerate(groups):
+                if layout == "us" and i == len(groups) - 1:
+                    continue        # Mutter's appended fallback is not a source
+                svc.sources = [("xkb", g) for g in groups]
+                svc.switch_to(i)
+                self.assertEqual(xkbmap.gnome_group(text(name)), i + 1,
+                                 (name, layout))
 
     def test_the_measured_defect(self):
         """`us, de` switched to German with Super+Space, `wdotool type 'yz@'`.
@@ -2252,6 +2404,257 @@ class TestTheActiveGroupFromGnome(unittest.TestCase):
         with self.assertRaises(DBusError) as caught:
             xkbmap._read_all_as(os.geteuid(), "unix:path=/nonexistent/bus", 1.0)
         self.assertTrue(caught.exception.name.startswith(ERR))
+
+    def test_a_uid_that_does_not_exist_is_an_error_not_a_wait(self):
+        """The drop happens before the connect, so a session uid that has
+        gone (a user removed while their session lingers, or a bad SUDO_UID)
+        fails in the child and comes home over the pipe -- rather than
+        leaving the parent to wait out GNOME_TIMEOUT plus the fork grace on
+        every command."""
+        self.portal()
+        t0 = time.monotonic()
+        with self.assertRaises(DBusError) as caught:
+            xkbmap._read_all_as(4294967290, self.mock.address, 5.0)
+        self.assertLess(time.monotonic() - t0, 2.0)
+        self.assertIn("password database", caught.exception.message)
+
+    def test_the_child_holds_its_pipe_and_nothing_else(self):
+        """F3.1, fix 36. fork() hands the reader child the whole descriptor
+        table of whatever forked it. On the daemon that is /dev/uinput, the
+        Wayland socket, the listening control socket and -- when a command
+        forked it -- that command's own session-bus connection.
+
+        Measured in the test runner with the two closerange lines removed
+        (`python3 tests/test_xkbmap.py TestTheActiveGroupFromGnome`, this
+        test): /proc/self/fd held 12 entries, 9 of them above stdio -- six
+        AF_UNIX sockets (the mock bus's listener and the connections of the
+        three fake services), the /dev/null sentinel this test opens, the
+        reader's own pipe `w`, and the descriptor os.listdir() opened to read
+        the directory, which is already gone by the time readlink() reaches
+        it. With the fix those 9 are 2: `w` and the listing's own.
+
+        The child then setuid()s to the session user and hands itself to a
+        bus that identifies its caller by opening /proc/<pid>, so those are
+        root's descriptors reachable from a session-user process, and a dup
+        of the listening socket keeps the daemon's socket alive past its
+        death.
+
+        Snapshotted where the child is fully set up (in `_set_dumpable`, the
+        call between the drop and the connect): its own pipe, plus the
+        directory descriptor the listing itself opens. Nothing else -- named
+        here by two things the parent deliberately holds open, a /dev/null
+        and a bound AF_UNIX socket, neither of which may appear."""
+        import json as _json
+        svc = self.portal()
+        svc.switch_to(1)
+        tmp = tempfile.mkdtemp(prefix="wdotool-fds-")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        report = os.path.join(tmp, "fds.json")
+
+        sentinel = os.open("/dev/null", os.O_RDONLY)
+        self.addCleanup(os.close, sentinel)
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.addCleanup(listener.close)
+        listener.bind(os.path.join(tmp, "sock"))
+        listener.listen(1)
+        # What those two look like through /proc/<pid>/fd, which is how the
+        # child would be caught holding them however the numbers fell.
+        null_link = os.readlink("/proc/self/fd/%d" % sentinel)
+        sock_link = os.readlink("/proc/self/fd/%d" % listener.fileno())
+
+        real = xkbmap._set_dumpable
+
+        def record():
+            got = {}
+            for name in os.listdir("/proc/self/fd"):
+                try:
+                    got[name] = os.readlink("/proc/self/fd/" + name)
+                except OSError:
+                    got[name] = "(gone)"      # the listing's own descriptor
+            with open(report, "w") as f:
+                f.write(_json.dumps(got))
+            real()
+
+        with mock.patch.object(xkbmap, "_set_dumpable", record):
+            got = xkbmap._read_all_as(os.geteuid(), self.mock.address, 5.0)
+        self.assertEqual(xkbmap._group_of_sources(got), 2)   # and it still read it
+        with open(report) as f:
+            fds = _json.loads(f.read())
+
+        # 0/1/2 are stdio, which the child keeps on purpose (a traceback out
+        # of it has to reach the terminal) and which is why the two sentinels
+        # are only looked for above them: a runner whose own stdin is
+        # /dev/null would otherwise match on fd 0.
+        left = {int(n): v for n, v in fds.items() if int(n) > 2}
+        self.assertNotIn(null_link, left.values(), fds)
+        self.assertNotIn(sock_link, left.values(), fds)
+        # One pipe and one listing dirfd is the whole of the rest.
+        self.assertLessEqual(len(left), 2, fds)
+        self.assertTrue(any(v.startswith("pipe:") for v in left.values()), fds)
+
+    def test_a_shell_restart_is_a_moment_not_an_absence(self):
+        """`org.gnome.Shell` leaves the bus every time the shell restarts
+        (Alt+F2 r, or a crash) and comes back seconds later. A reader that
+        wrote that down as `absent` would stop asking for the rest of the
+        daemon's life and go back to guessing group 1 on a German desktop --
+        so the negative is only permanent for a reader that has never had an
+        answer, and here it is the ten-second backoff that stands between the
+        restart and the next read."""
+        shell = self.shell()
+        svc = PortalService(self.mock.address)
+        self.addCleanup(svc.close, self.mock)
+        svc.switch_to(1)
+        self.assertEqual(xkbmap.gnome_group(text("us_de")), 2)
+        self.assertEqual(self.reader.asked, 1)
+
+        shell.close(self.mock)          # the shell goes...
+        self.reader._drop()             # ...and takes our connection with it
+        self.assertIsNone(xkbmap.gnome_group(text("us_de")))
+        self.assertFalse(self.reader.absent)
+        self.assertGreater(self.reader.retry_at, 0.0)
+        self.assertEqual(svc.answers, 1)     # the portal was not even asked
+
+        back = ShellName(self.mock.address)  # ...and comes back
+        self.addCleanup(back.close, self.mock)
+        self.assertIsNone(xkbmap.gnome_group(text("us_de")))   # still backed off
+        self.reader.retry_at = 0.0
+        self.assertEqual(xkbmap.gnome_group(text("us_de")), 2)
+        self.assertEqual(svc.answers, 2)
+
+
+class PeerCredBus(MockBus):
+    """MockBus that records the SO_PEERCRED uid of every client that
+    connects, which is how a real dbus-daemon (and the portal behind it)
+    knows who is calling.
+
+    Hooked on hello() rather than on _accept(): the credentials are pinned at
+    connect() and stay readable for the life of the socket, Hello is the
+    first method every dbus_mini client sends, and MockBus calls it on the
+    connection's own serving thread while that socket is certainly open. The
+    alternative -- a copy of MockBus._accept with a getsockopt inserted --
+    would be a second copy of the accept loop in a class that only ever runs
+    as root, so it could drift from batch 0's original for months without
+    anyone running it."""
+
+    def __init__(self, **kw):
+        self.peer_uids = []
+        MockBus.__init__(self, **kw)
+
+    def hello(self, conn):
+        try:
+            _pid, uid, _gid = struct.unpack(
+                "3i", conn.sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED,
+                                           struct.calcsize("3i")))
+            self.peer_uids.append(uid)
+        except OSError:
+            pass
+        return MockBus.hello(self, conn)
+
+
+class TestPeerCredBusSeesTheCaller(unittest.TestCase):
+    """PeerCredBus above is only ever driven by the root-only class below, so
+    on an ordinary run nothing would notice it breaking -- if batch 0 renames
+    MockBus.hello, or _Conn stops carrying `sock`, the drop test would go on
+    "passing" as a skip until someone next ran the suite as root in the
+    guest. Two lines here keep that from being a silent hole: connect an
+    ordinary client and check the uid comes out. Unprivileged that uid is the
+    runner's own, which is the whole reason the root cell exists."""
+
+    def test_the_uid_of_an_ordinary_client_is_recorded(self):
+        bus = PeerCredBus()
+        self.addCleanup(bus.close)
+        client = Bus(bus.address)
+        self.addCleanup(client.close)
+        self.assertRegex(client.unique_name, r"^:1\.\d+$")   # Hello happened
+        self.assertEqual(bus.peer_uids, [os.geteuid()])
+
+
+@unittest.skipUnless(os.geteuid() == 0,
+                     "the root cell: run it as root (vm/vmctl ssh -- "
+                     "python3 tests/test_xkbmap.py)")
+class TestTheForkedReaderReallyDropsToTheSessionUid(unittest.TestCase):
+    """The cell every other GNOME test here can only pretend at: the daemon
+    is root (typing on GNOME goes through /dev/uinput, so it is under sudo or
+    a unit), and the portal answers the *session* user only -- it identifies
+    its caller by opening /proc/<pid>/root, which a root process is not.
+
+    Dropping to the uid we already are is a no-op, so unprivileged runs of
+    test_the_read_works_from_a_process_that_forks_and_drops above exercise
+    the fork, the pipe and the JSON but not one line of the drop. This class
+    is the drop: it asks for uid 1000 from uid 0 and checks what the bus saw.
+
+    SO_PEERCRED is pinned at connect(), so the connection has to be made by a
+    process that is already uid 1000 -- which is exactly why the child stays
+    alive for the call instead of handing a socket back (see _read_all_as).
+    """
+
+    UID = 1000
+
+    def setUp(self):
+        # 0700 under root would stop uid 1000 at the directory: the socket
+        # has to be reachable, which is what `subdir` is for.
+        self.mock = PeerCredBus(subdir="reachable")
+        self.addCleanup(self.mock.close)
+        os.chmod(self.mock.dir, 0o755)
+        os.chmod(os.path.dirname(self.mock.path), 0o755)
+        os.chmod(self.mock.path, 0o666)
+        self.addCleanup(setattr, xkbmap, "_gnome", xkbmap._gnome)
+        svc = ShellName(self.mock.address)
+        self.addCleanup(svc.close, self.mock)
+        self.portal = PortalService(self.mock.address)
+        self.addCleanup(self.portal.close, self.mock)
+
+    def child_report(self):
+        """Fork the reader with `_set_dumpable` recording what the child is
+        by then: its uid, whether /proc/self is its own again, and its
+        descriptors."""
+        import json as _json
+        tmp = tempfile.mkdtemp(prefix="wdotool-root-")
+        os.chmod(tmp, 0o777)
+        self.addCleanup(shutil.rmtree, tmp, True)
+        path = os.path.join(tmp, "child.json")
+        real = xkbmap._set_dumpable
+
+        def record():
+            real()
+            import ctypes
+            libc = ctypes.CDLL("libc.so.6", use_errno=True)
+            out = {"uid": os.getuid(), "euid": os.geteuid(),
+                   "proc_self_uid": os.stat("/proc/self").st_uid,
+                   "dumpable": libc.prctl(3, 0, 0, 0, 0),   # PR_GET_DUMPABLE
+                   "fds": sorted(int(n) for n in os.listdir("/proc/self/fd"))}
+            with open(path, "w") as f:
+                f.write(_json.dumps(out))
+
+        with mock.patch.object(xkbmap, "_set_dumpable", record):
+            got = xkbmap._read_all_as(self.UID, self.mock.address, 5.0)
+        with open(path) as f:
+            return got, _json.loads(f.read())
+
+    def test_the_portal_sees_the_session_user_and_the_parent_stays_root(self):
+        self.portal.switch_to(1)
+        got, child = self.child_report()
+        self.assertEqual(xkbmap._group_of_sources(got), 2)
+        self.assertIn(self.UID, self.mock.peer_uids)
+        self.assertEqual((child["uid"], child["euid"]), (self.UID, self.UID))
+        self.assertEqual(os.geteuid(), 0, "the parent is still root")
+
+    def test_the_child_is_dumpable_again_so_the_portal_can_read_it(self):
+        """setuid() clears PR_SET_DUMPABLE, and a process that is not
+        dumpable has a /proc/<pid> owned by root that only root may open --
+        which is precisely what the portal is not. Putting it back is what
+        makes the read work at all."""
+        _got, child = self.child_report()
+        self.assertEqual(child["dumpable"], 1)
+        self.assertEqual(child["proc_self_uid"], self.UID)
+
+    def test_the_child_carries_none_of_roots_descriptors(self):
+        """F3.1, fix 36, in the cell it matters in: these are root's open
+        files in a process that has just become the session user."""
+        _got, child = self.child_report()
+        self.assertLessEqual(len([fd for fd in child["fds"] if fd > 2]), 2,
+                             child["fds"])
+
 
 if __name__ == "__main__":
     unittest.main()

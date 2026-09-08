@@ -26,6 +26,10 @@ import sys
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# ...and the tests directory itself, for the bare `import support` /
+# `import wl_fake` below: running this file by path puts it on sys.path
+# for free, `python3 -m unittest tests/<file>.py` does not.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # every test file carries this itself: the suite is run file by file, where
 # conftest.py never loads, and a tool that hands itself over would not be
 # the code under test
@@ -840,7 +844,7 @@ class ThePointerCommandsOverTheWire(VptrTest):
                         pass
 
                     def pointer(self):
-                        return (0, 0)
+                        return (0, 0, True)      # (x, y, known)
 
                 return D()
 
@@ -1203,6 +1207,63 @@ class ClearModifiers(VptrTest):
         self.assertTrue(resp.get("ok"), resp)
         self.assertEqual(self.comp.of("button"),
                          [("button", 0x110, 1), ("button", 0x110, 0)])
+
+
+class APointerThatFailsMidRelease(VptrTest):
+    """T38, the pointer twin of tests/test_vkbd.py's
+    ADeviceThatFailsMidRelease: `_own_pointer` walks the held buttons on the
+    device that is holding them, and the walk stops at the first write that
+    fails.
+
+    The failure is scripted on the object rather than by hanging up on the
+    socket, because the daemon writes both releases back to back with no
+    round trip between them: whether the second one gets EPIPE depends on
+    when the compositor's thread ran, and a test that depends on that is a
+    test that fails on a loaded machine. What is being pinned here is the
+    walk, not the socket -- Reconnecting above owns the real drop."""
+
+    class Flaky:
+        """The virtual pointer, delegating, until the `fail_at`th release."""
+
+        def __init__(self, real, fail_at=2):
+            self._real = real
+            self.fail_at = fail_at
+            self.releases = 0
+
+        def button(self, code, down):
+            if not down:
+                self.releases += 1
+                if self.releases >= self.fail_at:
+                    raise vptr.VptrError("the compositor closed the connection")
+            self._real.button(code, down)
+
+        def __getattr__(self, name):
+            return getattr(self._real, name)
+
+    def test_every_held_button_is_released_or_named(self):
+        d = self.daemon(uinput=True)
+        d.handle({"op": "button", "btn": 1, "down": True, "vkbd_mode": "on"})
+        d.handle({"op": "button", "btn": 3, "down": True, "vkbd_mode": "on"})
+        self.assertEqual(d.btns, {uinput.BTN_LEFT, uinput.BTN_RIGHT})
+        d._vp = self.Flaky(d._vp, fail_at=2)
+        self.comp.events.clear()
+
+        resp = d.handle({"op": "button", "btn": 1, "down": True,
+                         "vkbd_mode": "off"})
+        self.assertTrue(resp.get("ok"), resp)
+        # BTN_LEFT (0x110) sorts before BTN_RIGHT (0x111): the first release
+        # reaches the compositor, the second is the one that fails.
+        self.assertEqual(self.comp.of("button"),
+                         [("button", uinput.BTN_LEFT, 0)])
+        switch = [w for w in resp["warnings"] if "were released" in w]
+        self.assertEqual(len(switch), 1, resp["warnings"])
+        self.assertIn("left", switch[0])
+        self.assertIn("right", switch[0])
+        # the point: neither stays in the model, so the kernel pointer that
+        # now owns the button starts from an honest empty set
+        self.assertEqual(d.btns, {uinput.BTN_LEFT})   # the one just pressed
+        self.assertFalse(d._btns_virtual)
+        self.assertEqual(d.mouse.events, [("KEY", uinput.BTN_LEFT, 1)])
 
 
 def _eventually(pred, tries=100):

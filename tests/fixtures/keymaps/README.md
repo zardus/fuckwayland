@@ -27,6 +27,8 @@ point of them.
 | `kde_us_de.xkb` | `us`, `de` | `English (US)`, `German` |
 | `kde_us_de_fr.xkb` | `us`, `de`, `fr` | `English (US)`, `German`, `French` |
 | `kde5_de.xkb` | `de` | `German` |
+| `four_us_de_fr_gr.xkb` | `us`, `de`, `fr`, `gr` | `English (US)`, `German`, `French`, `Greek` |
+| `ru_us.xkb` | `ru`, `us` | `Russian`, `English (US)` |
 
 `us_swapescape.xkb` and `us_grptoggle.xkb` are plain `us` sessions with a
 keyboard *option* set, which is
@@ -44,8 +46,24 @@ It puts `ISO_Level3_Shift` on `<CAPS>` and `<BKSL>` and `ISO_Level5_Shift` on
 — is false in it, and `wdotool keys watch` has to report the key that was
 really pressed rather than the one the layout nominates (`<LVL3>`, 84).
 
-Everything but the `kde*` six, `noble_de.xkb`, `sway_de.xkb` and `neo.xkb`
-comes from GNOME 50 / Mutter on Ubuntu 26.04 (libxkbcommon 1.11, which writes
+`four_us_de_fr_gr.xkb` and `ru_us.xkb` are the other two that were compiled
+rather than captured — `xkbcli compile-keymap --layout us,de,fr,gr` and
+`--layout ru,us`, libxkbcommon 1.13.2 — because they are the two ends of the
+question `five_es.xkb` opens and no session here was in either state. Four
+sources are the largest set that still fits one keymap, so Mutter does *not*
+chunk them and the fourth source is group 4; five sources with Russian picked
+compile the chunk `ru, us`, where Russian is group 1. `i % 3 + 1` answers 1
+and 2 there, and both answers fit the keymap, so nothing clamps them away.
+Each file's `xkb_symbols` section name lists its own group order —
+`pc_us_de_2_fr_3_gr_4_inet(evdev)` and `pc_ru_us_2_inet(evdev)`, the same
+shape as `five_es.xkb`'s `pc_ru_es_2_us_3_inet(evdev)` — which is what the
+deferred cross-check in tests/test_xkbmap.py reads. On GNOME 51.beta,
+measured, five sources still follow the arithmetic exactly (Spanish at index
+4 is group 2 of 3), so the name is a guard on the awkward cases and not a
+replacement for the rule.
+
+Everything but the `kde*` six, `noble_de.xkb`, `sway_de.xkb`, `neo.xkb` and the
+two compiled files above comes from GNOME 50 / Mutter on Ubuntu 26.04 (libxkbcommon 1.11, which writes
 every keysym as a hex number). `noble_de.xkb` comes from GNOME 46 / Mutter on
 Ubuntu 24.04 (libxkbcommon 1.6, which writes keysym *names*) — the same layout
 in the other dialect, so the parser is pinned against both. `sway_de.xkb` is

@@ -2232,9 +2232,14 @@ class DaemonClient:
         self._rpc(op="click", btn=btn, repeat=repeat, delay_ms=delay_ms,
                   clearmods=clearmods, **self._modes(None, vkbd_mode))
 
-    def pointer(self) -> tuple[int, int]:
+    def pointer(self) -> tuple[int, int, bool]:
+        """(x, y, known). `known` is False when the numbers are the tablet's own axis state rather than a
+        position anything established -- a daemon that has opened /dev/uinput but injected no motion answers
+        0,0 with known false, and the caller decides whether 0,0 is an answer. `getmouselocation` says it is
+        not (docs/WDOTOOL.md: it "refuses with that reason rather than guessing when wdotool has not moved
+        it"), while a relative move, which needs no origin, shrugs and moves anyway."""
         resp = self._rpc(op="pointer")
-        return (resp["x"], resp["y"])
+        return (resp["x"], resp["y"], bool(resp.get("known", True)))
 
     def seed_pointer(self, x: int, y: int):
         """Tell the daemon where the compositor's pointer really is (B6)."""

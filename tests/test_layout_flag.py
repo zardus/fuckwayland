@@ -8,7 +8,6 @@ import io
 import threading
 import os
 import sys
-import threading
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 

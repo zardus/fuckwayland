@@ -1296,6 +1296,18 @@ def _read_all_as(uid: int, addr: str, timeout: float):
     if pid == 0:                                      # child
         try:
             os.close(r)
+            # Everything but `w`, before the drop. fork() hands this child the whole fd table of whatever was
+            # running -- on the daemon that is the uinput devices, the Wayland socket, the listening control
+            # socket and, when a command forked it, that command's session bus connection. Measured with these
+            # two lines removed, in the test runner (`python3 tests/test_xkbmap.py
+            # TestTheActiveGroupFromGnome.test_the_child_holds_its_pipe_and_nothing_else`): 12 entries in
+            # /proc/self/fd, 9 of them above stdio, against the 2 it has with the fix. The child then
+            # setuid()s to the session user and connects to a bus that identifies its caller by opening
+            # /proc/<pid>: a process holding root's descriptors is exactly what should not be reachable from a
+            # session-user process, and a dup of the listening socket would keep the daemon's socket alive
+            # past its death. It needs its pipe and nothing else.
+            os.closerange(3, w)
+            os.closerange(w + 1, _fd_bound())
             from fwcommon.dbus_mini import _drop_privileges
             _drop_privileges(uid)
             _set_dumpable()
@@ -1324,6 +1336,20 @@ def _read_all_as(uid: int, addr: str, timeout: float):
     if not out.get("ok"):
         raise DBusError(out.get("name") or (ERR + "Failed"), out.get("error") or "")
     return out.get("settings")
+
+
+def _fd_bound() -> int:
+    """One past the highest descriptor worth closing, the way daemon.py's
+    _close_inherited_fds computes it -- and clamped for the same reason: a
+    container can report SC_OPEN_MAX = 1073741816 and closerange() would walk
+    every one of them."""
+    try:
+        limit = os.sysconf("SC_OPEN_MAX")
+    except (ValueError, OSError):
+        limit = 4096
+    if not isinstance(limit, int) or limit < 3 or limit > 65536:
+        limit = 65536
+    return limit
 
 
 def _set_dumpable():

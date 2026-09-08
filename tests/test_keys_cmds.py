@@ -23,6 +23,7 @@ import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # Never hand this process over to the real X11 tools (see tests/conftest.py).
 os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"

@@ -11,7 +11,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 from fwcommon.errors import CmdError
-from wdotool import cli, input_cmds
+from wdotool import cli, daemon, input_cmds
 from wdotool.backend import Window, WindowBackend
 from wdotool.ctx import Context
 
@@ -49,9 +49,14 @@ def _cm(clearmods):
 
 
 class FakeDaemon:
-    def __init__(self, held=()):
+    def __init__(self, held=(), known=True):
         self.calls = []
         self.pos = (0, 0)
+        # The third element of the real pointer() answer (B6): False is a
+        # daemon whose `pos` is the tablet's untouched axis state rather than
+        # a position anything established. Default True, because every test
+        # written before that flag existed meant "and it knows".
+        self.known = known
         # What the daemon reports it was holding when clear_modifiers() is
         # called on its own -- the frozen API no command uses any more.
         self.held = list(held)
@@ -72,14 +77,18 @@ class FakeDaemon:
     def mousemove_abs(self, x, y, clearmods=False):
         self.calls.append(("abs", x, y) + _cm(clearmods))
         self.pos = (x, y)
+        self.known = True          # a warp puts the pointer where it says
 
     def mousemove_rel(self, dx, dy, clearmods=False):
+        # `known` deliberately untouched: the real daemon does not promote a
+        # delta applied to a position it never knew (daemon.py, B6).
         self.calls.append(("rel", dx, dy) + _cm(clearmods))
         self.pos = (self.pos[0] + dx, self.pos[1] + dy)
 
     def seed_pointer(self, x, y):
         self.calls.append(("seed", x, y))
         self.pos = (x, y)
+        self.known = True          # the compositor just said where it is
 
     def button(self, btn, down, clearmods=False):
         self.calls.append(("button", btn, down) + _cm(clearmods))
@@ -88,7 +97,7 @@ class FakeDaemon:
         self.calls.append(("click", btn, repeat, delay_ms) + _cm(clearmods))
 
     def pointer(self):
-        return self.pos
+        return (self.pos[0], self.pos[1], self.known)
 
     def geometry(self):
         return (1920, 1080)
@@ -690,6 +699,134 @@ class TestRealPointer(unittest.TestCase):
         with contextlib.redirect_stdout(out):
             input_cmds.cmd_getmouselocation(ctx, [])
         self.assertEqual(out.getvalue(), "x:5 y:6 screen:0 window:0\n")
+
+    def test_nobody_knows_where_the_pointer_is_and_the_terminal_is_told(self):
+        """F3.3, fix 38. A compositor with no pointer query (sway/i3 IPC has
+        none, and zwlr_virtual_pointer_v1 delivers no events at all) plus a
+        daemon that has injected no motion: there is no position, and 0,0 is
+        the tablet's untouched axis state. It used to be printed as one --
+        `x:0 y:0 screen:0 window:0`, rc 0 -- while docs/WDOTOOL.md:81 said
+        getmouselocation "refuses with that reason rather than guessing when
+        wdotool has not moved it". Now it refuses, with the daemon's own
+        POINTER_UNKNOWN text, and prints no coordinate line at all."""
+        ctx = Context()
+        ctx._daemon = FakeDaemon(known=False)     # nothing has moved it
+        ctx._backend = FakeBackend()              # no pointer() at all
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), self.assertRaises(CmdError) as caught:
+            input_cmds.cmd_getmouselocation(ctx, [])
+        self.assertEqual(str(caught.exception), daemon.POINTER_UNKNOWN)
+        self.assertEqual(out.getvalue(), "")
+        self.assertNotIn("x:", out.getvalue())
+
+    def test_the_same_daemon_answers_once_the_pointer_has_been_moved(self):
+        """The other half of the refusal: it is the *unknown* that is
+        refused, not the sway path. One mousemove and the daemon knows
+        exactly where it put the cursor, which is what the refusal's own
+        text tells the user to do."""
+        ctx = Context()
+        ctx._daemon = FakeDaemon(known=False)
+        ctx._backend = FakeBackend()
+        input_cmds.cmd_mousemove(ctx, ["10", "20"])
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            input_cmds.cmd_getmouselocation(ctx, [])
+        self.assertEqual(out.getvalue(), "x:10 y:20 screen:0 window:0\n")
+
+    def test_a_move_never_needs_the_answer_it_cannot_have(self):
+        """`mousemove` and `mousemove_relative` ask where the pointer is only
+        to remember it and to seed the model; neither NEEDS it, so the
+        refusal above must not take the moves down with it.
+
+        The absolute move is the half that carries the behaviour change:
+        cmd_mousemove asks _pointer_opt for the position it will hand back to
+        `mousemove restore`, and before fix 38 that question was answered
+        `(0, 0)` -- so `mousemove 500 500` followed by `mousemove restore`
+        warped the cursor to the top-left corner of the screen, confidently,
+        having never known where it started. Now the unknown stays unknown:
+        _last_mouse is None and restore says so. (cmd_mousemove_relative
+        never assigns _last_mouse at all -- input_cmds.py discards
+        _pointer_opt's result there, it asks only to seed the model -- so the
+        `("rel", 5, 5)` below is what pins the shrug for that one.)"""
+        ctx = Context()
+        ctx._daemon = FakeDaemon(known=False)
+        ctx._backend = FakeBackend()
+        input_cmds.cmd_mousemove_relative(ctx, ["5", "5"])
+        self.assertEqual(ctx._daemon.calls, [("rel", 5, 5)])
+
+        ctx = Context()
+        ctx._daemon = FakeDaemon(known=False)
+        ctx._backend = FakeBackend()
+        input_cmds.cmd_mousemove(ctx, ["10", "20"])
+        self.assertEqual(ctx._daemon.calls, [("abs", 10, 20)])
+        self.assertIsNone(ctx._last_mouse, "(0, 0) was never a position")
+        with self.assertRaises(CmdError) as caught:
+            input_cmds.cmd_mousemove(ctx, ["restore"])
+        self.assertEqual(str(caught.exception),
+                         "Have no previous mouse position. Cannot restore.")
+        self.assertEqual(ctx._daemon.calls, [("abs", 10, 20)],
+                         "and it did not warp to 0,0 on the way out")
+
+    def test_a_compositor_query_that_failed_says_why_it_failed(self):
+        """F3.3, fix 38, the half that is not sway. _backend_pointer folds
+        two Nones together: a compositor with no pointer query, and one whose
+        query raised. The second is the measured GNOME 51.beta as-shipped
+        state -- the bridge is marked out of date for shell 51 and every
+        other command prints exactly that, `wdotool search --name .`
+        included -- and a fresh daemon there has `known` false, so the
+        refusal fires. It must not then hand a GNOME user sway's answer:
+        "zwlr_virtual_pointer_v1 cannot be asked" names a protocol that
+        session does not use and drops the one line that tells them what to
+        reinstall."""
+        msg = ("the fuckwayland bridge extension is marked out of date for "
+               "this GNOME Shell (['45'...'50']); reinstall a matching "
+               "gnome/ from the repo")
+        b = PointerBackend(fail=CmdError(msg))
+        ctx = Context()
+        ctx._daemon = FakeDaemon(known=False)
+        ctx._backend = b
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), self.assertRaises(CmdError) as caught:
+            input_cmds.cmd_getmouselocation(ctx, [])
+        self.assertEqual(str(caught.exception), msg)
+        self.assertNotIn("zwlr_virtual_pointer_v1", str(caught.exception))
+        self.assertEqual(out.getvalue(), "")
+        self.assertEqual(b.queries, 1)
+
+    def test_the_exit_code_of_the_reason_survives_being_re_raised(self):
+        """`wdotool getmouselocation` with no session at all exits 2, not 1:
+        ctx.py's NoSessionError carries its own exit_code and cli.py prints
+        str() and exits with it. Re-raising the backend's exception rather
+        than wrapping its text is what keeps that -- a script that greps rc
+        for "there is no session" sees the same number from
+        getmouselocation as from search."""
+
+        class NoSession(CmdError):
+            exit_code = 2
+
+        b = PointerBackend(fail=NoSession("no wayland display and no DISPLAY"))
+        ctx = Context()
+        ctx._daemon = FakeDaemon(known=False)
+        ctx._backend = b
+        with self.assertRaises(CmdError) as caught:
+            input_cmds.cmd_getmouselocation(ctx, [])
+        self.assertEqual(caught.exception.exit_code, 2)
+        self.assertIs(caught.exception, b.fail)
+
+    def test_a_compositor_with_no_query_at_all_still_gets_the_sway_answer(self):
+        """The control for the two above: distinguishing the reasons must not
+        cost the sway path its own. `backend.WindowBackend.pointer` returns
+        None and backend_sway.py does not override it -- sway's IPC carries
+        no cursor position -- so there is no exception to quote and
+        POINTER_UNKNOWN, which names the protocol and tells the user to move
+        the pointer once, is still the right and only thing to say."""
+        ctx = Context()
+        ctx._daemon = FakeDaemon(known=False)
+        ctx._backend = FakeBackend()
+        self.assertIsNone(ctx._backend.pointer(), "the sway shape")
+        with self.assertRaises(CmdError) as caught:
+            input_cmds.cmd_getmouselocation(ctx, [])
+        self.assertEqual(str(caught.exception), daemon.POINTER_UNKNOWN)
 
     def test_a_daemon_that_cannot_be_seeded_is_not_fatal(self):
         b = PointerBackend(pos=(11, 22))
