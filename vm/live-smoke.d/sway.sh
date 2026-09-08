@@ -74,8 +74,18 @@ phase_wm() {
     want "wwmctl -l lists the terminal" "." "$(guest 'wwmctl -l' || true)"
     want "wwmctl -l -G carries a geometry column" "[0-9]+ +[0-9]+ +[0-9]+ +[0-9]+" "$(guest 'wwmctl -l -G' || true)"
     want "wxprop -id answers for a sway window" "." "$(guest "wxprop -id $WIN _NET_WM_STATE" || true)"
-    want "wxprop -root _NET_CLIENT_LIST is a window-id list" "window id|0x[0-9a-f]+|WINDOW" \
-         "$(guest 'wxprop -root _NET_CLIENT_LIST' || true)"
+    # On sway the root is Xwayland's real root: _NET_CLIENT_LIST names X clients
+    # and no native window (measured on a headless sway 1.11 with foot and xterm
+    # side by side: the list carried the xterm's id alone).  Only GNOME's root
+    # is re-synthesized from the bridge.  So the check needs an X client.
+    if guest 'command -v xterm' >/dev/null 2>&1; then
+        guest "setsid nohup xterm -T smokex -e sh -c 'sleep 600' >/dev/null 2>&1 </dev/null & sleep 3; true" >/dev/null || true
+        want "wxprop -root _NET_CLIENT_LIST names the X client (and no native window: the X root is real here)" \
+             "window id # 0x[0-9a-f]+" "$(guest 'wxprop -root _NET_CLIENT_LIST' || true)"
+        guest "pkill -x xterm; true" >/dev/null 2>&1 || true
+    else
+        note "(no xterm in this image: _NET_CLIENT_LIST on sway is the X plane, nothing to list without an X client)"
+    fi
     note "(the b7a60f0 maximize pair is a GNOME/KWin check: sway has no _NET_WM_STATE maximize to toggle)"
 }
 
@@ -88,7 +98,8 @@ layout_phase() {
     editor_save
     sleep 1
     same "--vkbd on types byte-exact with no uinput and no privilege" "vkbd: yz@" "$(editor_text)"
-    want "wwmctl -d shows one workspace per output" "Virtual-[0-9]" "$(guest 'wwmctl -d' || true)"
+    # sway names them 1..N, one pinned to each output; wwmctl -d prints the number, not the output
+    want "wwmctl -d shows one workspace per output" "^2 +[*-] " "$(guest 'wwmctl -d' || true)"
     note "listmonitors order: $(guest 'wxrandr --listmonitors' | tr '\n' ' ' || true)"
     note "(sway answers in get_outputs order, xrandr in output order: a parity nit, not a failure)"
 }

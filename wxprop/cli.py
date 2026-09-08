@@ -506,7 +506,6 @@ def _main(prog: str, args) -> int:
     # -grammar/-help/-version act HERE, in argv order (release behavior,
     # single dash only — --grammar/--help/--version are unrecognized)
     spy = False
-    frame = False  # accepted, no reparenting frames on wlroots
     removes = []
     sets = []
     font_name = None

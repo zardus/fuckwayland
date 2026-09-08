@@ -88,14 +88,14 @@ jobs:
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
-      options: --user root
+      options: --user root --init
     steps:
       - uses: actions/checkout@v4
       - name: ${{ matrix.file }}
         run: |
           chown -R ci "$PWD"
           runuser -u ci -- env HOME=/home/ci XDG_RUNTIME_DIR=/tmp/xdg-ci FUCKWAYLAND_PASSTHROUGH=never \
-              python3 tests/${{ matrix.file }}.py
+              dbus-run-session -- python3 tests/${{ matrix.file }}.py
 
   parity:
     needs: plan
@@ -104,7 +104,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: DeterminateSystems/nix-installer-action@main
-      - run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends xvfb x11-utils xterm
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends xvfb x11-utils xterm wmctrl
       - name: the pinned oracles, then scripts/parity-oracle.sh
         run: |
           nix build --no-link --print-out-paths --inputs-from . nixpkgs#xdotool nixpkgs#wmctrl > /tmp/oracles

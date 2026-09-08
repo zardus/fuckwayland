@@ -70,6 +70,21 @@ editor_text() { guest "cat $SMOKE_FILE 2>/dev/null" ; }
 # A step file overrides this only when its desktop needs something else.
 oracle_outputs() { guest "python3 $ORACLE $DESKTOP" | grep -E '^[A-Za-z]' || true; }
 
+# head_dark <connector>: the host-side screendump of that head is one flat colour
+# (the same test vm/selftest.sh uses for "painted": sampled standard deviation of
+# the pixels, 0.02 the line).  Virtual-N is QEMU head N-1.
+head_dark() {
+    local n=${1##*-} f; f=$(mktemp -t smoke-head-XXXXXX.png)
+    "$VM" shot "$NAME" "$((n - 1))" "$f" >/dev/null 2>&1 || { rm -f "$f"; return 1; }
+    local sd; sd=$(identify -format '%[fx:standard_deviation]' "$f" 2>/dev/null || echo 1); rm -f "$f"
+    note "head $((n - 1)) ($1) standard deviation $sd"
+    awk -v s="$sd" 'BEGIN { exit !(s + 0 < 0.02) }'
+}
+
+# The Plasma major, 5 or 6: the two spell their config tool and their layout
+# object differently, and 5.27 reads kxkbrc at login only.
+plasma_major() { guest 'plasmashell --version 2>/dev/null' | grep -o '[0-9]\+' | head -1; }
+
 # vmctl scp logs in as root, so the oracle lands in /tmp first and the seated
 # user's own shell copies it home.  Both halves run again after every reboot,
 # because /tmp does not survive one on 24.04.
@@ -344,8 +359,20 @@ common_display_phase() {
     note "pair: anchor $first, mover $second, of $n0 enabled output(s)"
     guest "wxrandr --output $second --off" >/dev/null || true
     sleep 2
-    same "--output $second --off leaves $((n0 - 1)) enabled outputs ($DESKTOP's own tool)" \
-         "$((n0 - 1))" "$(oracle_outputs | grep -c .)"
+    local left; left=$(oracle_outputs | grep -c .)
+    if [ "$left" = "$((n0 - 1))" ]; then
+        pass "--output $second --off leaves $((n0 - 1)) enabled outputs ($DESKTOP's own tool)"
+    elif head_dark "$second"; then
+        # Plasma 5.27, measured 2026-09-08 on noble-kde: KWin stops painting the
+        # output (its screendump goes flat, standard deviation 0.012 against
+        # 0.06-0.10 on the live heads) but never releases the DRM connector, and
+        # kscreen-doctor 5.27 keeps reporting it enabled for as long as we cared
+        # to poll (and segfaults every other call).  wxrandr's own --query says
+        # `connected` with no mode.  The pixels are the honest oracle there.
+        pass "--output $second --off: $DESKTOP's tool still counts $left, but $second's head went dark (the native tool does not see a disable here; Plasma 5.27 does this)"
+    else
+        fail "--output $second --off leaves $left enabled outputs, wanted $((n0 - 1)), and $second is still painted"
+    fi
     guest "wxrandr --output $second --auto" >/dev/null || true
     sleep 2
     same "--output $second --auto brings it back" "$n0" "$(oracle_outputs | grep -c .)"
@@ -413,12 +440,16 @@ phase_nodialog() {
     local calls other
     calls="grep -E '^method call ' $BUSLOG"
     n=$(guest "$calls | grep -c 'interface=org.freedesktop.portal\\.'" | tr -d ' \r\n' || true); n=${n:-0}
+    # Inhibit and Session are the editor's own (a GTK 4 app registers a session
+    # inhibit monitor through the portal: measured on GNOME 50.1 and 51.beta as
+    # Inhibit.CreateMonitor + Session.Close from gnome-text-editor, and not on
+    # 46.0); the claim here is about the six tools, which touch Settings alone.
     other=$(guest "$calls | grep 'interface=org.freedesktop.portal\\.' \
-                 | grep -v 'interface=org.freedesktop.portal.Settings' | head -5" || true)
+                 | grep -vE 'interface=org.freedesktop.portal.(Settings|Inhibit|Session)' | head -5" || true)
     if [ -z "$other" ]; then
         if [ "$n" = 0 ]; then pass "no portal method call at all during the whole smoke"
-        else pass "no portal method call other than Settings ($n portal calls, all Settings)"; fi
-    else fail "a portal method call that is not Settings: $(ev "$other")"; fi
+        else pass "no portal method call other than Settings, Inhibit or Session ($n portal calls)"; fi
+    else fail "a portal method call that is not Settings (or the editor's Inhibit/Session): $(ev "$other")"; fi
     other=$(guest "$calls | grep 'interface=org.freedesktop.PolicyKit1' | head -3" || true)
     if [ -z "$other" ]; then pass "no PolicyKit method call on the session bus during the whole smoke"
     else fail "a PolicyKit call: $(ev "$other")"; fi

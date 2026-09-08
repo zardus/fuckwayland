@@ -13,13 +13,13 @@ ENV DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8
 RUN apt-get update && apt-get install -y --no-install-recommends \
         python3 python3-gi gir1.2-gtk-3.0 gir1.2-gtk-4.0 \
         sway xwayland xterm foot xvfb xauth x11-utils x11-xserver-utils xdotool wmctrl \
-        dbus libglib2.0-bin libgirepository1.0-dev \
+        dbus dbus-bin dbus-daemon libglib2.0-bin libgirepository1.0-dev \
         dpkg-dev debhelper dh-python pybuild-plugin-pyproject python3-all python3-setuptools fakeroot \
         ca-certificates curl xz-utils git procps sudo \
     && rm -rf /var/lib/apt/lists/*
 RUN curl -fsSL "https://nodejs.org/dist/${NODE}/node-${NODE}-linux-x64.tar.xz" | tar -xJ -C /opt \
     && ln -s "/opt/node-${NODE}-linux-x64/bin/node" /usr/local/bin/node && node --version
 # The suite is not written to run as root (the root daemon listens on /run and a few
-# tests skip themselves there), and uid 1001 is what the GitHub runner mounts the
-# checkout as, so this user can write into it.
-RUN useradd -m -u 1001 -s /bin/bash ci && install -d -m 0700 -o ci -g ci /tmp/xdg-ci
+# tests skip themselves there). uid 1000 because the sudo fixtures name SUDO_UID=1000
+# and the handover resolves it through passwd; the checkout is chowned to it in the job.
+RUN useradd -m -u 1000 -s /bin/bash ci && install -d -m 0700 -o ci -g ci /tmp/xdg-ci

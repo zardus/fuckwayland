@@ -31,9 +31,11 @@ line to stderr, silence for a reader that left, and never a traceback.
 import io
 import os
 import pathlib
+import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 import unittest
 
@@ -328,7 +330,15 @@ class DebugTraceback(NoTracebackEver):
             env.pop("DEBUG", None)
         else:
             env["DEBUG"] = debug
-        p = subprocess.run([sys.executable, "-c", _BOOM % (ROOT, patch, call)],
+        # A file, not -c: the assertion below wants the offending source line in
+        # the traceback, and Python 3.12 prints none for code that came in as a
+        # string (3.14 does), so 24.04 and 26.04 would disagree.
+        d = tempfile.mkdtemp(prefix="fw-boom-")
+        self.addCleanup(shutil.rmtree, d, True)
+        script = os.path.join(d, "boom.py")
+        with open(script, "w") as f:
+            f.write(_BOOM % (ROOT, patch, call))
+        p = subprocess.run([sys.executable, script],
                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                            env=env, text=True, timeout=60)
         return p.returncode, p.stderr

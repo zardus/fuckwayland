@@ -586,6 +586,20 @@ repo.prepend_search_path(directory)
 repo.require(ns, "1.0", 0)
 
 
+def kind_of(info):
+    # 3.0 subclasses (FunctionInfo, StructInfo, FieldInfo); 2.0 hands back a
+    # plain BaseInfo for everything and answers g_base_info_get_type() with an
+    # InfoType, whose nick is the kind in lower case.  Measured on 24.04
+    # (python3-gi 3.48, girepository 1.80): every info was "BaseInfo" and the
+    # records dict came back empty, which is what KeyError: 'ConfigN' was.
+    kind = type(info).__name__
+    if kind != "BaseInfo":
+        return kind
+    t = G.base_info_get_type(info)
+    nick = getattr(t, "value_nick", None) or str(t).rsplit(".", 1)[-1].lower()
+    return nick.replace("_", "").capitalize() + "Info"
+
+
 def call(obj, name, *args):
     # GIRepository 3.0 made the info accessors methods; 2.0 has them as module
     # functions named <kind>_info_get_<what>.  Both spellings are tried so this
@@ -595,7 +609,7 @@ def call(obj, name, *args):
     # FunctionInfo, and the callable fallback is tried after the derived name.
     if hasattr(obj, name):
         return getattr(obj, name)(*args)
-    kind = type(obj).__name__.replace("Info", "").lower()
+    kind = kind_of(obj).replace("Info", "").lower()
     for spelling in ("%s_info_%s" % (kind, name), "callable_info_%s" % name):
         fn = getattr(G, spelling, None)
         if fn is not None:
@@ -614,7 +628,7 @@ out = {"namespace": ns, "shared_libraries": shared(), "functions": {},
        "records": {}}
 for i in range(repo.get_n_infos(ns)):
     info = repo.get_info(ns, i)
-    name, kind = info.get_name(), type(info).__name__
+    name, kind = info.get_name(), kind_of(info)
     if kind == "FunctionInfo":
         # transfer as well as the symbol: transfer-ownership is the difference
         # between gjs freeing what g_strndup allocated and leaking it once per

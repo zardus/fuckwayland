@@ -42,12 +42,36 @@ post_desktop_pair() { guest "wwmctl -n 1" >/dev/null 2>&1 || true; }
 # active one is then chosen over D-Bus.  (Measured; a plain write of the list it
 # already has leaves KWin on the old keymap.)
 layout_phase() {
-    guest "kwriteconfig6 --notify --file kxkbrc --group Layout --key LayoutList us,gb" >/dev/null || true
-    sleep 1
-    guest "kwriteconfig6 --notify --file kxkbrc --group Layout --key LayoutList us,de" >/dev/null || true
-    guest "kwriteconfig6 --notify --file kxkbrc --group Layout --key Use true" >/dev/null || true
-    sleep 2
-    local setl="gdbus call --session --dest org.kde.KWin --object-path /Layouts"
+    local major; major=$(plasma_major)
+    local setl
+    if [ "${major:-6}" -ge 6 ]; then
+        guest "kwriteconfig6 --notify --file kxkbrc --group Layout --key LayoutList us,gb" >/dev/null || true
+        sleep 1
+        guest "kwriteconfig6 --notify --file kxkbrc --group Layout --key LayoutList us,de" >/dev/null || true
+        guest "kwriteconfig6 --notify --file kxkbrc --group Layout --key Use true" >/dev/null || true
+        sleep 2
+        setl="gdbus call --session --dest org.kde.KWin --object-path /Layouts"
+    else
+        # Plasma 5.27 (measured 2026-09-08 on noble-kde): kwriteconfig5 has no
+        # --notify, KWin 5 exports no /Layouts on org.kde.KWin (the object is
+        # org.kde.keyboard's), and kxkbrc is read at login, so the list is
+        # written plainly and the session restarted before the switch.
+        guest "kwriteconfig5 --file kxkbrc --group Layout --key Use true" >/dev/null || true
+        guest "kwriteconfig5 --file kxkbrc --group Layout --key LayoutList us,de" >/dev/null || true
+        note "Plasma $major: kxkbrc is read at login, rebooting the guest for the two-layout session"
+        root "( sleep 1; reboot ) >/dev/null 2>&1 &" >/dev/null 2>&1 || true
+        sleep 8
+        wait_session >/dev/null || { fail "no session after the layout reboot"; return 1; }
+        sleep 15
+        after_reboot
+        guest "rm -f $SMOKE_FILE; touch $SMOKE_FILE" >/dev/null || true
+        editor_start
+        local out; out=$(await 60 '[0-9]' "wdotool search --class $EDITOR_CLASS | head -1" || true)
+        WIN=$(printf '%s\n' "$out" | grep -E '^[0-9]+$' | head -1)
+        [ -n "$WIN" ] || { fail "no editor window after the layout reboot [$(ev "$out")]"; return 1; }
+        guest "wdotool windowactivate --sync $WIN" >/dev/null || true
+        setl="gdbus call --session --dest org.kde.keyboard --object-path /Layouts"
+    fi
     setl="$setl --method org.kde.KeyboardLayouts.setLayout"
     guest "$setl 1" >/dev/null || true
     sleep 2
@@ -102,8 +126,12 @@ phase_kwin() {
          "$(oracle_outputs || true)"
     guest "wxrandr --output $second --same-as $first" >/dev/null || true
     sleep 2
-    want "--same-as is recorded as a replicationSource in kwinoutputconfig.json" "replicationSource" \
-         "$(guest 'cat ~/.config/kwinoutputconfig.json 2>&1' || true)"
+    if guest 'test -e ~/.config/kwinoutputconfig.json'; then
+        want "--same-as is recorded as a replicationSource in kwinoutputconfig.json" "replicationSource" \
+             "$(guest 'cat ~/.config/kwinoutputconfig.json 2>&1' || true)"
+    else
+        note "(no kwinoutputconfig.json: that file is Plasma 6's; 5.27 keeps its layouts under ~/.local/share/kscreen)"
+    fi
     # ...and the mirror has to END here, or every later phase measures a session
     # with one output missing from the layout: a replica has no wl_output and is
     # not in kde_output_order_v1 at all (kwin.py:120-134), and --query reports it

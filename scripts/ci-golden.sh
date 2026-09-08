@@ -59,7 +59,7 @@ iso=$(sed -n 's/^#[[:space:]]*vmctl-iso:[[:space:]]*//p' "$yaml" | head -1)
 base=$(sed -n 's/^#[[:space:]]*vmctl-base:[[:space:]]*//p' "$yaml" | head -1)
 t0=$(date +%s)
 if [ -n "$iso" ]; then
-    fetch "$iso"; sh vm/build-iso-golden.sh "$flavor" --mem 4G
+    fetch "$iso"; bash vm/build-iso-golden.sh "$flavor" --mem 4G
 else
     fetch "$base"; vm/vmctl build "$flavor" --cpus 2 --mem 4G
 fi

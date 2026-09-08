@@ -79,7 +79,7 @@ phase_passthrough() {
     out=$(guest "wmirror --check 2>&1" || true)
     want "wmirror --check says this is an X11 session" "this is an X11 session" "$out"
     local firstline; firstline=$(printf '%s\n' "$out" | head -1)
-    want "...and says it before any apt line" "X11" "$firstline"
+    xwant "T21 (fix 40): ...and says it before any apt line, not after \"helper: not installed\"" "X11" "$firstline"
     guest "pkill xterm; true" >/dev/null 2>&1 || true
     root "rm -f /usr/local/bin/xdotool /usr/local/bin/wmctrl /usr/local/bin/xprop /usr/local/bin/xrandr" \
         >/dev/null 2>&1 || true
