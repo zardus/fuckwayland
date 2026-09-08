@@ -110,7 +110,7 @@ def main():
     lines = open(sys.argv[1]).read().splitlines()
     sh = Shell()
     sh.pump(0.8)
-    os.write(self_fd := 1, b"")
+    os.write(1, b"")
     t0 = time.monotonic()
     for line in lines:
         if not line.strip() or line.lstrip().startswith("#"):

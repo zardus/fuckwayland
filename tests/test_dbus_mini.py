@@ -887,13 +887,13 @@ class Messages(unittest.TestCase):
             Message.from_bytes(bytes(bad))
 
     def test_header_field_types_and_required_fields(self):
-        P, M, I, RS, EN = (Variant("o", "/"), Variant("s", "m"), Variant("s", "i.f"),
+        P, M, IF, RS, EN = (Variant("o", "/"), Variant("s", "m"), Variant("s", "i.f"),
                            Variant("u", 3), Variant("s", "a.b.E"))
         call = Message.from_bytes(_frame(1, [(1, P), (3, M)]))
         self.assertEqual((call.path, call.member, call.interface), ("/", "m", None))
         self.assertEqual(Message.from_bytes(_frame(2, [(5, RS)])).reply_serial, 3)
         self.assertEqual(Message.from_bytes(_frame(3, [(4, EN), (5, RS)])).error_name, "a.b.E")
-        self.assertEqual(Message.from_bytes(_frame(4, [(1, P), (2, I), (3, M)])).interface, "i.f")
+        self.assertEqual(Message.from_bytes(_frame(4, [(1, P), (2, IF), (3, M)])).interface, "i.f")
         for what, mtype, fields in (
                 ("PATH as u", 1, [(1, Variant("u", 5)), (3, M)]),
                 ("REPLY_SERIAL as s", 2, [(5, Variant("s", "notanint"))]),

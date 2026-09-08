@@ -568,7 +568,8 @@ def _main(prog: str, args) -> int:
             i += 3
             continue
         if a == "-frame":
-            frame = True
+            # accepted for parity and nothing else: xprop's -frame picks the frame under a click, and on
+            # Wayland the compositor owns the frame, so there is no other window to pick
             continue
         if a in ("-f", "-format"):
             if i >= len(args):

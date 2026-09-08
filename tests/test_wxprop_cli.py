@@ -119,13 +119,16 @@ class CliTestBase(unittest.TestCase):
     def run_cli(self, *args, backend="none", hostname="testhost"):
         if backend == "fake":
             fake = _FakeSway()
-            det = lambda: fake
+
+            def det():
+                return fake
         elif backend == "real":
             # the real detector, patched over itself: the caller has already
             # arranged the session it should find (or not find)
             det = core._detect_backend
         else:
-            det = lambda: None
+            def det():
+                return None
         out = _CapStdout()
         err = io.StringIO()
         with mock.patch.object(core, "_detect_backend", det), \

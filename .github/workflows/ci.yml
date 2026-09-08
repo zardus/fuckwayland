@@ -1,0 +1,193 @@
+# Every push, the whole thing, spread as wide as GitHub will let it:
+#
+#   image    the unit-test container per Ubuntu release (24.04, 26.04, 26.10), built once per
+#            change to .github/ci/Dockerfile and kept in GHCR
+#   lint     ruff (the project's lint-only config), scripts/check-docs.py, bash -n on vm/
+#   unit     ONE JOB PER TEST FILE PER RELEASE, in that container, as an unprivileged user
+#   parity   tests/test_cli_parity.py and test_wwmctl_cli.py against the flake-pinned
+#            xdotool 4.20260303.1 and wmctrl 1.07 (scripts/parity-oracle.sh under nix)
+#   deb      scripts/build-deb.sh, the fresh package proved to be the tree, then installed
+#            with apt on each release and every tool answering --version
+#   vm       ONE JOB PER FLAVOR of the QEMU rig, KVM on the runner: the golden image from the
+#            GHCR cache or built here (ISO installs included), then vm/live-smoke.sh --deb
+#
+# 26.10 is a development release that moves under the flavor, so its jobs may fail
+# without failing the run. Everything else must be green.
+name: ci
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  FUCKWAYLAND_PASSTHROUGH: never
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    outputs:
+      files: ${{ steps.list.outputs.files }}
+      flavors: ${{ steps.list.outputs.flavors }}
+      image_key: ${{ steps.list.outputs.image_key }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: list
+        run: |
+          files=$(for f in tests/test_*.py; do basename "$f" .py; done | jq -R . | jq -sc .)
+          flavors=$(for f in vm/flavors/*.yaml; do basename "$f" .yaml; done | jq -R . | jq -sc .)
+          key=$(sha256sum .github/ci/Dockerfile | cut -c1-12)
+          { echo "files=$files"; echo "flavors=$flavors"; echo "image_key=$key"; } >> "$GITHUB_OUTPUT"
+
+  image:
+    needs: plan
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        distro: ["24.04", "26.04", "26.10"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: build the image unless GHCR already has this Dockerfile's
+        run: |
+          tag=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/fuckwayland-ci:${{ matrix.distro }}-${{ needs.plan.outputs.image_key }}
+          if docker manifest inspect "$tag" >/dev/null 2>&1; then echo "have $tag"; exit 0; fi
+          docker build --build-arg BASE=ubuntu:${{ matrix.distro }} -t "$tag" -f .github/ci/Dockerfile .github/ci
+          docker push "$tag"
+
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uvx ruff check .
+      - run: python3 scripts/check-docs.py
+      - run: for f in vm/*.sh vm/live-smoke.d/*.sh scripts/*.sh; do bash -n "$f" || exit 1; done; sh -n gnome/install-bridge.sh; sh -n gnome/install-overlap.sh; python3 -m py_compile vm/vmctl
+
+  unit:
+    needs: [plan, image]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        distro: ["24.04", "26.04", "26.10"]
+        file: ${{ fromJSON(needs.plan.outputs.files) }}
+    continue-on-error: ${{ matrix.distro == '26.10' }}
+    name: ${{ matrix.distro }} ${{ matrix.file }}
+    container:
+      image: ghcr.io/${{ github.repository_owner }}/fuckwayland-ci:${{ matrix.distro }}-${{ needs.plan.outputs.image_key }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+      options: --user root
+    steps:
+      - uses: actions/checkout@v4
+      - name: ${{ matrix.file }}
+        run: |
+          chown -R ci "$PWD"
+          runuser -u ci -- env HOME=/home/ci XDG_RUNTIME_DIR=/tmp/xdg-ci FUCKWAYLAND_PASSTHROUGH=never \
+              python3 tests/${{ matrix.file }}.py
+
+  parity:
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@main
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends xvfb x11-utils xterm
+      - name: the pinned oracles, then scripts/parity-oracle.sh
+        run: |
+          nix build --no-link --print-out-paths --inputs-from . nixpkgs#xdotool nixpkgs#wmctrl > /tmp/oracles
+          FW_ORACLE_PATH=$(sed 's|$|/bin|' /tmp/oracles | paste -sd:); export FW_ORACLE_PATH
+          sh scripts/parity-oracle.sh
+
+  deb:
+    needs: [plan, image]
+    runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/${{ github.repository_owner }}/fuckwayland-ci:24.04-${{ needs.plan.outputs.image_key }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: build the package and prove it is the tree
+        run: |
+          git config --global --add safe.directory "$PWD"
+          sh scripts/build-deb.sh --no-deps
+          python3 tests/test_release_deb.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deb
+          path: release/*.deb
+
+  deb-install:
+    needs: [plan, image, deb]
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        distro: ["24.04", "26.04", "26.10"]
+    continue-on-error: ${{ matrix.distro == '26.10' }}
+    name: apt install on ${{ matrix.distro }}
+    container:
+      image: ubuntu:${{ matrix.distro }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: deb
+      - name: apt install, then every tool answers
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update -qq && apt-get install -y -qq --no-install-recommends ca-certificates >/dev/null
+          apt-get install -y ./fuckwayland_*.deb
+          for t in wdotool wwmctl wxprop wxrandr warandr wmirror; do printf '%s: ' $t; $t --version 2>&1 | head -1; done
+          ls /usr/share/gnome-shell/extensions/ /usr/lib/udev/rules.d/60-fuckwayland-uinput.rules /etc/xdg/autostart/fuckwayland-enable-bridge.desktop
+          apt-get remove -y fuckwayland >/dev/null && ! command -v wdotool
+
+  vm:
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        flavor: ${{ fromJSON(needs.plan.outputs.flavors) }}
+    continue-on-error: ${{ startsWith(matrix.flavor, 'stonking-') }}
+    name: rig ${{ matrix.flavor }}
+    env:
+      VMDATA: /mnt/vm-data
+      VMIMAGES: /mnt/images
+    steps:
+      - uses: actions/checkout@v4
+      - name: the host vm/README.md asks for, KVM opened to the runner, /mnt for the images
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends qemu-system-x86 qemu-system-gui qemu-utils \
+              cloud-image-utils dbus libglib2.0-bin socat imagemagick openssh-client genisoimage jq
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules >/dev/null
+          sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm
+          ls -la /dev/kvm; qemu-system-x86_64 -display help | grep -w dbus
+          sudo install -d -o "$USER" -g "$USER" /mnt/vm-data /mnt/images; df -h /mnt | tail -1
+          curl -fsSL https://github.com/oras-project/oras/releases/download/v1.2.0/oras_1.2.0_linux_amd64.tar.gz | sudo tar -xz -C /usr/local/bin oras
+          echo "${{ secrets.GITHUB_TOKEN }}" | oras login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - name: the golden image, from the cache or built here
+        run: scripts/ci-golden.sh ${{ matrix.flavor }}
+      - name: vm/live-smoke.sh --deb --remove
+        run: vm/live-smoke.sh ${{ matrix.flavor }} --deb --remove --heads 3 --cpus 2 --mem 3G
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: live-smoke-${{ matrix.flavor }}
+          path: vm/live-smoke.out/
+          if-no-files-found: ignore
