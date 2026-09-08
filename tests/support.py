@@ -16,15 +16,29 @@ daemon -- which three files do, all three differently and none of them
 reliably (see the daemon section below). Doubles that differ between their
 callers stay where they are -- `make_daemon` (three shapes of `geom`),
 `FakeDaemon` (two protocols), `FakeBackend`, the compositor fakes.
+
+Added for the second round of tests, under the same rule -- each one was
+about to be written twice: the markdown walker three files carry
+(`documents`), the shell-script slicer (`sh_block`/`sh_function`), the fake
+GNOME command line the install scripts need (`fake_gnome_bin`), the node
+harness that runs the two GNOME extensions (`js_harness`, with
+tests/fixtures/gjs/), the sway IPC double (`FakeSway`), the session leader
+stand-in (`leader_process`) and the wl-mirror stub (`WL_MIRROR_STUB`).
+tests/test_support_helpers.py is where each of them is proved.
 """
 
 import contextlib
 import errno
+import json
 import os
+import re
 import shutil
 import signal
+import socket
+import struct
 import subprocess
 import tempfile
+import threading
 import time
 import unittest
 
@@ -445,3 +459,809 @@ def stop_compositor(pid, timeout=5.0):
                 return True
             time.sleep(0.05)
     return False
+
+
+# -- the repository itself ----------------------------------------------------
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def documents(root=None):
+    """Every markdown file in the tree, as relative name -> text.
+
+    Three walkers said this: scripts/check-docs.py, test_release_deb.py and
+    the anchor checker. They agreed on the skip list (.git, __pycache__,
+    node_modules) and on errors="replace", which matters because the media/
+    notes carry bytes no encoding claims."""
+    root = ROOT if root is None else root
+    out = {}
+    for base, dirs, names in os.walk(root):
+        dirs[:] = [d for d in dirs
+                   if d not in (".git", "__pycache__", "node_modules")]
+        for n in names:
+            if n.endswith(".md"):
+                path = os.path.join(base, n)
+                with open(path, encoding="utf-8", errors="replace") as f:
+                    out[os.path.relpath(path, root)] = f.read()
+    return out
+
+
+# -- slicing a shell script ---------------------------------------------------
+#
+# The installers and debian/enable-bridge are POSIX sh, and the interesting
+# parts of them are branches that only a real GNOME session reaches. Running
+# the block itself -- sliced out of the shipped file, so it cannot drift from
+# what ships -- against the fake tools below is the only way to test them
+# without one. Lifted from test_overlap_force.TheInstallerSeesThePackagesCopy,
+# where the pair was written by hand for two blocks of install-overlap.sh.
+
+def sh_block(path, first, last):
+    """The text of `path` from the line containing `first` through the one
+    containing `last`, inclusive of both markers.
+
+    Both are matched as plain substrings, `last` searched for after `first`:
+    a marker is a line of the script quoted verbatim in the test, so a slice
+    that stops matching is a script that changed under it, which is the point."""
+    with open(path, encoding="utf-8") as fh:
+        src = fh.read()
+    start = src.index(first)
+    end = src.index(last, start) + len(last)
+    return src[start:end]
+
+
+def sh_function(path, name):
+    """The definition of the POSIX-sh function `name` in `path`.
+
+    The closing brace has to be the one at column 0 -- every function in these
+    scripts is written that way, and a nested `}` inside a case arm is
+    indented -- so this is exact rather than a guess at nesting."""
+    with open(path, encoding="utf-8") as fh:
+        lines = fh.read().splitlines()
+    head = "%s() {" % name
+    for i, line in enumerate(lines):
+        if line.strip() == head or line.startswith(head):
+            for j in range(i + 1, len(lines)):
+                if lines[j] == "}":
+                    return "\n".join(lines[i:j + 1]) + "\n"
+            raise AssertionError("%s: %s() is never closed at column 0" % (path, name))
+    raise AssertionError("%s: no function %s()" % (path, name))
+
+
+# -- a GNOME desktop's command line, faked ------------------------------------
+#
+# debian/enable-bridge and the two install-*.sh scripts are the only code in
+# the project that runs as the user's session starts, and every branch in them
+# is chosen by what `gsettings`, `gnome-extensions` and `gdbus` answer. None of
+# those exists in a container, and the ones on a developer's machine would
+# write into that developer's real dconf -- which is what made these scripts
+# untested until now. So they are stand-ins on a PATH of their own, over one
+# state file the test seeds and reads back.
+#
+# The state file is lines:
+#     schemas=org.gnome.shell org.gnome.desktop.interface
+#     org.gnome.shell/enabled-extensions=['a@b']
+#     loaded=fuckwayland-bridge@fuckwayland
+# `schemas=` is what `gsettings list-schemas` prints (the check that decides
+# whether this is a GNOME session at all); a `loaded=` line is an extension the
+# running shell has seen, which is exactly what decides whether
+# `gnome-extensions enable` works or refuses with "does not exist" -- the
+# refusal that sends enable-bridge down its gsettings fallback.
+#
+# Every stub appends its whole command line to $FAKE_LOG when that is set, so
+# "made no gsettings call at all" is an assertion and not an absence.
+
+_FAKE_LIB = r"""# sourced by the fake gsettings and gnome-extensions
+STATE='__STATE__'
+
+log() {
+    if [ -n "${FAKE_LOG:-}" ]; then
+        printf '%s\n' "$*" >> "$FAKE_LOG"
+    fi
+    return 0
+}
+
+state_get() {           # schema key -> value on stdout, rc 1 when unset
+    v=$(sed -n "s|^$1/$2=||p" "$STATE" 2>/dev/null | tail -n 1)
+    [ -n "$v" ] || return 1
+    printf '%s\n' "$v"
+}
+
+state_put() {           # schema key value
+    tmp="$STATE.$$"
+    grep -v "^$1/$2=" "$STATE" > "$tmp" 2>/dev/null || :
+    printf '%s/%s=%s\n' "$1" "$2" "$3" >> "$tmp"
+    mv "$tmp" "$STATE"
+}
+
+has_schema() {
+    sed -n 's/^schemas=//p' "$STATE" 2>/dev/null | tr ' ' '\n' | grep -qx "$1"
+}
+
+items() {               # a GVariant array of strings -> one per line
+    # printf with the newline, not without: sed keeps a missing final newline,
+    # and a list whose last item had none used to be concatenated with the next
+    # one ("other@x" + "fuckwayland-bridge@fuckwayland" as a single uuid).
+    printf '%s\n' "$1" | tr ',' '\n' | sed -n "s/.*'\([^']*\)'.*/\1/p"
+}
+
+render() {              # items on stdin -> a GVariant array of strings
+    out=''
+    while IFS= read -r it; do
+        [ -n "$it" ] || continue
+        if [ -z "$out" ]; then out="'$it'"; else out="$out, '$it'"; fi
+    done
+    if [ -z "$out" ]; then printf '@as []\n'; else printf '[%s]\n' "$out"; fi
+}
+
+list_add() {            # schema key item
+    cur=$(state_get "$1" "$2" || printf '@as []')
+    if items "$cur" | grep -qx "$3"; then return 0; fi
+    new=$({ items "$cur"; printf '%s\n' "$3"; } | render)
+    state_put "$1" "$2" "$new"
+}
+
+list_del() {            # schema key item
+    cur=$(state_get "$1" "$2" || printf '@as []')
+    new=$(items "$cur" | grep -vx "$3" | render)
+    state_put "$1" "$2" "$new"
+}
+"""
+
+_FAKE_GSETTINGS = r"""#!/bin/sh
+# gsettings(1), as far as the install scripts use it. FAKE_GSETTINGS_SET_FAILS
+# makes `set` fail the way a locked-down or read-only dconf does.
+. '__BIN__/_fakelib.sh'
+log "gsettings $*"
+case "${1:-}" in
+    list-schemas)
+        sed -n 's/^schemas=//p' "$STATE" 2>/dev/null | tr ' ' '\n' | grep -v '^$'
+        exit 0
+        ;;
+    get)
+        has_schema "$2" || { printf 'No such schema "%s"\n' "$2" >&2; exit 1; }
+        state_get "$2" "$3" && exit 0
+        # An unset key is NOT an error: gsettings answers the schema default.
+        # Read out of org.gnome.shell.gschema.xml in gnome-shell-common
+        # 50.1-0ubuntu1.2 (resolute): enabled-extensions and disabled-extensions
+        # default to [] -- which gsettings prints as `@as []` -- and
+        # disable-user-extensions to false.  Every caller reads with
+        # `|| echo '[]'` (install-bridge.sh:208 among them), so a fake that
+        # failed here steered a fresh desktop into the `[]` arm and the
+        # `@as []` arm a real one produces was never taken.
+        if [ "$2" = org.gnome.shell ]; then
+            case "$3" in
+                enabled-extensions|disabled-extensions) printf '@as []\n'; exit 0 ;;
+                disable-user-extensions) printf 'false\n'; exit 0 ;;
+            esac
+        fi
+        printf 'No such key "%s"\n' "$3" >&2
+        exit 1
+        ;;
+    set)
+        has_schema "$2" || { printf 'No such schema "%s"\n' "$2" >&2; exit 1; }
+        if [ -n "${FAKE_GSETTINGS_SET_FAILS:-}" ]; then
+            printf 'gsettings: %s\n' "$FAKE_GSETTINGS_SET_FAILS" >&2
+            exit 1
+        fi
+        state_put "$2" "$3" "$4"
+        exit 0
+        ;;
+esac
+printf 'gsettings: unknown command %s\n' "${1:-}" >&2
+exit 2
+"""
+
+_FAKE_GNOME_EXTENSIONS = r"""#!/bin/sh
+# gnome-extensions(1). It talks to the running shell, so a uuid the shell has
+# never seen is refused -- which is the whole reason the callers have a
+# gsettings fallback. A `loaded=` line in the state file is that uuid.
+. '__BIN__/_fakelib.sh'
+log "gnome-extensions $*"
+uuid="${2:-}"
+case "${1:-}" in
+    enable|disable)
+        if [ -n "${FAKE_GNOME_EXTENSIONS_FAILS:-}" ] \
+           || ! grep -qx "loaded=$uuid" "$STATE" 2>/dev/null; then
+            printf 'Extension "%s" does not exist\n' "$uuid" >&2
+            exit 1
+        fi
+        if [ "$1" = enable ]; then
+            list_add org.gnome.shell enabled-extensions "$uuid"
+            list_del org.gnome.shell disabled-extensions "$uuid"
+        else
+            list_add org.gnome.shell disabled-extensions "$uuid"
+            list_del org.gnome.shell enabled-extensions "$uuid"
+        fi
+        exit 0
+        ;;
+    list)
+        sed -n 's/^loaded=//p' "$STATE" 2>/dev/null
+        exit 0
+        ;;
+    info)
+        grep -qx "loaded=$uuid" "$STATE" 2>/dev/null \
+            || { printf 'Extension "%s" does not exist\n' "$uuid" >&2; exit 1; }
+        printf '%s\n  State: %s\n' "$uuid" "${FAKE_EXT_STATE_NAME:-ENABLED}"
+        exit 0
+        ;;
+esac
+exit 2
+"""
+
+_FAKE_GDBUS = r"""#!/bin/sh
+# `gdbus call --session ...`, in the four shapes the installers parse with sed:
+# NameHasOwner, the ShellVersion property, ListExtensions and GetExtensionInfo.
+# Each answers from an environment variable, so a test picks the session it
+# wants (FAKE_SHELL_VERSION=51.beta is stonking-gnome; unset means no shell on
+# the bus at all, which is gdbus exiting 1).
+. '__BIN__/_fakelib.sh'
+log "gdbus $*"
+case "$*" in
+    *NameHasOwner*)
+        printf '(%s,)\n' "${FAKE_NAME_OWNED:-false}"
+        ;;
+    *ShellVersion*)
+        [ -n "${FAKE_SHELL_VERSION:-}" ] || exit 1
+        printf "(<'%s'>,)\n" "$FAKE_SHELL_VERSION"
+        ;;
+    *ListExtensions*)
+        [ -n "${FAKE_EXT_LOADED:-}" ] || exit 1
+        printf "({'%s': <{'uuid': <'%s'>}>},)\n" "$FAKE_EXT_LOADED" "$FAKE_EXT_LOADED"
+        ;;
+    *GetExtensionInfo*)
+        [ -n "${FAKE_EXT_STATE:-}" ] || exit 1
+        printf "({'uuid': <'%s'>, 'state': <%s>},)\n" "${FAKE_EXT_LOADED:-}" "$FAKE_EXT_STATE"
+        ;;
+    *)
+        exit 1
+        ;;
+esac
+exit 0
+"""
+
+_FAKE_SUDO = r"""#!/bin/sh
+# `sudo -u USER cmd...`: run the command right here, as this user, so the
+# TARGET_USER/RUNTIME_DIR/BUS_ADDR block can be exercised without a password
+# prompt or a second uid. FAKE_SUDO_FAILS makes it refuse.
+. '__BIN__/_fakelib.sh'
+log "sudo $*"
+[ -z "${FAKE_SUDO_FAILS:-}" ] || exit 1
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -u|-g) shift 2 ;;
+        -n|-H|-E|-i) shift ;;
+        --) shift; break ;;
+        *) break ;;
+    esac
+done
+exec "$@"
+"""
+
+_FAKE_RUNUSER = r"""#!/bin/sh
+# `runuser -u USER -- cmd...`, the same way.
+. '__BIN__/_fakelib.sh'
+log "runuser $*"
+[ -z "${FAKE_RUNUSER_FAILS:-}" ] || exit 1
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -u|-g) shift 2 ;;
+        -l|-p) shift ;;
+        --) shift; break ;;
+        *) break ;;
+    esac
+done
+exec "$@"
+"""
+
+_FAKE_CHOWN = r"""#!/bin/sh
+# chown(1): recorded, never done -- a test runs as one uid and has no second.
+. '__BIN__/_fakelib.sh'
+log "chown $*"
+exit 0
+"""
+
+_FAKE_ID = r"""#!/bin/sh
+# id(1), the two forms the installers use. FAKE_UID/FAKE_USER are the answer
+# for anybody but root; FAKE_ID_UNKNOWN is a name that does not resolve.
+. '__BIN__/_fakelib.sh'
+log "id $*"
+who="${2:-}"
+if [ -n "${FAKE_ID_UNKNOWN:-}" ] && [ "$who" = "$FAKE_ID_UNKNOWN" ]; then
+    printf "id: '%s': no such user\n" "$who" >&2
+    exit 1
+fi
+case "${1:-}" in
+    -u)
+        if [ "$who" = root ]; then echo 0; else printf '%s\n' "${FAKE_UID:-1000}"; fi
+        ;;
+    -un|-nu)
+        if [ "$who" = root ]; then echo root; else printf '%s\n' "${FAKE_USER:-tester}"; fi
+        ;;
+    *)
+        exit 2
+        ;;
+esac
+exit 0
+"""
+
+_FAKE_GETENT = r"""#!/bin/sh
+# `getent passwd NAME`, answered out of FAKE_PASSWD (newline-separated lines).
+. '__BIN__/_fakelib.sh'
+log "getent $*"
+case "${1:-}" in
+    passwd)
+        printf '%s\n' "${FAKE_PASSWD:-}" | grep "^${2:-}:" || exit 2
+        exit 0
+        ;;
+esac
+exit 2
+"""
+
+_FAKE_DPKG = r"""#!/bin/sh
+# `dpkg -S PATH`: FAKE_DPKG_S is the package that owns it (the installers
+# refuse to touch dpkg's payload), unset is "no path found", which is rc 1.
+. '__BIN__/_fakelib.sh'
+log "dpkg $*"
+case "${1:-}" in
+    -S|--search)
+        if [ -n "${FAKE_DPKG_S:-}" ]; then
+            printf '%s: %s\n' "$FAKE_DPKG_S" "${2:-}"
+            exit 0
+        fi
+        printf 'dpkg-query: no path found matching pattern %s\n' "${2:-}" >&2
+        exit 1
+        ;;
+esac
+exit 2
+"""
+
+FAKE_GNOME_TOOLS = {
+    "gsettings": _FAKE_GSETTINGS,
+    "gnome-extensions": _FAKE_GNOME_EXTENSIONS,
+    "gdbus": _FAKE_GDBUS,
+    "sudo": _FAKE_SUDO,
+    "runuser": _FAKE_RUNUSER,
+    "chown": _FAKE_CHOWN,
+    "id": _FAKE_ID,
+    "getent": _FAKE_GETENT,
+    "dpkg": _FAKE_DPKG,
+}
+
+
+def fake_gnome_bin(dirpath, state_path, tools=None):
+    """Write the fake GNOME command line into `dirpath` over `state_path`.
+
+    Put `dirpath` at the FRONT of PATH: `id` and `getent` shadow the real ones
+    on purpose, because what the installers do with them (decide which user's
+    session to talk to) has to be testable without a second account. Returns
+    `dirpath`, so it composes into a PATH in one line.
+
+    `tools` names a subset when a test wants the real thing for the rest --
+    fake_gnome_bin(d, s, ["gsettings"]) leaves `id` alone."""
+    os.makedirs(dirpath, exist_ok=True)
+    lib = os.path.join(dirpath, "_fakelib.sh")
+    with open(lib, "w", encoding="utf-8") as fh:
+        fh.write(_FAKE_LIB.replace("__STATE__", state_path))
+    for name in (tools if tools is not None else FAKE_GNOME_TOOLS):
+        path = os.path.join(dirpath, name)
+        src = FAKE_GNOME_TOOLS[name].replace("__BIN__", dirpath)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(src)
+        os.chmod(path, 0o755)
+    if not os.path.exists(state_path):
+        fake_gnome_state(state_path)
+    return dirpath
+
+
+def fake_gnome_state(path, schemas=("org.gnome.shell",), loaded=(), settings=None):
+    """Seed the state file fake_gnome_bin() reads.
+
+    `schemas` is what `gsettings list-schemas` lists -- pass () for a session
+    that is not GNOME at all. `loaded` is the uuids the running shell has seen,
+    which are the only ones `gnome-extensions enable` will accept. `settings`
+    is {"org.gnome.shell/enabled-extensions": "@as []"} -- the GVariant text,
+    verbatim, because "@as []" and "[]" are different strings to the scripts
+    and both happen on a real desktop."""
+    lines = []
+    if schemas:
+        lines.append("schemas=%s" % " ".join(schemas))
+    for uuid in loaded:
+        lines.append("loaded=%s" % uuid)
+    for key, value in sorted((settings or {}).items()):
+        lines.append("%s=%s" % (key, value))
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("".join(ln + "\n" for ln in lines))
+    return path
+
+
+def gnome_setting(state_path, key):
+    """One setting back out of the state file, or None -- `key` is
+    "org.gnome.shell/enabled-extensions"."""
+    found = None
+    with open(state_path, encoding="utf-8") as fh:
+        for line in fh:
+            if line.startswith(key + "="):
+                found = line[len(key) + 1:].rstrip("\n")
+    return found
+
+
+def gnome_list(state_path, key):
+    """That setting parsed as a GVariant array of strings; () when unset."""
+    raw = gnome_setting(state_path, key)
+    if raw is None:
+        return ()
+    return tuple(re.findall(r"'([^']*)'", raw))
+
+
+# -- node, running the two GNOME extensions -----------------------------------
+#
+# Not one line of either extension.js was ever executed by this suite: they
+# are ES modules for gjs, importing `gi://Meta` and
+# `resource:///org/gnome/shell/ui/main.js`, and there is no gjs in a container
+# and no GNOME session in CI. node 22 will run them as they are once those two
+# specifiers resolve, which is what tests/fixtures/gjs/loader.mjs does --
+# every gi:// namespace and every shell resource maps to a recording double
+# under tests/fixtures/gjs/stubs/. The shipped files are imported by their real
+# path and are not copied, patched or sliced.
+#
+# Proven on node v22.22.1 on this host for both extensions: the module
+# evaluates, the default export constructs, and `_setState` on a Meta.Window
+# double produces the maximize call the v3 rule says it should.
+
+NODE = shutil.which("node") or shutil.which("nodejs")
+GJS_DIR = os.path.join(ROOT, "tests", "fixtures", "gjs")
+GJS_STUBS = os.path.join(GJS_DIR, "stubs")
+GJS_LOADER = os.path.join(GJS_DIR, "loader.mjs")
+
+BRIDGE_EXT = os.path.join(ROOT, "gnome", "fuckwayland-bridge@fuckwayland")
+OVERLAP_EXT = os.path.join(ROOT, "gnome", "fuckwayland-overlap@fuckwayland")
+
+skip_without_node = unittest.skipIf(NODE is None,
+                                    "no node to run the GNOME extensions")
+
+
+def js_harness(module_path, case_source, arg=None, timeout=60):
+    """Run `case_source` under node with the gi:// loader; return its JSON.
+
+    `case_source` is a whole ES module. It imports what it needs -- the
+    extension by its absolute path, the stubs by the same specifiers the
+    extension uses (`import Meta from 'gi://Meta'` in the case is the same
+    module object the extension got, so configuring one configures the other)
+    -- and prints exactly one JSON document, which is what comes back.
+
+    Four tokens are substituted before it is written, so a case need not
+    rebuild paths that are already known here:
+
+        @MODULE@   `module_path`, the extension under test
+        @STUBS@    tests/fixtures/gjs/stubs
+        @GJS@      tests/fixtures/gjs
+        @ROOT@     the repository root
+
+    `arg` is handed to the case as JSON in process.argv[2]. A non-zero exit or
+    a stdout that is not JSON raises AssertionError carrying both streams --
+    a JS exception's stack is the thing a failing case needs to show."""
+    if NODE is None:
+        raise unittest.SkipTest("no node to run the GNOME extensions")
+    tmp = tempfile.mkdtemp(prefix="gjs-case-")
+    try:
+        src = (case_source.replace("@MODULE@", module_path)
+               .replace("@STUBS@", GJS_STUBS)
+               .replace("@GJS@", GJS_DIR)
+               .replace("@ROOT@", ROOT))
+        path = os.path.join(tmp, "case.mjs")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(src)
+        rc = subprocess.run(
+            [NODE, "--no-warnings", "--experimental-loader", GJS_LOADER,
+             path, json.dumps(arg)],
+            capture_output=True, text=True, timeout=timeout)
+        if rc.returncode != 0:
+            raise AssertionError("node exited %d\n--- stdout ---\n%s\n--- stderr ---\n%s"
+                                 % (rc.returncode, rc.stdout, rc.stderr))
+        try:
+            return json.loads(rc.stdout)
+        except ValueError as e:
+            raise AssertionError("the case printed no JSON (%s)\n--- stdout ---\n%s\n"
+                                 "--- stderr ---\n%s" % (e, rc.stdout, rc.stderr))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+# -- a sway that is wedged, dying or lying ------------------------------------
+
+class UnixServer:
+    """A listening AF_UNIX socket that runs `handler(conn)` per connection.
+
+    The same shape test_wire_hardening's private _Server has; here so that the
+    sway double below can live beside the tools that need it."""
+
+    def __init__(self, handler, prefix="fake-sock-"):
+        self.dir = tempfile.mkdtemp(prefix=prefix)
+        self.path = os.path.join(self.dir, "sock")
+        self.s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.s.bind(self.path)
+        self.s.listen(4)
+        # A blocked accept() is not woken by close() on Linux, so the accept
+        # loop polls instead: without this the thread sits in accept() for the
+        # life of the interpreter and every server a run makes leaves one.
+        # (Python hands the accepted connection back in blocking mode whatever
+        # the listening socket's timeout is, so the handlers are unaffected.)
+        self.s.settimeout(0.2)
+        self.handler = handler
+        self.conns = []
+        # Set by close(): a handler that has nothing to answer (FakeSway's
+        # wedged mode) waits on this rather than on the clock, so its thread
+        # ends with the test instead of living to the end of the interpreter.
+        self._stop = threading.Event()
+        self.t = threading.Thread(target=self._run, daemon=True)
+        self.t.start()
+
+    def _run(self):
+        while not self._stop.is_set():
+            try:
+                c, _ = self.s.accept()
+            except TimeoutError:
+                continue
+            except OSError:
+                return
+            self.conns.append(c)
+            threading.Thread(target=self._one, args=(c,), daemon=True).start()
+
+    def _one(self, c):
+        try:
+            self.handler(c)
+        except OSError:
+            pass
+
+    def close(self):
+        self._stop.set()
+        try:
+            self.s.close()
+        except OSError:
+            pass
+        for c in self.conns:
+            try:
+                c.close()
+            except OSError:
+                pass
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+
+I3_MAGIC = b"i3-ipc"
+RUN_COMMAND = 0
+GET_WORKSPACES = 1
+GET_OUTPUTS = 3
+
+
+def iframe(mtype, payload):
+    """One i3-ipc frame: the magic, a u32 length, a u32 type, the payload."""
+    return I3_MAGIC + struct.pack("<II", len(payload), mtype) + payload
+
+
+# sway 1.11's GET_OUTPUTS, trimmed to the fields wxrandr and wdotool read.
+# The names are the ones a headless sway hands out on this host (HEADLESS-1,
+# HEADLESS-2 after `swaymsg create_output`).
+SWAY_OUTPUTS = [
+    {"id": 1, "name": "HEADLESS-1", "make": "Unknown", "model": "headless",
+     "serial": "Unknown", "active": True, "dpms": True, "primary": False,
+     "scale": 1.0, "subpixel_hinting": "unknown", "transform": "normal",
+     "current_workspace": "1", "focused": True,
+     "rect": {"x": 0, "y": 0, "width": 1280, "height": 720},
+     "current_mode": {"width": 1280, "height": 720, "refresh": 60000},
+     "modes": [{"width": 1280, "height": 720, "refresh": 60000}]},
+    {"id": 2, "name": "HEADLESS-2", "make": "Unknown", "model": "headless",
+     "serial": "Unknown", "active": True, "dpms": True, "primary": False,
+     "scale": 1.0, "subpixel_hinting": "unknown", "transform": "normal",
+     "current_workspace": "2", "focused": False,
+     "rect": {"x": 1280, "y": 0, "width": 1280, "height": 1024},
+     "current_mode": {"width": 1280, "height": 1024, "refresh": 60000},
+     "modes": [{"width": 1280, "height": 1024, "refresh": 60000}]},
+]
+
+SWAY_WORKSPACES = [{"num": 3, "name": "3", "focused": True, "output": "HEADLESS-1"}]
+
+
+class FakeSway(UnixServer):
+    """A sway IPC socket that answers badly, in one of six ways.
+
+    `mode`:
+      "ok"       every request answered as sway 1.11 would
+      "gone"     one answer, then the connection is closed under the client
+      "badjson"  a well-framed reply whose payload is not JSON
+      "wedged"   the connection is accepted and never answered again -- a
+                 compositor stuck in its own event loop, which the kernel
+                 accepts for; only the client's own deadline ends the wait
+      "refuse"   RUN_COMMAND answers [{"success": false, "error": ...}], which
+                 is what sway says about an output layout it will not take
+      "partial"  GET_OUTPUTS rows with no `rect` at all -- the shape that used
+                 to be a KeyError somewhere above the user
+
+    `outputs` and `workspaces` override the two payloads. Everything else is
+    answered with the workspace list, which is what the wdotool sway backend
+    asks for and all the older double ever sent."""
+
+    ERROR = "Cannot apply output configuration"
+
+    def __init__(self, mode, outputs=None, workspaces=None):
+        self.mode = mode
+        self.outputs = SWAY_OUTPUTS if outputs is None else outputs
+        self.workspaces = SWAY_WORKSPACES if workspaces is None else workspaces
+        self.requests = []
+        super().__init__(self._serve, prefix="fake-sway-")
+
+    def _payload(self, mtype):
+        if mtype == RUN_COMMAND:
+            if self.mode == "refuse":
+                return [{"success": False, "error": self.ERROR}]
+            return [{"success": True}]
+        if mtype == GET_OUTPUTS:
+            if self.mode == "partial":
+                return [{k: v for k, v in o.items() if k != "rect"}
+                        for o in self.outputs]
+            return self.outputs
+        return self.workspaces
+
+    def _serve(self, c):
+        if self.mode == "wedged":
+            self._stop.wait()
+            return
+        n, buf = 0, b""
+        while True:
+            data = c.recv(65536)
+            if not data:
+                return
+            buf += data
+            while len(buf) >= 14:
+                ln, mt = struct.unpack("<II", buf[6:14])
+                if len(buf) < 14 + ln:
+                    break
+                self.requests.append((mt, buf[14:14 + ln].decode("utf-8", "replace")))
+                buf = buf[14 + ln:]
+                n += 1
+                if self.mode == "badjson":
+                    c.sendall(iframe(mt, b"{not json"))
+                    continue
+                c.sendall(iframe(mt, json.dumps(self._payload(mt)).encode()))
+                if self.mode == "gone" and n == 1:
+                    time.sleep(0.05)
+                    c.close()
+                    return
+
+
+# -- a session leader that carries the variables ------------------------------
+
+class leader_process:
+    """A real process whose /proc/<pid>/comm is `name`, holding `env`.
+
+    fwcommon.session finds the X display and the X authority cookie by walking
+    /proc for the session's leader -- SDDM writes /tmp/xauth_<random>, which is
+    in nobody's runtime directory and is not ~/.Xauthority, so on Plasma X11
+    the leader's own environ is the only thing that knows where the cookie is.
+    Testing that ranking needs processes with those names and those variables,
+    and nothing else: comm is 15 characters, and `startplasma-x11` is exactly
+    15, so the truncation is part of what this proves rather than something it
+    dodges.
+
+    The stand-in is a copy of /bin/sh blocked on `read`, NOT a copy of `sleep`:
+    Ubuntu 26.04 ships uutils coreutils as one multicall binary, and a copy of
+    /usr/bin/sleep under any other name exits 1 with "coreutils: unknown
+    program 'startplasma-x11'". A test that copied `sleep` therefore skipped
+    itself on this distribution and proved nothing. Blocking on a pipe this
+    process holds open is also the safer lifetime: there is no timer to
+    outlive, and a stand-in whose test died gets EOF and exits by itself.
+
+    Use it as a context manager, or addCleanup(l.stop). It skips the test if
+    the stand-in never reaches the name with its environment -- comm is set by
+    execve, and /proc/<pid>/environ becomes readable a little after that."""
+
+    SHELL = "/bin/sh"
+
+    def __init__(self, name, env=None, seconds=None):
+        self.name = name
+        self.env = dict(env or {})
+        self.dir = tempfile.mkdtemp(prefix="leader-")
+        self.path = os.path.join(self.dir, name)
+        shutil.copy(self.SHELL, self.path)
+        # `read` is a shell builtin, so the shell does not exec anything over
+        # itself and comm stays the name we gave the copy.
+        self.proc = subprocess.Popen([self.path, "-c", "read _"], env=self.env,
+                                     stdin=subprocess.PIPE,
+                                     stdout=subprocess.DEVNULL,
+                                     stderr=subprocess.DEVNULL)
+        self.pid = self.proc.pid
+        # comm and environ do not become readable at the same instant: comm
+        # answers the new name while /proc/<pid>/environ is still empty (a
+        # window of tens of milliseconds, measured on this host). A caller
+        # handed the pid in between would scan a leader with no variables at
+        # all, which is the miss these tests exist to catch -- so wait for both.
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            if self.proc.poll() is not None:
+                break
+            if self.comm() == name[:15] and set(self.env) <= set(self.environ()):
+                return
+            time.sleep(0.01)
+        self.stop()
+        raise unittest.SkipTest("the stand-in never reached comm=%s with its "
+                                "environment" % name[:15])
+
+    def comm(self):
+        try:
+            with open("/proc/%d/comm" % self.pid) as f:
+                return f.read().strip()
+        except OSError:
+            return None
+
+    def environ(self):
+        """/proc/<pid>/environ, parsed -- the environment at execve, which is
+        what fwcommon.session reads out of a session leader."""
+        try:
+            with open("/proc/%d/environ" % self.pid, "rb") as f:
+                raw = f.read().decode("utf-8", "replace")
+        except OSError:
+            return {}
+        out = {}
+        for kv in raw.split("\0"):
+            if "=" in kv:
+                k, v = kv.split("=", 1)
+                out[k] = v
+        return out
+
+    def stop(self):
+        try:
+            self.proc.kill()
+        except OSError:
+            pass
+        if self.proc.stdin is not None:
+            try:
+                self.proc.stdin.close()
+            except OSError:
+                pass
+        try:
+            self.proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.stop()
+        return False
+
+
+# -- wl-mirror, stubbed -------------------------------------------------------
+#
+# wmirror spawns wl-mirror and then supervises it: the interesting behaviour is
+# what the supervisor does when the helper lives, dies at once, or is killed
+# under it, and none of that needs a compositor or a GPU. The libEGL line on
+# stderr is real wl-mirror output on a headless box, and it is here because
+# wmirror has to not treat it as a failure.
+#
+#   $WMIRROR_STUB_LOG   every invocation, with the WAYLAND_DISPLAY it saw
+#   $WMIRROR_STUB_FAIL  exit 1 with wl-mirror's own "output not found" wording
+#   $WMIRROR_STUB_LIFE  seconds to stay up (30 by default)
+
+WL_MIRROR_STUB = """#!/bin/sh
+# stand-in for wl-mirror
+if [ -n "$WMIRROR_STUB_LOG" ]; then
+    printf '%s wayland=%s\\n' "$*" "$WAYLAND_DISPLAY" >> "$WMIRROR_STUB_LOG"
+fi
+echo "libEGL warning: DRI2: failed to authenticate" >&2
+if [ -n "$WMIRROR_STUB_FAIL" ]; then
+    echo "error: options::find_output(): output NOPE not found" >&2
+    exit 1
+fi
+exec sleep "${WMIRROR_STUB_LIFE:-30}"
+"""
+
+
+def write_wl_mirror_stub(dirpath, name="wl-mirror"):
+    """Write WL_MIRROR_STUB into `dirpath` as `name`, executable; return it."""
+    os.makedirs(dirpath, exist_ok=True)
+    path = os.path.join(dirpath, name)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(WL_MIRROR_STUB)
+    os.chmod(path, 0o755)
+    return path
