@@ -25,6 +25,14 @@ harness that runs the two GNOME extensions (`js_harness`, with
 tests/fixtures/gjs/), the sway IPC double (`FakeSway`), the session leader
 stand-in (`leader_process`) and the wl-mirror stub (`WL_MIRROR_STUB`).
 tests/test_support_helpers.py is where each of them is proved.
+
+Added for the second design round, same rule and the same file to prove them
+in: the Hyprland IPC double and its event socket (`FakeHypr`,
+`FakeHyprEvents`), the Wayfire IPC double (`FakeWayfire`), `FakeSway`'s i3
+dialect, and the five headless compositors the live tests boot
+(`HeadlessLabwc`, `HeadlessWayfire`, `HeadlessRiver`, `HeadlessI3`,
+`HeadlessOpenbox`) beside `HeadlessSway`. Every payload one of them replays
+is a recording under tests/fixtures/, named where it is used.
 """
 
 import contextlib
@@ -43,6 +51,19 @@ import time
 import unittest
 
 from wdotool import keystate, uinput
+
+
+# -- recorded fixtures --------------------------------------------------------
+
+FIXTURE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures")
+
+
+def fixture_json(*parts):
+    """A recorded JSON fixture under tests/fixtures/, parsed. Every double here that replays bytes replays them
+    from one of these rather than from a literal, so the file and the report that produced it are the only
+    place a payload can be edited."""
+    with open(os.path.join(FIXTURE_DIR, *parts), encoding="utf-8") as fh:
+        return json.load(fh)
 
 
 # -- environment --------------------------------------------------------------
@@ -411,6 +432,333 @@ class HeadlessSway:
             except subprocess.TimeoutExpired:
                 self.proc.kill()
         shutil.rmtree(self.rtdir, ignore_errors=True)
+
+
+class _HeadlessWlroots:
+    """Shared shape for the wlroots compositors that are not sway.
+
+    HeadlessSway is the model and stays as it is; what is different here, and measured, is:
+
+    * The runtime directory is a SHORT `tempfile.mkdtemp` name. Both labwc and Wayfire refuse a long
+      `XDG_RUNTIME_DIR`: labwc dies with `File name too long` and Wayfire with `socket path ... exceeds 108
+      bytes` -- the Unix socket path limit, which the suite's usual `/tmp/<long prefix>` blows through
+      [M recon2/labwc.md, recon2/wayfire.md].
+    * There is no IPC socket to wait for (labwc and river have none at all), so the wait is for the
+      `wayland-*` socket plus, where the compositor can run one, an autostart line that writes DISPLAY.
+
+    Every way it can fail to come up is a SkipTest, exactly as HeadlessSway does it: a box that cannot start
+    the compositor has nothing to say about the tools."""
+
+    #: the binary, and the argv that starts it with `conf`
+    BINARY = None
+    #: short prefix -- see the socket-path limit above
+    PREFIX = "fw"
+
+    def argv(self, confdir):
+        raise NotImplementedError
+
+    def write_config(self, confdir):
+        """Write the compositor's own config into `confdir`; return nothing."""
+
+    def __init__(self, extra_env=None, need_display=False, timeout=15):
+        if not shutil.which(self.BINARY):
+            raise unittest.SkipTest("%s is not installed" % self.BINARY)
+        self.rtdir = tempfile.mkdtemp(prefix=self.PREFIX, dir="/tmp")
+        os.chmod(self.rtdir, 0o700)
+        self.confdir = os.path.join(self.rtdir, "cfg")
+        os.mkdir(self.confdir)
+        self.write_config(self.confdir)
+        self.env = dict(
+            os.environ,
+            XDG_RUNTIME_DIR=self.rtdir,
+            WLR_BACKENDS="headless",
+            WLR_LIBINPUT_NO_DEVICES="1",
+            WLR_RENDERER="pixman",
+            DBUS_SESSION_BUS_ADDRESS="unix:path=%s/no-bus" % self.rtdir,
+        )
+        # the box's own DISPLAY must not survive into the compositor: the
+        # autostart line reports "$DISPLAY", and an inherited one would be
+        # written into the file as if it were this compositor's Xwayland
+        self.env.pop("DISPLAY", None)
+        self.env.pop("WAYLAND_DISPLAY", None)
+        self.env.update(extra_env or {})
+        self.sock = None
+        self.proc = subprocess.Popen(
+            self.argv(self.confdir), env=self.env, cwd=self.rtdir,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.wayland_socket = self._wait_socket(timeout)
+        self.env["WAYLAND_DISPLAY"] = os.path.basename(self.wayland_socket)
+        self.after_start()
+        self.display = self._wait_display()
+        if self.display:
+            self.env["DISPLAY"] = self.display
+        elif need_display:
+            self.stop()
+            raise unittest.SkipTest("%s did not announce an X DISPLAY" % self.BINARY)
+
+    def after_start(self):
+        """Hook: the wayland socket is up, nothing else has been waited for."""
+
+    def _wait_socket(self, timeout):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            socks = [n for n in os.listdir(self.rtdir)
+                     if n.startswith("wayland-") and not n.endswith(".lock")]
+            if socks:
+                return os.path.join(self.rtdir, sorted(socks)[0])
+            if self.proc.poll() is not None:
+                self.stop()
+                raise unittest.SkipTest("%s exited at startup" % self.BINARY)
+            time.sleep(0.2)
+        self.stop()
+        raise unittest.SkipTest("%s created no wayland socket" % self.BINARY)
+
+    def _wait_display(self):
+        dfile = os.path.join(self.rtdir, "display")
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            try:
+                with open(dfile) as f:
+                    got = f.read().strip()
+            except OSError:
+                got = ""
+            if got:
+                return got
+            time.sleep(0.2)
+        return ""
+
+    def stop(self):
+        if self.proc.poll() is None:
+            self.proc.send_signal(signal.SIGTERM)
+            try:
+                self.proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.proc.kill()
+                self.proc.wait(timeout=5)
+        shutil.rmtree(self.rtdir, ignore_errors=True)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.stop()
+        return False
+
+
+class HeadlessLabwc(_HeadlessWlroots):
+    """labwc with three named desktops -- the shape `ext_workspace_manager_v1` was measured on.
+
+    Three names, because labwc with no `<desktops>` block publishes exactly one workspace called
+    `Workspace 1` and a desktops test then proves nothing [M recon2/labwc.md §6a]. The autostart line reports
+    DISPLAY the way HeadlessSway's `exec` does; labwc Depends on xwayland, so an X plane is normally there."""
+
+    BINARY = "labwc"
+    PREFIX = "fwlb"
+
+    RC_XML = ("<?xml version=\"1.0\"?>\n<labwc_config>\n"
+              "  <desktops><names><name>one</name><name>two</name><name>three</name></names></desktops>\n"
+              "</labwc_config>\n")
+
+    def write_config(self, confdir):
+        with open(os.path.join(confdir, "rc.xml"), "w") as f:
+            f.write(self.RC_XML)
+        auto = os.path.join(confdir, "autostart")
+        with open(auto, "w") as f:
+            f.write("sh -c 'echo \"$DISPLAY\" > %s/display' &\n" % self.rtdir)
+        os.chmod(auto, 0o755)
+
+    def argv(self, confdir):
+        return [self.BINARY, "-C", confdir]
+
+
+class HeadlessWayfire(_HeadlessWlroots):
+    """Wayfire with the three IPC plugins loaded.
+
+    `plugins = ... ipc ipc-rules stipc` is what turns `window-rules/list-views` on; without `ipc-rules` the
+    socket exists and answers `No such method found!` to everything the window backend needs, which is the
+    api gate's whole reason to exist [M recon2/wayfire.md §1.2, §3.3]."""
+
+    BINARY = "wayfire"
+    PREFIX = "fwwf"
+
+    def write_config(self, confdir):
+        path = os.path.join(confdir, "wayfire.ini")
+        with open(path, "w") as f:
+            f.write("[core]\nplugins = autostart ipc ipc-rules stipc\n"
+                    "\n[output:HEADLESS-1]\nmode = 1280x720\n"
+                    "\n[autostart]\nrep = sh -c 'echo \"$DISPLAY\" > %s/display'\n" % self.rtdir)
+        self.conf = path
+
+    def argv(self, confdir):
+        return [self.BINARY, "-c", os.path.join(confdir, "wayfire.ini")]
+
+    def after_start(self, timeout=10):
+        """Wait for the IPC socket and export `$WAYFIRE_SOCKET`, which is the name Wayfire itself gives its
+        children. The runtime-dir name carries no pid field at all (`wayfire-<display>-.socket`, recorded as
+        `wayfire-wayland-1-.socket`), so the wait is on the prefix and suffix [M recon2/wayfire.md §1.2]."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            socks = [n for n in os.listdir(self.rtdir)
+                     if n.startswith("wayfire-") and n.endswith(".socket")]
+            if socks:
+                self.sock = os.path.join(self.rtdir, sorted(socks)[0])
+                self.env["WAYFIRE_SOCKET"] = self.sock
+                return
+            if self.proc.poll() is not None:
+                self.stop()
+                raise unittest.SkipTest("wayfire exited at startup")
+            time.sleep(0.2)
+        self.stop()
+        raise unittest.SkipTest("wayfire created no IPC socket "
+                                "(is `plugins = ... ipc ipc-rules` honoured?)")
+
+
+class HeadlessRiver(_HeadlessWlroots):
+    """river 0.4 driven by `tinyrwm`, the reference window manager its own tests use.
+
+    river 0.4 is a compositor with no built-in layout: without a window manager on the other end of
+    `river_window_manager_v1` nothing is ever mapped, and `wwmctl -l` is empty -- which is itself one of the
+    things a river test asserts. Skipped where either binary is missing; neither is packaged on any runner,
+    so this only runs where somebody built them [M recon2/river.md §2]."""
+
+    BINARY = "river"
+    PREFIX = "fwrv"
+    WM = "tinyrwm"
+
+    def __init__(self, *a, **kw):
+        if not shutil.which(self.WM):
+            raise unittest.SkipTest("tinyrwm is not installed")
+        super().__init__(*a, **kw)
+
+    def argv(self, confdir):
+        return [self.BINARY, "-c", self.WM]
+
+
+class HeadlessXvfb:
+    """An X server on a free display, and one X11 window manager on it.
+
+    Xvfb rather than a nested Wayland compositor because i3 and Openbox are X11 programs and there is no other
+    honest way to run them: everything measured came up in about 3 s with no root [M recon2/i3.md §5,
+    recon2/openbox.md]. `.env` carries DISPLAY (and, for i3, I3SOCK read back from `i3 --get-socketpath`) for
+    the tools a test spawns."""
+
+    WM = None
+    #: extra argv after the binary
+    WM_ARGS = ()
+
+    def __init__(self, screen="1920x1080x24", timeout=15):
+        for binary in ("Xvfb", self.WM):
+            if not shutil.which(binary):
+                raise unittest.SkipTest("%s is not installed" % binary)
+        self.rtdir = tempfile.mkdtemp(prefix="fwx", dir="/tmp")
+        os.chmod(self.rtdir, 0o700)
+        self.num = self._free_display()
+        self.display = ":%d" % self.num
+        self.xvfb = subprocess.Popen(
+            ["Xvfb", self.display, "-screen", "0", screen],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self._wait_x(timeout)
+        self.env = dict(os.environ, DISPLAY=self.display,
+                        XDG_RUNTIME_DIR=self.rtdir)
+        self.env.pop("XAUTHORITY", None)
+        self.wm = subprocess.Popen(
+            [self.WM] + list(self.wm_args()), env=self.env,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.after_start()
+
+    def wm_args(self):
+        return self.WM_ARGS
+
+    def after_start(self):
+        time.sleep(0.5)
+
+    def _free_display(self):
+        # a number nothing is listening on, and that no other test picked: the
+        # socket's absence is the only check an X server itself makes
+        for num in range(70, 120):
+            if not os.path.exists("/tmp/.X11-unix/X%d" % num):
+                return num
+        raise unittest.SkipTest("no free X display number")
+
+    def _wait_x(self, timeout):
+        deadline = time.monotonic() + timeout
+        sock = "/tmp/.X11-unix/X%d" % self.num
+        while time.monotonic() < deadline:
+            if os.path.exists(sock):
+                return
+            if self.xvfb.poll() is not None:
+                self.stop()
+                raise unittest.SkipTest("Xvfb exited at startup")
+            time.sleep(0.1)
+        self.stop()
+        raise unittest.SkipTest("Xvfb never created %s" % sock)
+
+    def stop(self):
+        for proc in (getattr(self, "wm", None), getattr(self, "xvfb", None)):
+            if proc is None or proc.poll() is not None:
+                continue
+            proc.send_signal(signal.SIGTERM)
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=5)
+        shutil.rmtree(self.rtdir, ignore_errors=True)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.stop()
+        return False
+
+
+class HeadlessI3(HeadlessXvfb):
+    """i3 on an Xvfb, with no bar and no first-run wizard.
+
+    No `bar` block, because i3bar is a second process with an IPC connection of its own and nothing here wants
+    it; a config file at all, because `i3-config-wizard` pops a dialog when ~/.config/i3/config is missing.
+    `$I3SOCK` comes from `i3 --get-socketpath` rather than from a guess -- which is also the one thing i3 does
+    not put in its own environ [M recon2/i3.md §1]."""
+
+    WM = "i3"
+    CONF = "font pango:monospace 8\nfocus_follows_mouse no\n"
+
+    def __init__(self, *a, **kw):
+        self.conf = None
+        super().__init__(*a, **kw)
+
+    def wm_args(self):
+        self.conf = os.path.join(self.rtdir, "i3.conf")
+        with open(self.conf, "w") as f:
+            f.write(self.CONF)
+        return ["-c", self.conf]
+
+    def after_start(self):
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            try:
+                out = subprocess.run([self.WM, "--get-socketpath"], env=self.env,
+                                     capture_output=True, text=True, timeout=5)
+            except (OSError, subprocess.SubprocessError):
+                out = None
+            path = (out.stdout.strip() if out and out.returncode == 0 else "")
+            if path and os.path.exists(path):
+                self.sock = path
+                self.env["I3SOCK"] = path
+                return
+            if self.wm.poll() is not None:
+                self.stop()
+                raise unittest.SkipTest("i3 exited at startup")
+            time.sleep(0.2)
+        self.stop()
+        raise unittest.SkipTest("i3 never wrote an IPC socket")
+
+
+class HeadlessOpenbox(HeadlessXvfb):
+    """Openbox on an Xvfb -- the X11 window manager the LXQt session runs, with none of LXQt around it."""
+
+    WM = "openbox"
 
 
 def compositor_pids():
@@ -1030,7 +1378,9 @@ class UnixServer:
 I3_MAGIC = b"i3-ipc"
 RUN_COMMAND = 0
 GET_WORKSPACES = 1
+GET_TREE = 4
 GET_OUTPUTS = 3
+GET_VERSION = 7
 
 
 def iframe(mtype, payload):
@@ -1078,22 +1428,63 @@ class FakeSway(UnixServer):
 
     `outputs` and `workspaces` override the two payloads. Everything else is
     answered with the workspace list, which is what the wdotool sway backend
-    asks for and all the older double ever sent."""
+    asks for and all the older double ever sent.
+
+    `dialect="i3"` answers as a live i3 4.25.1 did instead, from the recordings in tests/fixtures/i3/ [M
+    recon2/i3.md §1, §2b]:
+
+      GET_VERSION    major 4 (sway is 1.x and i3 has been 4.x since 2011), `human_readable`
+                     "4.25.1 (2026-02-06)"
+      GET_OUTPUTS    name/active/primary/rect/current_workspace and NOTHING else -- no modes, no current_mode,
+                     no transform, no scale, no make/model/serial -- plus the pseudo-output `xroot-0`
+                     (`active: false`) covering the X screen
+      GET_WORKSPACES the one workspace, with i3's 47-bit `id`
+      GET_TREE       `get_tree_floating.json`: 47-bit con ids, `window` carrying the X id, no `app_id`, no
+                     `pid`, no `visible`, and the floated `fwsmoke` xterm (X id 8388621) wrapped
+                     `floating_con -> con`. Pass `tree=fixture_json("i3", "get_tree.json")` for the same
+                     session with nothing floating.
+      RUN_COMMAND    i3's 30-token parse error to any `output ...`, which is what every wxrandr apply died
+                     with, and `{"success": true}` to anything else
+
+    A test that wants i3's parse error for a different command passes `refuse_prefix`."""
 
     ERROR = "Cannot apply output configuration"
 
-    def __init__(self, mode, outputs=None, workspaces=None):
+    def __init__(self, mode, outputs=None, workspaces=None, dialect="sway",
+                 tree=None, refuse_prefix="output"):
         self.mode = mode
-        self.outputs = SWAY_OUTPUTS if outputs is None else outputs
-        self.workspaces = SWAY_WORKSPACES if workspaces is None else workspaces
+        self.dialect = dialect
+        self.refuse_prefix = refuse_prefix
+        i3 = dialect == "i3"
+        if i3:
+            self.outputs = fixture_json("i3", "get_outputs.json") if outputs is None else outputs
+            self.workspaces = (fixture_json("i3", "get_workspaces.json")
+                               if workspaces is None else workspaces)
+            self.tree = fixture_json("i3", "get_tree_floating.json") if tree is None else tree
+            self.version = fixture_json("i3", "get_version.json")
+            self.parse_error = fixture_json("i3", "run_output_pos.json")
+        else:
+            self.outputs = SWAY_OUTPUTS if outputs is None else outputs
+            self.workspaces = SWAY_WORKSPACES if workspaces is None else workspaces
+            self.tree = tree
+            self.version = {"major": 1, "minor": 11, "patch": 0, "human_readable": "1.11"}
+            self.parse_error = None
         self.requests = []
         super().__init__(self._serve, prefix="fake-sway-")
 
-    def _payload(self, mtype):
+    def _payload(self, mtype, body=""):
         if mtype == RUN_COMMAND:
+            if self.dialect == "i3" and body.strip().startswith(self.refuse_prefix):
+                # i3 has no `output` command at all; the layout belongs to the X
+                # server there, and every apply came back as this parse error
+                return self.parse_error
             if self.mode == "refuse":
                 return [{"success": False, "error": self.ERROR}]
             return [{"success": True}]
+        if mtype == GET_VERSION:
+            return self.version
+        if mtype == GET_TREE and self.tree is not None:
+            return self.tree
         if mtype == GET_OUTPUTS:
             if self.mode == "partial":
                 return [{k: v for k, v in o.items() if k != "rect"}
@@ -1121,7 +1512,223 @@ class FakeSway(UnixServer):
                 if self.mode == "badjson":
                     c.sendall(iframe(mt, b"{not json"))
                     continue
-                c.sendall(iframe(mt, json.dumps(self._payload(mt)).encode()))
+                c.sendall(iframe(mt, json.dumps(
+                    self._payload(mt, self.requests[-1][1])).encode()))
+                if self.mode == "gone" and n == 1:
+                    time.sleep(0.05)
+                    c.close()
+                    return
+
+
+# -- Hyprland's IPC, faked ----------------------------------------------------
+
+#: `hyprctl cursorpos` answered the text `640, 360` on the live 0.53.3 after a
+#: `mousemove 640 360`, 0 px error twice [M recon2/hyprland.md §3]. The `j/`
+#: shape below is [R]: it is what HyprCtl.cpp writes for the same two numbers,
+#: read off the source and not measured -- nothing recorded `j/cursorpos`. The
+#: Hyprland batch's live run records it (requests-batch-5.md), and this double
+#: is corrected from that recording if the keys differ.
+HYPR_CURSORPOS = {"x": 640, "y": 360}
+
+#: The five event lines a live Hyprland wrote to `.socket2.sock` when a foot
+#: window opened, in order and byte for byte [M recon2/hyprland.md §2].
+HYPR_EVENT_LINES = (
+    "windowtitle>>59daae69e360",
+    "windowtitlev2>>59daae69e360,foot",
+    "openwindow>>59daae69e360,1,foot,foot",
+    "activewindow>>foot,foot",
+    "activewindowv2>>59daae69e360",
+)
+
+
+class FakeHypr(UnixServer):
+    """Hyprland's request/response socket (`.socket.sock`), in one of six moods.
+
+    The protocol is the one a 10-line AF_UNIX client proved against a live 0.53.3: send the request as plain
+    text, read the reply to EOF, and the connection is finished -- one connection per request, which is why
+    every mode below is expressed as "what this one connection does" [M recon2/hyprland.md §2]. A request
+    starting `j/` is answered with JSON; everything else with Hyprland's own words.
+
+    `mode`:
+      "ok"       every request answered from tests/fixtures/hypr/*.json
+      "gone"     the connection is closed with nothing written -- the compositor that exited between our
+                 find_hypr_socket() and our connect()
+      "badjson"  a `j/` request answered with bytes that are not JSON
+      "wedged"   accepted and never answered; only the client's own deadline ends it
+      "short"    a JSON reply truncated mid-object, which is what a compositor killed mid-write leaves
+      "refuse"   a dispatch answered `Invalid dispatcher` -- [R], read off HyprCtl.cpp rather than measured;
+                 no recon report recorded an unknown verb (requests-batch-5.md asks the live run for it)
+
+    Every request is appended to `self.requests`, so a test can say which strings were sent and that nothing
+    else was."""
+
+    #: Hyprland's refusal text for an unknown dispatch verb. [R] from HyprCtl.cpp, not measured.
+    INVALID = "Invalid dispatcher"
+
+    def __init__(self, mode="ok", payloads=None):
+        self.mode = mode
+        self.requests = []
+        self.payloads = {
+            "monitors": fixture_json("hypr", "monitors.json"),
+            "clients": fixture_json("hypr", "clients.json"),
+            "workspaces": fixture_json("hypr", "workspaces.json"),
+            "devices": fixture_json("hypr", "devices.json"),
+            "activewindow": fixture_json("hypr", "activewindow.json"),
+            "activeworkspace": fixture_json("hypr", "activeworkspace.json"),
+            "version": fixture_json("hypr", "version.json"),
+            "cursorpos": HYPR_CURSORPOS,
+        }
+        if payloads:
+            self.payloads.update(payloads)
+        super().__init__(self._serve, prefix="fake-hypr-")
+
+    def reply_for(self, req: str) -> bytes:
+        """The bytes this request is answered with (before the mode mangles them)."""
+        if req.startswith("j/"):
+            name = req[2:].strip()
+            if name not in self.payloads:
+                # [R] from HyprCtl.cpp as well; no report recorded an unknown `j/` request either
+                return b"unknown request"
+            return json.dumps(self.payloads[name]).encode()
+        verb = req.split(" ", 1)[0]
+        if verb in ("dispatch", "keyword"):
+            if self.mode == "refuse" and verb == "dispatch":
+                return self.INVALID.encode()
+            return b"ok"
+        if req.strip() in self.payloads:
+            return json.dumps(self.payloads[req.strip()]).encode()
+        return self.INVALID.encode()
+
+    def _serve(self, c):
+        if self.mode == "wedged":
+            self._stop.wait()
+            return
+        data = c.recv(65536)
+        if not data:
+            return
+        req = data.decode("utf-8", "replace")
+        self.requests.append(req)
+        if self.mode == "gone":
+            c.close()
+            return
+        if self.mode == "badjson":
+            c.sendall(b"{not json")
+        elif self.mode == "short":
+            c.sendall(self.reply_for(req)[:12])
+        else:
+            c.sendall(self.reply_for(req))
+        c.close()
+
+
+class FakeHyprEvents(UnixServer):
+    """Hyprland's event socket (`.socket2.sock`): a line stream, `event>>payload`.
+
+    Constructed with the five recorded lines; `send(line)` writes another one to every live client, so a test
+    can drive an events() iterator one step at a time instead of racing a script. `hold=True` writes nothing
+    until the first `send()`, which is the compositor with nothing happening on it."""
+
+    def __init__(self, lines=HYPR_EVENT_LINES, hold=False):
+        self.lines = list(lines)
+        self.hold = hold
+        self.conns_seen = 0
+        super().__init__(self._serve, prefix="fake-hypr-ev-")
+
+    def _serve(self, c):
+        self.conns_seen += 1
+        if not self.hold:
+            for line in self.lines:
+                c.sendall((line + "\n").encode())
+        self._stop.wait()
+
+    def send(self, line: str):
+        """One more event line, to everything connected."""
+        for c in list(self.conns):
+            try:
+                c.sendall((line + "\n").encode())
+            except OSError:
+                pass
+
+
+# -- Wayfire's IPC, faked -----------------------------------------------------
+
+class FakeWayfire(UnixServer):
+    """Wayfire's JSON IPC socket: a little-endian `<i` length prefix and a JSON body, both ways.
+
+    The framing is measured, byte for byte -- the recorded ping went out as the four bytes 24 00 00 00 and
+    then the 0x24-byte body `{"method": "stipc/ping", "data": {}}` [M recon2/wayfire.md §1.2]. The method
+    table is the recorded captures under tests/fixtures/wayfire/, whose file names are the method with `/`
+    written as `_`.
+
+    `mode`:
+      "ok"             every recorded method answered
+      "nomethod"       every method answered `{"error": "No such method found!"}` -- which is the shape a
+                       Wayfire with no `ipc-rules` plugin gives, and the reason the backend has an api gate
+      "handler-error"  the other error shape, a handler that raised (the recorded one names the method and
+                       the argument it was missing)
+      "silent"         framed request read, nothing written back
+      "gone"           the connection is closed after the first reply
+
+    `self.calls` is [(method, data)] for everything asked."""
+
+    NO_METHOD = "No such method found!"
+    #: the second error shape, byte for byte off the live socket: a handler that
+    #: raised names the method and what it was missing
+    #: [M recon2/wayfire.md §1.2]
+    HANDLER_ERROR = ('Error during execution of the handler for method '
+                     '"window-rules/view-info": Missing "id"')
+
+    #: the recorded captures, keyed by the method that produced them
+    CAPTURES = ("list-methods", "window-rules/list-views", "window-rules/list-outputs",
+                "window-rules/list-wsets", "window-rules/get_cursor_position",
+                "wayfire/get-keyboard-state", "wayfire/configuration",
+                "input/list-devices", "stipc/get_display", "create-headless-output")
+
+    def __init__(self, mode="ok", answers=None):
+        self.mode = mode
+        self.calls = []
+        self.answers = {m: fixture_json("wayfire", m.replace("/", "_") + ".json")
+                        for m in self.CAPTURES}
+        if answers:
+            self.answers.update(answers)
+        super().__init__(self._serve, prefix="fake-wayfire-")
+
+    @staticmethod
+    def frame(obj) -> bytes:
+        """One message: `<i` length, then the JSON body."""
+        body = json.dumps(obj).encode()
+        return struct.pack("<i", len(body)) + body
+
+    def reply_for(self, method, data):
+        if self.mode == "nomethod":
+            return {"error": self.NO_METHOD, "method": method}
+        if self.mode == "handler-error":
+            return {"error": self.HANDLER_ERROR}
+        if method in self.answers:
+            return self.answers[method]
+        return {"error": self.NO_METHOD, "method": method}
+
+    def _serve(self, c):
+        buf, n = b"", 0
+        while True:
+            data = c.recv(65536)
+            if not data:
+                return
+            buf += data
+            while len(buf) >= 4:
+                (ln,) = struct.unpack("<i", buf[:4])
+                if len(buf) < 4 + ln:
+                    break
+                try:
+                    req = json.loads(buf[4:4 + ln].decode("utf-8", "replace"))
+                except ValueError:
+                    req = {}
+                buf = buf[4 + ln:]
+                method = req.get("method", "")
+                self.calls.append((method, req.get("data", {})))
+                n += 1
+                if self.mode == "silent":
+                    continue
+                c.sendall(self.frame(self.reply_for(method, req.get("data", {}))))
                 if self.mode == "gone" and n == 1:
                     time.sleep(0.05)
                     c.close()

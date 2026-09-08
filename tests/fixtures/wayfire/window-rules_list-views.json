@@ -1,0 +1,49 @@
+[
+ {
+  "id": 7,
+  "pid": 76872,
+  "title": "capbox",
+  "app-id": "foot",
+  "base-geometry": {
+   "x": 100,
+   "y": 100,
+   "width": 696,
+   "height": 494
+  },
+  "parent": -1,
+  "geometry": {
+   "x": 100,
+   "y": 100,
+   "width": 696,
+   "height": 494
+  },
+  "bbox": {
+   "x": 100,
+   "y": 100,
+   "width": 696,
+   "height": 494
+  },
+  "output-id": 1,
+  "output-name": "HEADLESS-1",
+  "last-focus-timestamp": 641094905190678,
+  "role": "toplevel",
+  "mapped": true,
+  "layer": "workspace",
+  "tiled-edges": 0,
+  "fullscreen": false,
+  "minimized": false,
+  "activated": true,
+  "sticky": false,
+  "wset-index": 1,
+  "min-size": {
+   "width": 6,
+   "height": 13
+  },
+  "max-size": {
+   "width": 0,
+   "height": 0
+  },
+  "focusable": true,
+  "type": "toplevel"
+ }
+]

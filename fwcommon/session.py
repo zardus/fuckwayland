@@ -43,6 +43,9 @@ from fwcommon.errors import CmdError
 X11_SOCKET_DIR = "/tmp/.X11-unix"
 #: test seam (production value): the per-user runtime directories
 RUN_USER_DIR = "/run/user"
+#: test seam (production value): where the two compositors that can run with no
+#: runtime directory put their socket instead (i3 and Wayfire, below)
+TMP_DIR = "/tmp"
 #: Stand-in for $XDG_RUNTIME_DIR when the session did not give us one.
 FALLBACK_RUNTIME_DIR = "/tmp/wdotool-%d"
 
@@ -143,6 +146,36 @@ def _scan(match) -> tuple[int, str] | None:
     return None
 
 
+def _scan_sub(sub: str):
+    """(uid, path) of every entry of `<candidate runtime dir>/<sub>/`, best runtime dir first, names sorted.
+
+    `_scan` lists one directory level, and two compositors put their socket one level further down: i3 writes
+    `$XDG_RUNTIME_DIR/i3/ipc-socket.<pid>` and Hyprland `$XDG_RUNTIME_DIR/hypr/<instance>/.socket.sock`. Neither
+    was findable before [M recon2/i3.md §1: with XDG_RUNTIME_DIR=/tmp/rti3, `i3 --get-socketpath` said
+    /tmp/rti3/i3/ipc-socket.65857 and find_sway_socket() answered None]."""
+    for uid, d in runtime_dir_candidates():
+        base = os.path.join(d, sub)
+        try:
+            names = sorted(os.listdir(base))
+        except OSError:
+            continue
+        for n in names:
+            yield uid, os.path.join(base, n)
+
+
+def _candidate_uids() -> list[int]:
+    """The uids of the candidate runtime dirs, best first, with our own last.
+
+    The two /tmp fallbacks below (i3 with no XDG_RUNTIME_DIR, Wayfire with none either) have no runtime
+    directory to be anchored on, so the owner they check against comes from here; our own uid is appended
+    because a session with no /run/user entry at all still has a socket in /tmp that belongs to us."""
+    out = [u for u, _d in runtime_dir_candidates()]
+    mine = os.getuid()
+    if mine not in out:
+        out.append(mine)
+    return out
+
+
 def find_wayland_socket() -> tuple[int, str, str] | None:
     """(uid, runtime_dir, socket_path) of the graphical session, or None.
 
@@ -174,12 +207,102 @@ def find_wayland_socket() -> tuple[int, str, str] | None:
 
 
 def find_sway_socket() -> str | None:
+    """The sway or i3 IPC socket, or None.
+
+    $SWAYSOCK then $I3SOCK when the path they name exists, then the three names a live compositor really
+    writes. The `i3-ipc.*.sock` pattern this used to scan for matches nothing any i3 or sway has ever written
+    [M recon2/i3.md §1]: sway writes `sway-ipc.<uid>.<pid>.sock` at the top of the runtime dir, i3 writes
+    `i3/ipc-socket.<pid>` one level down, and with no runtime dir at all `/tmp/i3-<user>.XXXXXX/ipc-socket.<pid>`
+    (measured: `/tmp/i3-yans.cxtC3m/ipc-socket.53335`, the directory 0700). i3 exports $I3SOCK into the
+    processes it spawns but not into its own environ, so on i3 the scan is the only route for anything the
+    compositor did not start."""
     for var in ("SWAYSOCK", "I3SOCK"):
         p = os.environ.get(var)
         if p and os.path.exists(p):
             return p
-    hit = _scan(lambda n: (n.startswith("sway-ipc.") or n.startswith("i3-ipc.")) and n.endswith(".sock"))
-    return hit[1] if hit else None
+    hit = _scan(lambda n: n.startswith("sway-ipc.") and n.endswith(".sock"))
+    if hit:
+        return hit[1]
+    for _uid, p in _scan_sub("i3"):
+        if os.path.basename(p).startswith("ipc-socket."):
+            return p
+    return _find_tmp_i3_socket()
+
+
+def _find_tmp_i3_socket() -> str | None:
+    """`<TMP_DIR>/i3-<user>.XXXXXX/ipc-socket.<pid>`, or None. /tmp is world-writable, so both the directory
+    and the socket have to be owned by the user whose session we are aimed at: anyone may create
+    `/tmp/i3-<someone else>.aaaaaa/ipc-socket.1` and answer for a compositor that is not there."""
+    for uid in _candidate_uids():
+        try:
+            name = pwd.getpwuid(uid).pw_name
+        except KeyError:
+            continue
+        pattern = os.path.join(glob.escape(TMP_DIR), "i3-%s.*" % glob.escape(name))
+        for d in sorted(glob.glob(pattern)):
+            if _owner(d) != uid:
+                continue
+            for p in sorted(glob.glob(os.path.join(glob.escape(d), "ipc-socket.*"))):
+                if _owner(p) == uid:
+                    return p
+    return None
+
+
+def find_hypr_socket() -> str | None:
+    """Hyprland's request/response IPC socket (`.socket.sock`), or None.
+
+    `$HYPRLAND_INSTANCE_SIGNATURE` names the instance directory, and Hyprland puts that variable into the
+    systemd user manager rather than into anything we inherit under sudo, so the signature is a shortcut and
+    never a requirement. With no signature the runtime dirs are walked for `hypr/*/.socket.sock` and the
+    instance whose directory still holds `hyprland.lock` wins: stale instance directories accumulate beside the
+    live one, five of them after five restarts [M recon2/hyprland.md §1, socket at
+    /run/user/1000/hypr/<sig>/.socket.sock]. The event socket is `.socket2.sock` in the same directory."""
+    sig = os.environ.get("HYPRLAND_INSTANCE_SIGNATURE")
+    rd = os.environ.get("XDG_RUNTIME_DIR")
+    if sig and rd:
+        p = os.path.join(rd, "hypr", sig, ".socket.sock")
+        if os.path.exists(p):
+            return p
+    locked = stale = None
+    for uid, d in _scan_sub("hypr"):
+        p = os.path.join(d, ".socket.sock")
+        # the socket has to belong to the owner of the runtime directory it sits
+        # in: an instance directory another user planted in this session's
+        # runtime dir would otherwise be answered with, and every request --
+        # `dispatch`, and the window titles that come back -- would go there
+        if _owner(p) != uid:
+            continue
+        if sig and os.path.basename(d) == sig:
+            return p
+        if locked is None and os.path.exists(os.path.join(d, "hyprland.lock")):
+            locked = p
+        if stale is None:
+            stale = p
+    return locked or stale
+
+
+def find_wayfire_socket() -> str | None:
+    """Wayfire's JSON IPC socket, or None.
+
+    `$WAYFIRE_SOCKET` is what Wayfire exports to its own children; `$_WAYFIRE_SOCKET` is what the user may set
+    to choose the path. Then `wayfire-*.socket` in the runtime dirs, and last the /tmp fallback the plugin uses
+    when there is no runtime dir, owner-checked because /tmp is world-writable. `plugins/ipc/ipc.cpp` writes
+    two different names: the runtime-dir one carries no pid at all (`wayfire-<display>-.socket`, measured here
+    as `/tmp/wfrt1/wayfire-wayland-1-.socket` with XDG_RUNTIME_DIR=/tmp/wfrt1) and the /tmp one does
+    (`wayfire-<display>-<pid>.socket`) [M recon2/wayfire.md §1.2]. So the match is on the prefix and the
+    suffix and never on the shape between them."""
+    for var in ("WAYFIRE_SOCKET", "_WAYFIRE_SOCKET"):
+        p = os.environ.get(var)
+        if p and os.path.exists(p):
+            return p
+    hit = _scan(lambda n: n.startswith("wayfire-") and n.endswith(".socket"))
+    if hit:
+        return hit[1]
+    uids = _candidate_uids()
+    for p in sorted(glob.glob(os.path.join(glob.escape(TMP_DIR), "wayfire-*.socket"))):
+        if _owner(p) in uids:
+            return p
+    return None
 
 
 def find_user_bus() -> tuple[int, str] | None:
@@ -244,13 +367,51 @@ def _runtime_dir_of(uid: int | None) -> str | None:
     return None
 
 
-#: session processes whose own environment names the session's X plane
-#: ($DISPLAY, $XAUTHORITY), best first. Matched against /proc/<pid>/comm, so
-#: every name has to fit its 15-character limit -- "startplasma-x11" is
-#: exactly 15, and a longer one would silently never match.
+#: Session processes whose own environment names the session's X plane
+#: ($DISPLAY, $XAUTHORITY), best first. The eight desktops that were already
+#: here keep their ranks: a session that runs one of them is decided by it,
+#: and the nine appended below only speak where none of the eight is running.
+#:
+#: The nine are not a wish list. From `ssh root@box` with an empty environment
+#: all four tools failed on LXQt with "Authorization required, but no
+#: authorization protocol specified": SDDM 0.21 writes /tmp/xauth_<random>,
+#: which is in no runtime directory and is not ~/.Xauthority, and no LXQt
+#: process was in this tuple -- so `_shell_environ()` never read the one
+#: environment that names the cookie. Appending the names turned all four
+#: tools from broken to working in the same session [M recon2/openbox.md §2].
+#: The same gap was measured for `mate-session` [M recon2/mate.md: _shell_environ
+#: {} -> DISPLAY=:91 with the name added] and for i3 [M recon2/i3.md §2d].
 _SESSION_LEADERS = ("gnome-shell", "startplasma-x11", "kwin_x11",
                     "kwin_wayland", "plasmashell", "ksmserver",
-                    "xfce4-session", "sway")
+                    "xfce4-session", "sway",
+                    "i3", "mate-session", "cinnamon-session", "cinnamon",
+                    "lxqt-session", "lxsession", "openbox", "labwc",
+                    "wayfire")
+
+
+def _leader_comms(name: str) -> tuple[str, str]:
+    """The two /proc/<pid>/comm spellings of a leader called `name`.
+
+    comm is 15 bytes and comes from the executed file, so both spellings are truncated here rather than assumed
+    to fit: "startplasma-x11" is exactly 15 and "cinnamon-session" is 16, which comm reports as
+    "cinnamon-sessio". (`startlxqtwayland` is 16 too and is deliberately not in the tuple: its truncation
+    collides with nothing, but the process that matters on LXQt-Wayland is `lxqt-session` [M openbox.md].)
+
+    The second spelling is nixpkgs': a `wrapGAppsHook`/`wrapQtAppsHook` program is a wrapper binary beside a
+    hidden real one, and the real one is what gets executed -- nixpkgs' gnome-shell runs with comm
+    ".gnome-shell-wr", so on a NixOS GNOME session the scan found no session leader at all and
+    $DISPLAY/$XAUTHORITY discovery for root and cron was gone [M recon2/nixos.md §6.1, measured on this repo's
+    own nix build: `.wdotool-wrappe`]. sway's nixpkgs wrapper is a shell script that execs sway, so `sway` keeps
+    its plain comm and both spellings have to be accepted."""
+    return name[:15], ("." + name + "-wrapped")[:15]
+
+
+#: {comm as /proc reports it: rank in _SESSION_LEADERS}. Built once; a spelling
+#: that collides with an earlier entry's keeps the better rank.
+_LEADER_RANK: dict[str, int] = {}
+for _rank, _leader in enumerate(_SESSION_LEADERS):
+    for _comm in _leader_comms(_leader):
+        _LEADER_RANK.setdefault(_comm, _rank)
 
 
 def _shell_environ(uid: int | None) -> dict[str, str]:
@@ -273,10 +434,8 @@ def _shell_environ(uid: int | None) -> dict[str, str]:
         try:
             with open(f"/proc/{p}/comm") as f:
                 comm = f.read().strip()
-            if comm not in _SESSION_LEADERS:
-                continue
-            rank = _SESSION_LEADERS.index(comm)
-            if rank >= best_rank:
+            rank = _LEADER_RANK.get(comm, -1)
+            if rank < 0 or rank >= best_rank:
                 continue
             if uid is not None and os.stat(f"/proc/{p}").st_uid != uid:
                 continue
@@ -358,8 +517,9 @@ def find_x_display(uid: int | None = None) -> str | None:
 
 def find_xauthority(uid: int | None = None) -> str | None:
     """Cookie file for the session's X server, or None: $XAUTHORITY when it exists; the session leader's own
-    XAUTHORITY (gnome-shell, Plasma's startplasma/kwin/plasmashell, xfce4-session, sway -- the only route to
-    SDDM's /tmp/xauth_<random>); the newest <runtime dir>/.mutter-Xwaylandauth.* (Mutter) or xauth_* (GDM);
+    XAUTHORITY (gnome-shell, Plasma's startplasma/kwin/plasmashell, xfce4-session, sway, and the
+    i3/MATE/Cinnamon/LXQt/Openbox names beside them -- the only route to SDDM's /tmp/xauth_<random>); the newest
+    <runtime dir>/.mutter-Xwaylandauth.* (Mutter), xauth_* (GDM) or gdm/Xauthority (GDM again, one level down);
     ~/.Xauthority of the session user."""
     p = os.environ.get("XAUTHORITY", "")
     if p and os.path.exists(p):
@@ -371,7 +531,13 @@ def find_xauthority(uid: int | None = None) -> str | None:
         return env_p
     rd = _runtime_dir_of(uid)
     if rd:
-        cands = glob.glob(os.path.join(rd, ".mutter-Xwaylandauth.*")) + glob.glob(os.path.join(rd, "xauth_*"))
+        # GDM keeps an X11 session's cookie one directory down, at
+        # <runtime dir>/gdm/Xauthority, and today it is found only through a
+        # live readable gnome-shell: with the leader gone, find_xauthority(1000)
+        # answered None although the file was there [M recon2/gnome-xorg.md].
+        cands = (glob.glob(os.path.join(rd, ".mutter-Xwaylandauth.*"))
+                 + glob.glob(os.path.join(rd, "xauth_*"))
+                 + glob.glob(os.path.join(rd, "gdm", "Xauthority")))
         best, best_m = None, -1.0
         for c in cands:
             try:

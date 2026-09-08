@@ -7,6 +7,7 @@ those tools reaching into backend privates (sway's `_nodes()` tuple). Every hook
 callers fall back to list()/find()."""
 
 import dataclasses
+import hashlib
 import os
 import signal
 import sys
@@ -30,6 +31,66 @@ def set_program(name) -> None:
 
 def program() -> str:
     return _PROGRAM
+
+
+# -- minted window ids --------------------------------------------------------
+#
+# Three compositors publish no numeric window id at all: KWin's handle is a
+# uuid string, Hyprland's is `address` (a pointer, and its own `stableId` does
+# not exist before 0.56 [M recon2/arch.md, hyprland fixtures]), COSMIC's is the
+# `identifier` string of ext-foreign-toplevel-list. An id has to be minted for
+# them, and it has to be 32-bit clean because everything downstream is X-shaped
+# and truncates there -- `wxprop -id` (dsimple.c parses into a 32-bit XID), the
+# synthesized _NET_CLIENT_LIST, wmctrl's 0x%08lx -- and biased into a range no
+# Xwayland client is ever given (X ids are (client << 21) | serial), so a
+# minted id can never be read as the X id of an XWayland window in the same
+# listing. backend_kwin.py mints from the uuid's own hex digits and predates
+# this; new backends come here.
+ID_BASE = 0x40000000
+ID_MASK = 0x3FFFFFFF
+
+#: the golden-ratio odd constant KWin's `_wid` re-mints with, so a collision
+#: walks the same way on every backend
+ID_SALT_STEP = 0x9E3779B1
+
+
+def mint_id(key, salt: int = 0) -> int:
+    """A stable 30-bit window id for `key` (a str or bytes handle), 0 for an empty one.
+
+    blake2b rather than a slice of the handle: COSMIC's identifier is 32 base62 characters whose entropy is not
+    in any particular eight of them, and Hyprland's `address` is a heap pointer whose low bits move together
+    (two windows opened in a row differed by 0x20). The digest is the whole handle, so the id is stable for the
+    life of the window and identical in two processes reading the same session -- which is the property the wlr
+    floor's arrival-order ids do not have [M recon2/hyprland.md §3: 0x000f4241 became 0x000f4240 when another
+    window closed].
+
+    `salt` re-mints the same handle into a different id, for the ~1e-6 chance that two live windows collide."""
+    if not key:
+        return 0
+    raw = key.encode("utf-8", "replace") if isinstance(key, str) else bytes(key)
+    n = int.from_bytes(hashlib.blake2b(raw, digest_size=4).digest(), "big")
+    return ID_BASE | ((n + salt * ID_SALT_STEP) & ID_MASK)
+
+
+def mint_map(keys) -> "dict[str, int]":
+    """{handle: id} for one window list, colliding handles re-minted in list order.
+
+    A plain comprehension would drop one of a colliding pair and leave that window with no id at all --
+    unlistable and unaddressable. Whoever comes second in the list is re-minted instead, so every window has an
+    id of its own and the id is stable while the pair is."""
+    out: "dict[str, int]" = {}
+    taken: "dict[int, str]" = {}
+    for key in keys:
+        if key in out:
+            continue
+        salt = 0
+        wid = mint_id(key)
+        while wid in taken:
+            salt += 1
+            wid = mint_id(key, salt)
+        out[key] = wid
+        taken[wid] = key
+    return out
 
 
 # the two _NET_WM_STATE names a window manager may take as one operation

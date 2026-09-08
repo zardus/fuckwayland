@@ -1,0 +1,33 @@
+output "Virtual-1" enabled=#true {
+  description make="Red Hat, Inc." model="QEMU Monitor"
+  physical 480 270
+  position 0 0
+  scale 1.00
+  transform "normal"
+  adaptive_sync_support #false
+  adaptive_sync "automatic"
+  xwayland_primary #true
+  modes {
+    mode 1920 1080 60000 current=#true preferred=#true
+  }
+}
+output "Virtual-2" enabled=#true {
+  description make="Red Hat, Inc." model="QEMU Monitor"
+  physical 480 270
+  position 1920 0
+  scale 1.00
+  transform "normal"
+  adaptive_sync_support #false
+  adaptive_sync "automatic"
+  xwayland_primary #false
+  modes {
+    mode 1920 1080 60000 current=#true preferred=#true
+  }
+}
+output "Virtual-3" enabled=#false {
+  description make="Red Hat, Inc." model="QEMU Monitor"
+  physical 0 0
+  modes {
+    mode 1280 1024 60000 current=#false preferred=#true
+  }
+}

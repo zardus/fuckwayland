@@ -58,25 +58,105 @@ MAX_HEADS = 4                     # virtio-vga max_outputs
 #               which sockets `vmctl session`/`vmctl user` look for: wayland|x11)
 #   logind      the Type(s) logind may report for it.  greetd registers sway as a
 #               plain tty session and sway's libseat switches it to wayland.
-#   dm          the display manager unit to look at when the session never comes up
+#   dm          the display manager unit(s) to look at when the session never comes up.
+#               A tuple, because two are possible on one desktop: Fedora 44 replaced
+#               SDDM with plasma-login-manager in every KDE variant [recon2/fedora].
+#               The hint prints every candidate plus display-manager.service, which is
+#               what NixOS drives (its gdm.nix sets systemd.services.gdm.enable = false
+#               and hangs the session off display-manager.service) [recon2/nixos].
 #   compositor  the process that owns the scanout once the desktop is up (DRM debugfs
 #               names it as the allocator of head 0's framebuffer: the first frame)
 #   shell       processes that must be up before a screenshot shows the desktop
 #   splash      a splash screen that must be gone
+# Every process name here is matched with pg() (PAINT_SCRIPT), never `pgrep -x name`:
+# nixpkgs wraps GUI programs and a wrapped foo's /proc/comm is `.foo-wrappe`, truncated
+# at fifteen characters (measured on the live NixOS guest: `.swaybg-wrapped`,
+# `.wdotool-wrappe`) [recon2/nixos].
 DESKTOPS = {
     "gnome": dict(label="GNOME on Wayland (GDM)", session="wayland", logind=("wayland",),
-                  dm="gdm", compositor="gnome-shell", shell=(), splash=None),
+                  dm=("gdm",), compositor="gnome-shell", shell=(), splash=None),
+    # GNOME on Xorg exists on 24.04 (ubuntu-xorg.desktop) and on no later Ubuntu: 26.04
+    # has no xsessions file and no mutter X11 backend at all [recon2/gnome-xorg].  The
+    # paint gate is the same journal line, which mutter emits on startup-complete with
+    # no backend condition (read out of libshell-14.so).
+    "gnome-x11": dict(label="GNOME on Xorg (GDM)", session="x11", logind=("x11",),
+                  dm=("gdm",), compositor="Xorg", shell=("gnome-shell",), splash=None),
     "kde":   dict(label="KDE Plasma on Wayland (SDDM)", session="wayland", logind=("wayland",),
-                  dm="sddm", compositor="kwin_wayland", shell=("plasmashell",), splash="ksplashqml"),
+                  dm=("sddm", "plasmalogin"), compositor="kwin_wayland", shell=("plasmashell",),
+                  splash="ksplashqml"),
     # Same Plasma, same packages, started from /usr/share/xsessions instead: the
     # X server owns the scanout and kwin_x11 is a plain X client on top of it.
     "kde-x11": dict(label="KDE Plasma on X11 (SDDM)", session="x11", logind=("x11",),
-                  dm="sddm", compositor="Xorg", shell=("plasmashell",), splash="ksplashqml"),
+                  dm=("sddm", "plasmalogin"), compositor="Xorg", shell=("plasmashell",),
+                  splash="ksplashqml"),
     "xfce":  dict(label="Xfce on X11 (LightDM)", session="x11", logind=("x11",),
-                  dm="lightdm", compositor="Xorg", shell=("xfce4-panel", "xfdesktop"), splash=None),
+                  dm=("lightdm",), compositor="Xorg", shell=("xfce4-panel", "xfdesktop"), splash=None),
+    # Xfce 4.20's Wayland session is startxfce4 --wayland over labwc, so the scanout
+    # owner is labwc and the panel pair is unchanged [recon2/xfce-wayland].
+    "xfce-wayland": dict(label="Xfce on Wayland, labwc (LightDM)", session="wayland",
+                  logind=("wayland",), dm=("lightdm",), compositor="labwc",
+                  shell=("xfce4-panel", "xfdesktop"), splash=None),
     "sway":  dict(label="sway on Wayland (greetd)", session="wayland", logind=("wayland", "tty"),
-                  dm="greetd", compositor="sway", shell=("swaybar",), splash=None),
+                  dm=("greetd",), compositor="sway", shell=("swaybar",), splash=None),
+    # Capital H: the process name as the kernel sees it, measured in the recon's VM
+    # against `allocated by = Hyprland` on head 0 [recon2/hyprland].  No bar in a
+    # default Hyprland, so there is no shell process to wait for.
+    "hypr":  dict(label="Hyprland on Wayland (greetd)", session="wayland", logind=("wayland", "tty"),
+                  dm=("greetd",), compositor="Hyprland", shell=(), splash=None),
+    # labwc paints nothing at all -- no bar, no wallpaper -- so swaybg is both the
+    # shell process and the reason head 0 is not one flat colour [recon2/labwc].
+    "labwc": dict(label="labwc on Wayland (greetd)", session="wayland", logind=("wayland", "tty"),
+                  dm=("greetd",), compositor="labwc", shell=("swaybg",), splash=None),
+    # wayfire/wf-panel are the direct translation of sway/swaybar; unverified on a real
+    # VM, the first selftest measures them [recon2/wayfire].
+    "wayfire": dict(label="Wayfire on Wayland (greetd)", session="wayland", logind=("wayland", "tty"),
+                  dm=("greetd",), compositor="wayfire", shell=("wf-panel",), splash=None),
+    # A river session has no bar of its own; tinyrwm draws borders only [recon2/river].
+    "river": dict(label="river on Wayland (greetd)", session="wayland", logind=("wayland", "tty"),
+                  dm=("greetd",), compositor="river", shell=(), splash=None),
+    # cosmic-comp is a DRM compositor, so scanout_owner() is exactly right -- but
+    # whether it paints on virtio-vga with no 3D is unmeasured (pop-os/cosmic-comp#136
+    # reports a blank screen on virtio; the recon ran it nested on llvmpipe and it
+    # painted).  The first fedora44-cosmic build decides [recon2/cosmic].
+    "cosmic": dict(label="COSMIC on Wayland (greetd)", session="wayland", logind=("wayland", "tty"),
+                  dm=("greetd",), compositor="cosmic-comp", shell=("cosmic-panel",), splash=None),
+    # budgie-desktop's session runs labwc; SDDM registers the seat session, so logind
+    # says wayland from the start and never tty [recon2/budgie].
+    "budgie": dict(label="Budgie on Wayland, labwc (SDDM)", session="wayland", logind=("wayland",),
+                  dm=("sddm",), compositor="labwc", shell=("budgie-panel",), splash=None),
+    # Measured in a live Lubuntu session: crtc-0's framebuffer is `allocated by = Xorg`
+    # and lxqt-panel, pcmanfm-qt and openbox are all up [recon2/openbox].
+    "lxqt":  dict(label="LXQt on X11, Openbox (SDDM)", session="x11", logind=("x11",),
+                  dm=("sddm",), compositor="Xorg", shell=("lxqt-panel", "pcmanfm-qt"), splash=None),
+    "lxqt-wayland": dict(label="LXQt on Wayland, labwc (SDDM)", session="wayland", logind=("wayland",),
+                  dm=("sddm",), compositor="labwc", shell=("lxqt-panel",), splash=None),
+    # Cinnamon's panel is in-process, so on X11 the shell process is `cinnamon` itself
+    # and on Wayland the compositor and the shell are the same process -- the
+    # "shells are up" half of the paint wait collapses into the scanout check
+    # [recon2/cinnamon].
+    "cinnamon": dict(label="Cinnamon on X11 (LightDM)", session="x11", logind=("x11",),
+                  dm=("lightdm",), compositor="Xorg", shell=("cinnamon",), splash=None),
+    "cinnamon-wayland": dict(label="Cinnamon on Wayland (LightDM)", session="wayland",
+                  logind=("wayland",), dm=("lightdm",), compositor="cinnamon", shell=(), splash=None),
+    # caja draws the desktop and the wallpaper, as xfdesktop does for Xfce; mate-panel's
+    # strut was measured moving _NET_WORKAREA to 0,28 1920x1024 [recon2/mate].
+    "mate":  dict(label="MATE on X11 (LightDM)", session="x11", logind=("x11",),
+                  dm=("lightdm",), compositor="Xorg", shell=("mate-panel", "caja"), splash=None),
+    # i3's root window is solid black, so the flavor paints a checkerboard with
+    # xsetroot; i3bar is the shell process [recon2/i3].
+    "i3":    dict(label="i3 on X11 (LightDM)", session="x11", logind=("x11",),
+                  dm=("lightdm",), compositor="Xorg", shell=("i3bar",), splash=None),
 }
+
+
+def dm_units(desktop):
+    """The display-manager units to name in the "the session never came up" hint.
+
+    Every candidate of the DESKTOPS row plus display-manager.service, which is the
+    unit NixOS drives and the alias every distribution's DM carries."""
+    return tuple(DESKTOPS[desktop]["dm"]) + ("display-manager",)
+
+
 DEFAULT_HEAD = "1920x1080"        # size of heads 0..N-1 for `start --heads N` (override: --head-size)
 GPU = "gpu0"
 BUS_NAME = "org.qemu"             # what QEMU 8.2's dbus display owns (not org.qemu.Display1)
@@ -507,16 +587,75 @@ def flavor_file(flavor):
     return f
 
 
+def flavor_header(flavor, key):
+    """A `# vmctl-<key>: <value>` header of the flavor yaml, or None.
+
+    One idiom for every header, shared verbatim with vm/selftest.sh,
+    vm/live-smoke.sh and scripts/ci-golden.sh, which read the same lines with
+    `sed -n 's/^#[[:space:]]*vmctl-<key>:...`."""
+    m = re.search(rf"^#\s*vmctl-{key}:\s*(\S+)", flavor_file(flavor).read_text(), re.M)
+    return m[1] if m else None
+
+
 def flavor_iso(flavor):
     """The flavor's `# vmctl-iso: <image.iso>` header, or None for a cloud-image flavor."""
-    m = re.search(r"^#\s*vmctl-iso:\s*(\S+)", flavor_file(flavor).read_text(), re.M)
-    return m[1] if m else None
+    return flavor_header(flavor, "iso")
+
+
+def flavor_nix(flavor):
+    """The flavor's `# vmctl-nix: <nixosConfigurations attr>` header, or None.
+
+    A third build kind beside -base and -iso: NixOS publishes no cloud image at all
+    (the 26.05 release directory carries two ISOs and nothing else), so the image is
+    built from `config.system.build.images.qemu` [recon2/nixos]."""
+    return flavor_header(flavor, "nix")
+
+
+DISTROS = ("ubuntu", "fedora", "arch", "nixos")
+
+
+def flavor_distro(flavor):
+    """The flavor's `# vmctl-distro:` header (default ubuntu).
+
+    What the HOST side needs: which package-list shape to expect, which host to wait
+    for, which display-manager unit the hint names.  The guest never reads it -- the
+    embedded build script derives the manager from /etc/os-release ID -- so the yaml
+    cannot lie to the guest about what it is."""
+    d = flavor_header(flavor, "distro") or "ubuntu"
+    if d not in DISTROS:
+        raise Fail(f"{flavor_file(flavor)}: unknown '# vmctl-distro: {d}' (want {'|'.join(DISTROS)})")
+    return d
+
+
+def flavor_ci(flavor):
+    """The flavor's `# vmctl-ci: push|on-demand` header (default push), read by CI's
+    plan job to split the matrix."""
+    c = flavor_header(flavor, "ci") or "push"
+    if c not in ("push", "on-demand"):
+        raise Fail(f"{flavor_file(flavor)}: unknown '# vmctl-ci: {c}' (want push|on-demand)")
+    return c
+
+
+def flavor_base_sha256(flavor):
+    """The flavor's `# vmctl-base-sha256:` header, or None: what scripts/ci-golden.sh
+    checks a downloaded base image against."""
+    h = flavor_header(flavor, "base-sha256")
+    if h is not None and not re.fullmatch(r"[0-9a-f]{64}", h):
+        raise Fail(f"{flavor_file(flavor)}: '# vmctl-base-sha256: {h}' is not 64 hex digits")
+    return h
 
 
 def flavor_base(flavor):
     text = flavor_file(flavor).read_text()
     m = re.search(r"^#\s*vmctl-base:\s*(\S+)", text, re.M)
     if not m:
+        if flavor_nix(flavor):
+            # NixOS is not "a cloud image plus a metapackage": the image is a build
+            # product of the flavor's own module, root key baked in, and the cloud-init
+            # seed is ignored entirely [recon2/nixos].
+            raise Fail(f"{flavor} is a NixOS flavor (built from the nixosConfigurations attr "
+                       f"{flavor_nix(flavor)}, not from a cloud image): build it with "
+                       f"vm/build-nixos-golden.sh {flavor}")
         if flavor_iso(flavor):
             # An ISO flavor is not built from a cloud image at all: the real Ubuntu
             # desktop installer installs it off the release ISO (see vm/README.md).
@@ -533,10 +672,8 @@ def flavor_base(flavor):
 
 
 def flavor_desktop(flavor):
-    """The flavor's `# vmctl-desktop: gnome|kde|kde-x11|xfce|sway` header (default gnome)."""
-    text = flavor_file(flavor).read_text()
-    m = re.search(r"^#\s*vmctl-desktop:\s*(\S+)", text, re.M)
-    d = m[1] if m else "gnome"
+    """The flavor's `# vmctl-desktop:` header (default gnome); one of DESKTOPS' keys."""
+    d = flavor_header(flavor, "desktop") or "gnome"
     if d not in DESKTOPS:
         raise Fail(f"{flavor_file(flavor)}: unknown '# vmctl-desktop: {d}' (want {'|'.join(DESKTOPS)})")
     return d
@@ -627,7 +764,11 @@ def cmd_build(a):
         if "VMCTL-BUILD-OK" not in text:
             raise Fail(f"build {flavor}: no VMCTL-BUILD-OK marker in {serial}; tail:\n{tail_file(serial, 40)}")
         m = re.search(r"VMCTL-PACKAGES-BEGIN\n(.*?)\nVMCTL-PACKAGES-END", text, re.S)
-        pkgs = [l for l in (m[1].splitlines() if m else []) if re.fullmatch(r"[a-z0-9][a-z0-9+.:-]*", l)]
+        # Fedora's names carry uppercase (NetworkManager, ModemManager) and Arch's an
+        # underscore, so the name regex is not Debian's any more; the guest has already
+        # normalised pacman's "name version" to names (pkg_manifest) [recon2/pkg-rpm].
+        pkgs = [l for l in (m[1].splitlines() if m else [])
+                if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9+._:-]*", l)]
         pkgs = sorted(set(pkgs))
         n = re.search(r"vmctl-build: (\d+) packages installed", text)
         if len(pkgs) < 200 or not n or int(n[1]) != len(pkgs):
@@ -838,6 +979,25 @@ def cmd_destroy(a):
     log(f"{inst.name}: destroyed ({inst.dir})")
 
 
+def cmd_flavors(a):
+    """Every vm/flavors/*.yaml with the headers that decide how it is built.
+
+    The build kind is the header that is there: `# vmctl-base:` (a cloud image and
+    `vmctl build`), `# vmctl-iso:` (vm/build-iso-golden.sh) or `# vmctl-nix:`
+    (vm/build-nixos-golden.sh)."""
+    rows = []
+    for f in sorted(FLAVORS.glob("*.yaml")):
+        name = f.stem
+        kind = ("nix:" + flavor_nix(name) if flavor_nix(name)
+                else "iso:" + flavor_iso(name) if flavor_iso(name)
+                else "base:" + (flavor_header(name, "base") or "?"))
+        rows.append((name, flavor_distro(name), flavor_desktop(name), flavor_ci(name), kind))
+    hdr = ("FLAVOR", "DISTRO", "DESKTOP", "CI", "BUILT FROM")
+    widths = [max(len(r[i]) for r in rows + [hdr]) for i in range(len(hdr))]
+    for r in [hdr] + rows:
+        print("  ".join(c.ljust(w) for c, w in zip(r, widths)).rstrip())
+
+
 def cmd_list(a):
     rows = []
     for meta in sorted(INSTANCES.glob("*/meta.json")):
@@ -1030,6 +1190,12 @@ SESSION_SCRIPT = r"""
 RT=/run/user/1000
 wl=$(find $RT -maxdepth 1 -type s -name 'wayland-[0-9]*' 2>/dev/null | sort | head -1); wl=${wl##*/}
 sw=$(find $RT -maxdepth 1 -type s -name 'sway-ipc.*.sock' 2>/dev/null | head -1)
+# Hyprland's socket is one level down, under the instance signature; Wayfire's is
+# wayfire-<display>-<pid>.socket next to wayland-N (the measured name
+# /tmp/wfrt1/wayfire-wayland-1-.socket has an empty pid field, so the glob and not
+# the shape is what finds it) [recon2/hyprland, recon2/wayfire].
+hy=$(find $RT/hypr -maxdepth 2 -type s -name '.socket.sock' 2>/dev/null | head -1)
+wf=$(find $RT -maxdepth 1 -type s -name 'wayfire-*.socket' 2>/dev/null | head -1)
 x0=no; [ -S /tmp/.X11-unix/X0 ] && x0=yes
 for s in $(loginctl list-sessions --no-legend 2>/dev/null | awk '{print $1}'); do
   unset S_Name S_Type S_State S_Class S_Seat S_Display
@@ -1041,17 +1207,24 @@ for s in $(loginctl list-sessions --no-legend 2>/dev/null | awk '{print $1}'); d
     wayland)
       [ -n "$wl" ] || ok=no
       case "$DESKTOP" in
-        # greetd registers a tty session; sway's libseat turns it into a wayland one
-        # and sway is up once its IPC socket exists
+        # greetd registers a tty session; the compositor's libseat turns it into a
+        # wayland one.  sway, Hyprland and Wayfire are up once their IPC socket
+        # exists; labwc and the desktops on it have no IPC socket at all -- the
+        # package is labwc, labnag and lab-sensible-terminal and nothing else
+        # [recon2/labwc] -- so for them wayland-N alone is the signal.
         sway) { [ "$S_Type" = wayland ] || [ "$S_Type" = tty ]; } && [ -n "$sw" ] || ok=no ;;
+        hypr) { [ "$S_Type" = wayland ] || [ "$S_Type" = tty ]; } && [ -n "$hy" ] || ok=no ;;
+        wayfire) { [ "$S_Type" = wayland ] || [ "$S_Type" = tty ]; } && [ -n "$wf" ] || ok=no ;;
+        labwc|river|cosmic) { [ "$S_Type" = wayland ] || [ "$S_Type" = tty ]; } || ok=no ;;
         *)    [ "$S_Type" = wayland ] || ok=no ;;
       esac
-      [ $ok = yes ] && { echo "OK $s WAYLAND_DISPLAY=$wl${sw:+ SWAYSOCK=$sw}"; exit 0; } ;;
+      [ $ok = yes ] && { echo "OK $s WAYLAND_DISPLAY=$wl${sw:+ SWAYSOCK=$sw}${wf:+ WAYFIRE_SOCKET=$wf}"; exit 0; } ;;
     x11)
       [ "$S_Type" = x11 ] && [ $x0 = yes ] || ok=no
       [ $ok = yes ] && { echo "OK $s DISPLAY=${S_Display:-:0}"; exit 0; } ;;
   esac
-  echo "PARTIAL session=$s type=$S_Type state=$S_State class=$S_Class wayland=${wl:-none} X0=$x0${sw:+ swaysock=yes}"
+  ipc="${sw:+ swaysock=yes}${hy:+ hyprsock=yes}${wf:+ wayfiresock=yes}"
+  echo "PARTIAL session=$s type=$S_Type state=$S_State class=$S_Class wayland=${wl:-none} X0=$x0$ipc"
 done
 echo "WAIT"
 """
@@ -1064,8 +1237,22 @@ PAINT_SCRIPT = r"""
 # screenshot taken right away still shows the kernel console.  Verdicts:
 # PAINTED, WAIT <why>, or UNKNOWN (nothing in the guest to go by: the caller
 # then watches head 0's screendump for a change).
+pg() {   # pgrep -x, plus the name nixpkgs' wrapper leaves in /proc/comm
+  # A wrapped GUI program's comm is `.NAME-wrapped` truncated to fifteen characters:
+  # measured on the live NixOS guest as `.swaybg-wrapped` (exactly fifteen) and
+  # `.wdotool-wrappe`, while sway's own comm stays `sway` because its wrapper execs the
+  # unwrapped binary [recon2/nixos].  The truncation is BUILT here rather than guessed
+  # at with a `-wr.*` suffix: for a 12- or 13-character name -- kwin_wayland,
+  # budgie-panel, cosmic-panel, mate-session, lxqt-session, every one of them a shell=
+  # or compositor= of some DESKTOPS row -- fifteen characters leave no `-wr` at all
+  # (`.kwin_wayland-w`), and a suffix pattern matched none of them.  `.` plus the first
+  # fourteen characters of "NAME-wrapped" IS the fifteen-character comm.  pgrep -x
+  # takes an ERE and matches it whole, so one pattern covers wrapped and unwrapped, and
+  # `.sway-wrapped` still does not match `.swaybg-wrapped`.
+  pgrep -x "$1|\.$(printf '%.14s' "$1-wrapped")" >/dev/null 2>&1
+}
 painted_gnome() {   # GNOME logs a line once its UI is up
-  pgrep -x gnome-shell >/dev/null 2>&1 || return 1
+  pg gnome-shell || return 1
   journalctl -b --no-pager -o cat _COMM=gnome-shell 2>/dev/null | grep -q "GNOME Shell started"
 }
 scanout_owner() {   # who allocated the framebuffer scanned out on head 0 (crtc-0), per DRM debugfs
@@ -1075,17 +1262,20 @@ scanout_owner() {   # who allocated the framebuffer scanned out on head 0 (crtc-
        /allocated by = / && crtc == "crtc=crtc-0" && fb != "fb=0" { sub(/.*allocated by = /, ""); print; exit }' \
       /sys/kernel/debug/dri/0/state 2>/dev/null
 }
-if [ "$DESKTOP" = gnome ]; then
-  painted_gnome && echo PAINTED || echo "WAIT gnome-shell"; exit 0
-fi
+# Both GNOME sessions: mutter emits the line on startup-complete with no backend
+# condition, guarded only against the gdm and initial-setup session modes (read out of
+# libshell-14.so), so it is the paint gate on Xorg too [recon2/gnome-xorg].
+case "$DESKTOP" in gnome|gnome-x11)
+  painted_gnome && echo PAINTED || echo "WAIT gnome-shell"; exit 0 ;;
+esac
 [ -n "$COMP" ] || { echo UNKNOWN; exit 0; }
 owner=$(scanout_owner)
 [ -n "$owner" ] || { echo UNKNOWN; exit 0; }
 # the kernel console's framebuffer belongs to whoever loaded the driver; the
 # compositor's (or a render thread of it) carries its name
 case "$owner" in "$COMP"*) ;; *) echo "WAIT scanout=$owner"; exit 0 ;; esac
-for p in $SHELLS; do pgrep -x "$p" >/dev/null 2>&1 || { echo "WAIT no $p"; exit 0; }; done
-if [ -n "$SPLASH" ] && pgrep -x "$SPLASH" >/dev/null 2>&1; then echo "WAIT $SPLASH"; exit 0; fi
+for p in $SHELLS; do pg "$p" || { echo "WAIT no $p"; exit 0; }; done
+if [ -n "$SPLASH" ] && pg "$SPLASH"; then echo "WAIT $SPLASH"; exit 0; fi
 echo PAINTED
 """
 
@@ -1224,7 +1414,10 @@ def cmd_session(a):
             found = dict(w.split("=", 1) for w in words[2:] if "=" in w)
             print(f"SESSION_ID={sid}")
             print("XDG_RUNTIME_DIR=/run/user/1000")
-            for k in ("WAYLAND_DISPLAY", "DISPLAY", "SWAYSOCK"):
+            # $hy is a readiness signal only: Hyprland exports the variable that names
+            # its socket (HYPRLAND_INSTANCE_SIGNATURE) into the systemd user manager
+            # itself, which is where USER_WRAPPER picks it up [recon2/hyprland].
+            for k in ("WAYLAND_DISPLAY", "DISPLAY", "SWAYSOCK", "WAYFIRE_SOCKET"):
                 if k in found:
                     print(f"{k}={found[k]}")
             print("DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus")
@@ -1242,8 +1435,9 @@ def cmd_session(a):
             log(f"{inst.name}: waiting for the {kind} session of user test ({desktop}): {state}")
             last = state
         if time.monotonic() - t0 > a.timeout:
+            units = " ".join(f"-u {u}" for u in dm_units(desktop))
             raise Fail(f"{inst.name}: no active {kind} session for user test within {a.timeout}s "
-                       f"(last: {state}); check `vmctl ssh {inst.name} -- journalctl -b -u {DESKTOPS[desktop]['dm']}`")
+                       f"(last: {state}); check `vmctl ssh {inst.name} -- journalctl -b {units}`")
         time.sleep(3)
 
 
@@ -1257,7 +1451,9 @@ USER_WRAPPER = r"""
 imp() {   # import plain-valued session variables from "K=V" words, never overriding
   for kv in "$@"; do
     case "$kv" in
-      XAUTHORITY=*|DISPLAY=*|WAYLAND_DISPLAY=*|SWAYSOCK=*|XDG_CURRENT_DESKTOP=*|XDG_SESSION_DESKTOP=*|DESKTOP_SESSION=*|XDG_SESSION_ID=*|XDG_SESSION_TYPE=*)
+      XAUTHORITY=*|DISPLAY=*|WAYLAND_DISPLAY=*|SWAYSOCK=*|I3SOCK=*|\
+      HYPRLAND_INSTANCE_SIGNATURE=*|WAYFIRE_SOCKET=*|XDG_CURRENT_DESKTOP=*|\
+      XDG_SESSION_DESKTOP=*|DESKTOP_SESSION=*|XDG_SESSION_ID=*|XDG_SESSION_TYPE=*)
         k=${kv%%=*}
         eval "have=\${$k:-}"
         [ -n "$have" ] && continue
@@ -1265,9 +1461,29 @@ imp() {   # import plain-valued session variables from "K=V" words, never overri
     esac
   done
 }
+# Hyprland is the measured reason the user manager is asked FIRST: its own
+# /proc/<pid>/environ carries XDG_SESSION_TYPE=tty and neither WAYLAND_DISPLAY nor the
+# instance signature, while `systemctl --user show-environment` carries both, because
+# Hyprland exports them itself [recon2/hyprland, recon2/arch].
 imp $(systemctl --user show-environment 2>/dev/null)
-case "$VMCTL_DESKTOP" in kde) comp=kwin_wayland ;; kde-x11) comp=kwin_x11 ;; xfce) comp=xfce4-session ;; sway) comp=sway ;; *) comp=gnome-shell ;; esac
-p=$(pgrep -u "$(id -u)" -x "$comp" 2>/dev/null | head -1)
+pg() {   # the pids of $1, wrapped or not (nixpkgs' comm is `.NAME-wrapped` cut to
+  # fifteen characters [recon2/nixos]); the pattern is PAINT_SCRIPT's pg(), scoped to
+  # this user.  `printf '%.14s'` and not a `-wr.*` suffix: see the comment there.
+  pgrep -u "$(id -u)" -x "$1|\.$(printf '%.14s' "$1-wrapped")" 2>/dev/null
+}
+# The session leader whose environ carries the session variables.  Not always the
+# compositor: on the Wayland Xfce/LXQt sessions labwc is the compositor and
+# xfce4-session/lxqt-session is what holds DISPLAY and XDG_CURRENT_DESKTOP.
+case "$VMCTL_DESKTOP" in
+  kde) comp=kwin_wayland ;; kde-x11) comp=kwin_x11 ;;
+  xfce|xfce-wayland) comp=xfce4-session ;;
+  lxqt|lxqt-wayland) comp=lxqt-session ;;
+  sway) comp=sway ;; hypr) comp=Hyprland ;; wayfire) comp=wayfire ;; river) comp=river ;;
+  cosmic) comp=cosmic-comp ;; labwc|budgie) comp=labwc ;;
+  cinnamon|cinnamon-wayland) comp=cinnamon ;; mate) comp=mate-session ;; i3) comp=i3 ;;
+  *) comp=gnome-shell ;;
+esac
+p=$(pg "$comp" | head -1)
 # 2> before < : a kwin_wayland that carries file capabilities has an environ
 # only root may read, and the shell's own "Permission denied" would go to the
 # caller's stderr if the redirection of fd 2 came second.
@@ -1281,12 +1497,41 @@ if [ "$VMCTL_DESKTOP" = sway ] && [ -z "$SWAYSOCK" ]; then
   s=$(find "$RT" -maxdepth 1 -type s -name 'sway-ipc.*.sock' 2>/dev/null | head -1)
   [ -n "$s" ] && export SWAYSOCK=$s
 fi
+if [ "$VMCTL_DESKTOP" = wayfire ] && [ -z "$WAYFIRE_SOCKET" ]; then
+  s=$(find "$RT" -maxdepth 1 -type s -name 'wayfire-*.socket' 2>/dev/null | head -1)
+  [ -n "$s" ] && export WAYFIRE_SOCKET=$s
+fi
 [ -z "$DISPLAY" ] && [ -S /tmp/.X11-unix/X0 ] && export DISPLAY=:0
+# The SWAYSOCK line's mirror image for i3, which puts its socket at
+# $XDG_RUNTIME_DIR/i3/ipc-socket.<pid> or /tmp/i3-<user>.XXXX/ipc-socket.<pid> and
+# exports nothing [recon2/i3]; `i3 --get-socketpath` is i3's own answer -- and it
+# reads the I3_SOCKET_PATH root-window atom, so it needs DISPLAY, which is why it comes
+# AFTER the DISPLAY default above and not before it.  The find is only the fallback.
+if [ "$VMCTL_DESKTOP" = i3 ] && [ -z "$I3SOCK" ]; then
+  s=$(i3 --get-socketpath 2>/dev/null)
+  [ -S "$s" ] || s=$(find "$RT/i3" -maxdepth 1 -type s -name 'ipc-socket.*' 2>/dev/null | head -1)
+  [ -n "$s" ] && [ -S "$s" ] && export I3SOCK=$s
+fi
 # LightDM (user-authority-in-system-dir=false) and SDDM both write the X cookie to ~/.Xauthority
 [ -z "$XAUTHORITY" ] && [ "$VMCTL_SESSION" = x11 ] && [ -f "$HOME/.Xauthority" ] && export XAUTHORITY=$HOME/.Xauthority
 if [ -z "$XDG_CURRENT_DESKTOP" ]; then
-  case "$VMCTL_DESKTOP" in kde|kde-x11) export XDG_CURRENT_DESKTOP=KDE ;; xfce) export XDG_CURRENT_DESKTOP=XFCE ;;
-    sway) export XDG_CURRENT_DESKTOP=sway ;; gnome) export XDG_CURRENT_DESKTOP=ubuntu:GNOME ;; esac
+  # river is deliberately absent: it has no XDG_CURRENT_DESKTOP convention of its own,
+  # and inventing one here would put a name in the environment no river session sets.
+  case "$VMCTL_DESKTOP" in
+    kde|kde-x11) export XDG_CURRENT_DESKTOP=KDE ;;
+    xfce|xfce-wayland) export XDG_CURRENT_DESKTOP=XFCE ;;
+    lxqt|lxqt-wayland) export XDG_CURRENT_DESKTOP=LXQt ;;
+    sway) export XDG_CURRENT_DESKTOP=sway ;;
+    hypr) export XDG_CURRENT_DESKTOP=Hyprland ;;
+    wayfire) export XDG_CURRENT_DESKTOP=wayfire ;;
+    labwc) export XDG_CURRENT_DESKTOP=labwc:wlroots ;;
+    cosmic) export XDG_CURRENT_DESKTOP=COSMIC ;;
+    budgie) export XDG_CURRENT_DESKTOP=Budgie ;;
+    cinnamon|cinnamon-wayland) export XDG_CURRENT_DESKTOP=X-Cinnamon ;;
+    mate) export XDG_CURRENT_DESKTOP=MATE ;;
+    i3) export XDG_CURRENT_DESKTOP=i3 ;;
+    gnome|gnome-x11) export XDG_CURRENT_DESKTOP=ubuntu:GNOME ;;
+  esac
 fi
 # XDG_SESSION_ID is not in the user manager's environment: logind's "display"
 # session of the user (the graphical one), else the user's session on a seat.
@@ -1391,6 +1636,9 @@ def main(argv=None):
     p.set_defaults(fn=cmd_destroy)
 
     sub.add_parser("list", help="list instances").set_defaults(fn=cmd_list)
+
+    sub.add_parser("flavors", help="list vm/flavors/*.yaml with their distro, desktop and build kind"
+                   ).set_defaults(fn=cmd_flavors)
 
     p = sub.add_parser("status", help="show one instance, including QEMU's console sizes")
     p.add_argument("name")

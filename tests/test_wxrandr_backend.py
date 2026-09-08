@@ -12,6 +12,7 @@ import contextlib
 import io
 import os
 import shutil
+import socket
 import stat
 import sys
 import tempfile
@@ -19,6 +20,9 @@ import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
+# and the tests directory, so `import support` / `import wl_fake` resolve under
+# every invocation form (SuiteGuard in tests/test_passthrough.py).
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # The suite never hands a tool over to the real X11 one: see
 # tests/conftest.py (which covers pytest) and tests/test_passthrough.py.
@@ -26,24 +30,33 @@ sys.path.insert(0, ROOT)
 # not loaded, and it reaches every subprocess a test spawns.
 os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
 
-from fwcommon import passthrough
+from fwcommon import dbus_mini, distro, passthrough, session
+import wl_fake
+from support import env as support_env
+from test_dbus_mini import MockBus
 from wxrandr import cli
 
 #: a GNOME session, as the probes would find it
 GNOME = {
     "sway": (False, "no sway or i3 IPC socket ($SWAYSOCK)"),
+    "hypr": (False, "no Hyprland IPC socket ($HYPRLAND_INSTANCE_SIGNATURE)"),
     "kwin": (False, "the compositor does not advertise "
                     "kde_output_management_v2"),
     "mutter": (True, "org.gnome.Mutter.DisplayConfig on the session bus"),
+    "cinnamon": (False, "org.cinnamon.Muffin.DisplayConfig is not on the "
+                        "session bus"),
     "wlr": (False, "the compositor does not advertise "
                    "zwlr_output_manager_v1"),
     "x11": (True, "/usr/bin/xrandr"),
 }
-COMPOSITOR = {"sway": "sway 1.9", "kwin": "KWin", "mutter": "Mutter",
-              "wlr": "wlroots", "x11": "X server (RandR)"}
+COMPOSITOR = {"sway": "sway 1.9", "hypr": "Hyprland 0.53.3", "kwin": "KWin",
+              "mutter": "Mutter", "cinnamon": "Muffin", "wlr": "wlroots",
+              "x11": "X server (RandR)"}
 PROTOCOL = {"sway": "sway IPC (i3-ipc)",
+            "hypr": "Hyprland IPC (hyprctl)",
             "kwin": "kde_output_management_v2 version 12",
             "mutter": "org.gnome.Mutter.DisplayConfig (D-Bus)",
+            "cinnamon": "org.cinnamon.Muffin.DisplayConfig (D-Bus)",
             "wlr": "zwlr_output_manager_v1 version 4"}
 
 
@@ -101,10 +114,41 @@ class Names(unittest.TestCase):
                                ("sway", "sway"), ("WLR", "wlr"),
                                (" mutter ", "mutter"), ("gnome", "mutter"),
                                ("GNOME", "mutter"), ("kde", "kwin"),
-                               ("kwin", "kwin")):
+                               ("kwin", "kwin"),
+                               # the two the second design adds, and the name
+                               # each desktop's own users would type first
+                               ("hypr", "hypr"), ("hyprland", "hypr"),
+                               ("HYPRLAND", "hypr"), (" cinnamon ", "cinnamon"),
+                               ("muffin", "cinnamon"), ("Muffin", "cinnamon")):
             self.assertEqual(cli.canonical_backend(spelling), want, spelling)
-        for bad in ("", None, "wayland", "xrandr", "wlroots", "sway2"):
+        for bad in ("", None, "wayland", "xrandr", "wlroots", "sway2",
+                    "wayfire", "cosmic"):
             self.assertIsNone(cli.canonical_backend(bad), bad)
+
+    def test_the_wayland_names_are_the_display_side_ones_only(self):
+        """wdotool's `--backend` set and this one are not the same list and must not be made to look like it:
+        Wayfire's IPC publishes no modes and no physical size, so it gets a window backend and no display one
+        [M recon2/wayfire.md §3.4], and COSMIC's displays go over plain wlr-output-management, which the
+        `wlr` token already names [M recon2/cosmic.md §3].
+
+        Read off wdotool's own table rather than a second copy of this one, so that adding a backend on one
+        side and forgetting the other is what fails here."""
+        from wdotool import backend_detect
+        # wdotool spells Mutter's backend `gnome` and KWin's `kwin`; both are names this side accepts too, so
+        # the comparison is on canonical tokens and the two that stay unknown here are the finding.
+        window_side = {cli.canonical_backend(n) or n
+                       for n in set(backend_detect._MAKERS) - {"i3"}}   # i3 is an alias of sway
+        display_side = set(cli.WAYLAND_BACKENDS)
+        self.assertEqual(sorted(window_side - display_side), ["cosmic", "wayfire"])
+        self.assertEqual(sorted(display_side - window_side), [])
+        for name in display_side:
+            self.assertEqual(cli.canonical_backend(name), name, name)
+            self.assertNotEqual(cli.probe_backend(name, {}).reason, "unknown backend", name)
+        # the three tables are three views of one list: the flag's, the detection order's, and what is left
+        self.assertEqual(cli.BACKEND_NAMES, ("auto", "x11") + cli.WAYLAND_BACKENDS)
+        self.assertEqual(sorted(cli.AUTO_ORDER) + [cli.AUTO_FALLBACK],
+                         sorted(display_side - {cli.AUTO_FALLBACK}) + [cli.AUTO_FALLBACK])
+        self.assertNotIn(cli.AUTO_FALLBACK, cli.AUTO_ORDER)   # it is what is left, never probed for it
 
     def test_the_options_are_not_in_xrandrs_usage(self):
         """A byte-parity clone may only add options the real one has none
@@ -275,19 +319,47 @@ class Precedence(Stubbed):
         self.assertEqual(cli.resolve_backend("mutter")[0], "mutter")
         self.assertEqual(cli.resolve_backend("auto")[0], "x11")
 
-    def test_detection_order_is_unchanged(self):
+    def test_the_detection_order(self):
+        """sway, then Hyprland, then the two bus protocols, then Muffin's copy of Mutter's -- and wlr as what
+        is left, never probed for the decision.
+
+        hypr is second because the wlr path is honest for reading a Hyprland layout and cannot apply one: the
+        second apply of a session times out at 10 s with nothing changed, identically for `wlr-randr`, and
+        with a second output present even the first one hangs [M recon2/hyprland.md §4]. Detection stops at
+        the first available backend, so a probe below the answer is never even asked -- which is what keeps a
+        Hyprland session from paying a KWin bus round trip."""
         name, _p = cli.detect_wayland()
         self.assertEqual(name, "mutter")
-        self.assertEqual(self.probe.calls, ["sway", "kwin", "mutter"])
+        self.assertEqual(self.probe.calls, ["sway", "hypr", "kwin", "mutter"])
         self.probe.calls = []
         self.probe.table["sway"] = (True, "IPC socket /run/sway.sock")
         self.assertEqual(cli.detect_wayland()[0], "sway")
         self.assertEqual(self.probe.calls, ["sway"])
         self.probe.calls = []
-        self.probe.table["kwin"] = (True, "kde_output_management_v2 version 12")
         self.probe.table["sway"] = (False, "no sway or i3 IPC socket")
+        self.probe.table["hypr"] = (True, "IPC socket /run/user/1000/hypr/x/.socket.sock")
+        self.assertEqual(cli.detect_wayland()[0], "hypr")
+        self.assertEqual(self.probe.calls, ["sway", "hypr"])
+        self.probe.calls = []
+        self.probe.table["hypr"] = (False, "no Hyprland IPC socket")
+        self.probe.table["kwin"] = (True, "kde_output_management_v2 version 12")
         self.assertEqual(cli.detect_wayland()[0], "kwin")
-        self.assertEqual(self.probe.calls, ["sway", "kwin"])
+        self.assertEqual(self.probe.calls, ["sway", "hypr", "kwin"])
+        self.probe.calls = []
+        self.probe.table["kwin"] = (False, "no kde_output_management_v2")
+        self.probe.table["mutter"] = (False, "no session bus")
+        self.probe.table["cinnamon"] = (True, "org.cinnamon.Muffin.DisplayConfig on the session bus")
+        self.assertEqual(cli.detect_wayland()[0], "cinnamon")
+        self.assertEqual(self.probe.calls, ["sway", "hypr", "kwin", "mutter", "cinnamon"])
+
+    def test_a_hypr_session_never_asks_the_bus(self):
+        """The probe order is also a cost: `hypr` above the two D-Bus probes means a Hyprland box pays one
+        socket stat and no bus connection at all. Hyprland owns neither bus name [M recon2/hyprland.md §2], so
+        putting it below them would have been a round trip that can only ever answer no."""
+        self.probe.table["hypr"] = (True, "IPC socket /run/user/1000/hypr/x/.socket.sock")
+        self.assertEqual(cli.detect_wayland()[0], "hypr")
+        self.assertNotIn("kwin", self.probe.calls)
+        self.assertNotIn("mutter", self.probe.calls)
 
     def test_wlr_is_the_fallback_and_is_not_probed_for_it(self):
         self.probe.table["mutter"] = (False, "no session bus")
@@ -362,20 +434,45 @@ class Info(Stubbed):
         code, out, err = self.run_cli("--backends")
         self.assertEqual((code, err), (0, ""))
         self.assertEqual(out,
-                         "  sway    unavailable  no sway or i3 IPC socket "
+                         "  sway      unavailable  no sway or i3 IPC socket "
                          "($SWAYSOCK)\n"
-                         "  kwin    unavailable  the compositor does not "
+                         "  hypr      unavailable  no Hyprland IPC socket "
+                         "($HYPRLAND_INSTANCE_SIGNATURE)\n"
+                         "  kwin      unavailable  the compositor does not "
                          "advertise kde_output_management_v2\n"
-                         "* mutter  available    "
+                         "* mutter    available    "
                          "org.gnome.Mutter.DisplayConfig on the session bus\n"
-                         "  wlr     unavailable  the compositor does not "
+                         "  cinnamon  unavailable  org.cinnamon.Muffin."
+                         "DisplayConfig is not on the session bus\n"
+                         "  wlr       unavailable  the compositor does not "
                          "advertise zwlr_output_manager_v1\n"
-                         "  x11     available    /usr/bin/xrandr\n")
+                         "  x11       available    /usr/bin/xrandr\n")
+
+    def test_the_table_is_one_column_grid(self):
+        """`cinnamon` is the longest token `--backend` takes; a name column narrower than that puts one row's
+        state and reason out of line with every other's."""
+        code, out, _err = self.run_cli("--backends")
+        self.assertEqual(code, 0)
+        starts = {ln.index("available") if "unavailable" not in ln
+                  else ln.index("unavailable") for ln in out.splitlines()}
+        self.assertEqual(len(starts), 1, out)
+
+    def test_every_backend_the_flag_takes_has_a_row(self):
+        """`--backends` is the answer to "why did it not pick the one I wanted", so a name `--backend` accepts
+        and this table never mentions is a name with no explanation attached to it."""
+        code, out, _err = self.run_cli("--backends")
+        self.assertEqual(code, 0)
+        # the row is "  name  state  reason", with `*` in column 0 on the one
+        # auto would pick; the order is the detection order, not the flag's
+        rows = [ln[2:].split()[0] for ln in out.splitlines()]
+        self.assertEqual(sorted(rows),
+                         sorted(n for n in cli.BACKEND_NAMES if n != "auto"))
+        self.assertEqual(rows, list(cli.AUTO_ORDER) + [cli.AUTO_FALLBACK, "x11"])
 
     def test_backends_marks_what_auto_would_choose_not_what_is_forced(self):
         code, out, _err = self.run_cli("--backend", "sway", "--backends")
         self.assertEqual(code, 0)
-        marked = [ln[2:8].strip() for ln in out.splitlines()
+        marked = [ln[2:10].strip() for ln in out.splitlines()
                   if ln.startswith("*")]
         self.assertEqual(marked, ["mutter"])
 
@@ -399,7 +496,7 @@ class Errors(Stubbed):
         self.assertEqual((code, out), (1, ""))
         self.assertEqual(err,
                          "xrandr: --backend: invalid argument 'banana'; "
-                         "valid: auto, x11, sway, wlr, mutter, kwin\n"
+                         "valid: auto, x11, sway, hypr, wlr, mutter, cinnamon, kwin\n"
                          "Try 'xrandr --help' for more information.\n")
         code, _out, err = self.run_cli("--backend=nope")
         self.assertEqual(code, 1)
@@ -601,18 +698,101 @@ class ReadmeOnTheHandover(unittest.TestCase):
         self.assertIn("`--unsafe-gnome-overlap` is refused", text)
 
 
+class WlrNaming(unittest.TestCase):
+    """U30: what `--print-backend --verbose` calls the compositor behind zwlr_output_manager_v1.
+
+    It said `wlroots` on every one of them, which is a word nobody's desktop is called: measured on COSMIC
+    [M recon2/cosmic.md §3], on labwc, on Budgie and on Xfce-on-Wayland [M recon2/labwc.md, budgie.md,
+    xfce-wayland.md]. Two answers replace it, and they are not the same kind of claim. COSMIC is read off the
+    registry -- cosmic-comp advertises `zcosmic_output_manager_v1` beside the wlr protocol and nothing else
+    does -- which is evidence. `$XDG_CURRENT_DESKTOP` is a hint: it decides no code path and gates nothing,
+    the token stays `wlr` either way, and it is there so the line stops being useless.
+
+    The registries are the recorded ones, replayed by `wl_fake.registry_server`."""
+
+    def probe(self, fixture, **environ):
+        fake = wl_fake.registry_server(fixture)
+        self.addCleanup(fake.close)
+        env_ = {"WAYLAND_DISPLAY": fake.path, "PATH": "/nonexistent"}
+        env_.update({k: v for k, v in environ.items() if v is not None})
+        with support_env(WAYLAND_DISPLAY=fake.path, XDG_RUNTIME_DIR=fake.dir,
+                         XDG_CURRENT_DESKTOP=environ.get("XDG_CURRENT_DESKTOP")):
+            p = cli.probe_backend("wlr", env_)
+        self.addCleanup(p.close)
+        return p
+
+    def test_cosmic_is_named_from_the_protocol_it_adds(self):
+        p = self.probe("cosmic")
+        self.assertTrue(p.available, p.reason)
+        self.assertEqual(p.compositor, "COSMIC (wlr-output-management)")
+        # the token is unchanged: rotation and 1.5x scale matched cosmic-randr
+        # over the plain wlr protocol, so there is no COSMIC display backend
+        self.assertEqual(p.name, "wlr")
+        self.assertEqual(p.protocol, "zwlr_output_manager_v1 version 4")
+
+    def test_the_desktop_variable_is_appended_where_there_is_no_better_answer(self):
+        for fixture, xdg, want in (
+                ("labwc", "labwc:wlroots", "wlroots (XDG_CURRENT_DESKTOP=labwc:wlroots)"),
+                ("budgie", "Budgie", "wlroots (XDG_CURRENT_DESKTOP=Budgie)"),
+                ("xfce-labwc", "XFCE", "wlroots (XDG_CURRENT_DESKTOP=XFCE)"),
+                ("labwc", "LXQt:labwc:wlroots",
+                 "wlroots (XDG_CURRENT_DESKTOP=LXQt:labwc:wlroots)")):
+            with self.subTest(xdg):
+                p = self.probe(fixture, XDG_CURRENT_DESKTOP=xdg)
+                self.assertTrue(p.available, p.reason)
+                self.assertEqual(p.compositor, want)
+
+    def test_a_desktop_that_names_its_own_backend_is_left_alone(self):
+        """sway exports the variable too and is named by a backend of its own; appending it here would put
+        `wlroots (XDG_CURRENT_DESKTOP=sway)` in front of somebody who forced `--backend wlr` on sway, which
+        says less than `wlroots` did."""
+        p = self.probe("labwc", XDG_CURRENT_DESKTOP="sway")
+        self.assertEqual(p.compositor, "wlroots")
+
+    def test_with_the_variable_unset_it_is_the_old_word(self):
+        p = self.probe("labwc")
+        self.assertEqual(p.compositor, "wlroots")
+
+    def test_cosmic_wins_over_the_variable(self):
+        p = self.probe("cosmic", XDG_CURRENT_DESKTOP="COSMIC")
+        self.assertEqual(p.compositor, "COSMIC (wlr-output-management)")
+
+    def test_a_registry_with_no_output_manager_is_still_unavailable(self):
+        """Cinnamon's Muffin advertises 23 globals and no wlr output protocol at all [M recon2/cinnamon.md
+        §2.1]: the naming change must not turn a refusal into an answer."""
+        fake = wl_fake.registry_server("cinnamon")
+        self.addCleanup(fake.close)
+        with support_env(WAYLAND_DISPLAY=fake.path, XDG_RUNTIME_DIR=fake.dir):
+            p = cli.probe_backend("wlr", {"WAYLAND_DISPLAY": fake.path})
+        self.assertFalse(p.available)
+        self.assertEqual(p.reason,
+                         "the compositor does not advertise zwlr_output_manager_v1")
+        self.assertIsNone(p.compositor)
+
+
 class X11Probe(unittest.TestCase):
     """The one probe with no compositor in it: which real xrandr `x11` is."""
 
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="wxr-x11-")
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        # The reason string goes through distro.hint('xrandr'), which reads /etc/os-release. Left alone this
+        # class would assert the host's answer -- Debian's here, `dnf install xrandr` on the Fedora CI image
+        # -- so the family is planted and the bytes below are Debian's on every box.
+        rel = os.path.join(self.tmp, "os-release")
+        with open(rel, "w", encoding="utf-8") as fh:
+            fh.write('PRETTY_NAME="Debian GNU/Linux 13 (trixie)"\nID=debian\n')
+        for name, value in (("OS_RELEASE", rel),
+                            ("NIXOS_MARKER", os.path.join(self.tmp, "NIXOS"))):
+            old = getattr(distro, name)
+            setattr(distro, name, value)
+            self.addCleanup(setattr, distro, name, old)
 
     def test_finds_the_real_xrandr(self):
         p = cli.probe_backend("x11", {"PATH": self.tmp})
         self.assertFalse(p.available)
         self.assertEqual(p.reason,
-                         "no real xrandr on PATH (install x11-xserver-utils)")
+                         "no real xrandr on PATH (apt install x11-xserver-utils)")
         real = os.path.join(self.tmp, "xrandr")
         with open(real, "w") as f:
             f.write("#!/bin/sh\nexit 0\n")
@@ -628,6 +808,140 @@ class X11Probe(unittest.TestCase):
         self.assertFalse(p.available)
         self.assertIn("WXRANDR_REAL_XRANDR", p.reason)
         self.assertNotIn("\n", p.reason)
+
+
+class CinnamonProbe(unittest.TestCase):
+    """`_probe_cinnamon()` against a real dbus_mini client and a real bus, because the only thing it does is
+    ask one bus a question about one name. A Cinnamon session owns `org.cinnamon.Muffin.DisplayConfig` and
+    never `org.gnome.Mutter.DisplayConfig` [M recon2/cinnamon.md §2.2], so the name is the whole decision and
+    these are the bytes `--backends` prints under it."""
+
+    DEST = "org.cinnamon.Muffin.DisplayConfig"
+
+    @classmethod
+    def setUpClass(cls):
+        cls.mock = MockBus()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.mock.close()
+
+    def setUp(self):
+        # an empty runtime tree, so find_user_bus()'s scan cannot reach the host's own bus and the planted
+        # address is the only one there is
+        self.tmp = tempfile.mkdtemp(prefix="wxr-cinn-")
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        for name, value in (("RUN_USER_DIR", self.tmp), ("X11_SOCKET_DIR", self.tmp)):
+            old = getattr(session, name)
+            setattr(session, name, value)
+            self.addCleanup(setattr, session, name, old)
+
+    @contextlib.contextmanager
+    def bus_env(self, address):
+        with support_env(DBUS_SESSION_BUS_ADDRESS=address, WAYLAND_DISPLAY=None,
+                         XDG_RUNTIME_DIR=self.tmp):
+            yield
+
+    def owner(self):
+        """A second client of the mock bus holding Muffin's name, as a Cinnamon session's Muffin does."""
+        held = dbus_mini.Bus(self.mock.address)
+        self.addCleanup(held.close)
+        self.assertEqual(held.request_name(self.DEST), 1)
+        return held
+
+    def test_no_name_on_the_bus_is_the_reason(self):
+        with self.bus_env(self.mock.address):
+            p = cli.probe_backend("cinnamon")
+        self.assertFalse(p.available)
+        self.assertEqual(p.reason, "org.cinnamon.Muffin.DisplayConfig is not on the session bus")
+        self.assertIsNone(p.handle)
+
+    def test_the_name_on_the_bus_is_the_backend(self):
+        self.owner()
+        with self.bus_env(self.mock.address):
+            p = cli.probe_backend("cinnamon")
+        self.addCleanup(p.handle.close)
+        self.assertTrue(p.available, p.reason)
+        self.assertEqual(p.compositor, "Muffin")
+        self.assertEqual(p.protocol, "org.cinnamon.Muffin.DisplayConfig (D-Bus)")
+        self.assertEqual(p.detail, "org.cinnamon.Muffin.DisplayConfig on the session bus")
+        self.assertIsInstance(p.handle, dbus_mini.Bus)
+        # the handle is live: the caller constructs MutterOutputs on it rather than dialling a second time
+        self.assertIn("org.freedesktop.DBus", p.handle.list_names())
+
+    def test_the_unavailable_probe_closes_the_bus_it_opened(self):
+        """The available probe hands its connection on in `handle`; this one owns it to the end and closes it.
+        Asserted on the call and not on the mock's connection list, because the dropped Probe holds no
+        reference either way and CPython's refcounting would close the socket for us -- which would make the
+        socket-count version of this test unable to fail."""
+        opened = []
+        real = dbus_mini.Bus
+
+        class Recording(real):
+            def __init__(self, *a, **kw):
+                super().__init__(*a, **kw)
+                self.closes = 0
+                opened.append(self)
+
+            def close(self):
+                self.closes += 1
+                super().close()
+
+        dbus_mini.Bus = Recording
+        self.addCleanup(setattr, dbus_mini, "Bus", real)
+        with self.bus_env(self.mock.address):
+            p = cli.probe_backend("cinnamon")
+        self.assertFalse(p.available)
+        self.assertEqual(len(opened), 1)       # one dial, not one per question asked
+        self.assertEqual(opened[0].closes, 1, "the refusing probe left its connection open")
+
+    def test_no_bus_at_all(self):
+        with self.bus_env("unix:path=" + os.path.join(self.tmp, "nothing-here")):
+            p = cli.probe_backend("cinnamon")
+        self.assertEqual((p.available, p.reason), (False, "no session bus"))
+
+
+class HyprProbe(unittest.TestCase):
+    """`_probe_hypr()`'s two answers that need no Hyprland: no socket, and a socket with no wxrandr/hypr.py
+    built into this install."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="wxr-hypr-")
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        old = session.RUN_USER_DIR
+        session.RUN_USER_DIR = self.tmp
+        self.addCleanup(setattr, session, "RUN_USER_DIR", old)
+
+    def test_no_socket_is_the_reason(self):
+        with support_env(HYPRLAND_INSTANCE_SIGNATURE=None, XDG_RUNTIME_DIR=self.tmp):
+            p = cli.probe_backend("hypr")
+        self.assertFalse(p.available)
+        self.assertEqual(p.reason, "no Hyprland IPC socket ($HYPRLAND_INSTANCE_SIGNATURE)")
+
+    def test_a_socket_with_no_backend_built_is_still_a_row_and_not_a_traceback(self):
+        """`hypr` is second in AUTO_ORDER, so a probe that raises takes down every wxrandr invocation on a
+        Hyprland desktop -- `--query` included, which reads honestly over the wlr floor
+        [M recon2/hyprland.md §4]. Until wxrandr/hypr.py lands this asserts the guard; after it lands the
+        import succeeds and the skip below fires instead."""
+        rd = os.path.join(self.tmp, "user", "%d" % os.getuid())
+        os.makedirs(os.path.join(rd, "hypr", "sig0"))
+        sock = os.path.join(rd, "hypr", "sig0", ".socket.sock")
+        srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.addCleanup(srv.close)
+        srv.bind(sock)
+        srv.listen(1)
+        session.RUN_USER_DIR = os.path.join(self.tmp, "user")
+        with support_env(HYPRLAND_INSTANCE_SIGNATURE=None, XDG_RUNTIME_DIR=rd):
+            self.assertEqual(session.find_hypr_socket(), sock)
+            p = cli.probe_backend("hypr")          # must not raise
+        try:
+            import wxrandr.hypr                     # noqa: F401
+        except ImportError:
+            self.assertFalse(p.available)
+            self.assertEqual(p.reason,
+                             "the hypr display backend is not built into this install")
+            return
+        self.skipTest("wxrandr/hypr.py is built here; tests/test_wxrandr_hypr.py owns this probe")
 
 
 if __name__ == "__main__":

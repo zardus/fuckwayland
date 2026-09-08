@@ -17,6 +17,8 @@
 # and vm/selftest.sh work on the result exactly as on every other flavor.
 #
 # vmctl-desktop: gnome
+# vmctl-distro: ubuntu
+# vmctl-ci: push
 # vmctl-iso: ubuntu-26.04.1-desktop-amd64.iso
 # vmctl-iso-sha256: 601e30fbf5d97759367c632e2c33630665039b7e2158fd068403da3ccf1bda1f
 # vmctl-iso-url: https://releases.ubuntu.com/26.04/ubuntu-26.04.1-desktop-amd64.iso

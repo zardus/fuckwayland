@@ -1,0 +1,27 @@
+Virtual-3 "Headless output 1"
+  Make: (null)
+  Model: (null)
+  Serial: (null)
+  Enabled: no
+Virtual-2 "Headless output 2"
+  Make: (null)
+  Model: (null)
+  Serial: (null)
+  Enabled: yes
+  Modes:
+    1280x720 px (current)
+  Position: 1280,0
+  Transform: normal
+  Scale: 1.000000
+  Adaptive Sync: disabled
+Virtual-1 "Headless output 3"
+  Make: (null)
+  Model: (null)
+  Serial: (null)
+  Enabled: yes
+  Modes:
+    1280x720 px (current)
+  Position: 0,0
+  Transform: normal
+  Scale: 1.000000
+  Adaptive Sync: disabled

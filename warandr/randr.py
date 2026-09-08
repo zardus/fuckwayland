@@ -5,7 +5,8 @@ Selection (first match wins):
 
 1. an explicit choice -- ``warandr --backend NAME`` or the GUI's
    Layout ▸ Backend, `NAME` being ``auto``, ``x11`` or one of wxrandr's own
-   backends (``sway``, ``wlr``, ``mutter``/``gnome``, ``kwin``/``kde``).
+   backends (``sway``, ``hypr``/``hyprland``, ``wlr``, ``mutter``/``gnome``,
+   ``cinnamon``/``muffin``, ``kwin``/``kde``).
    ``x11`` runs the real ``xrandr``; a Wayland backend runs wxrandr with
    ``--backend NAME``, which beats wxrandr's own ``$WXRANDR_BACKEND`` and
    its detection. ``auto`` is the default and means the rest of this list.
@@ -38,10 +39,14 @@ from fwcommon import passthrough
 from . import xrandr_parse
 from .model import Layout
 
-#: wxrandr's own backends, plus the two names that are not one of them.
-WAYLAND_BACKENDS = ("sway", "wlr", "mutter", "kwin")
+#: wxrandr's own backends, plus the two names that are not one of them. Kept in
+#: step with `wxrandr/cli.py`'s tables and with `gui.BACKEND_ITEMS`: a name that
+#: is missing here is dropped by `probe_backends()`'s parse, and the GUI then
+#: shows its menu entry enabled with no availability behind it.
+WAYLAND_BACKENDS = ("sway", "hypr", "wlr", "mutter", "cinnamon", "kwin")
 BACKENDS = ("auto", "x11") + WAYLAND_BACKENDS
-ALIASES = {"gnome": "mutter", "kde": "kwin"}
+ALIASES = {"gnome": "mutter", "kde": "kwin",
+           "muffin": "cinnamon", "hyprland": "hypr"}
 
 #: What a *partial* overlap (two active outputs intersecting at different
 #: origins) means per backend: whether the backend takes one, and the one

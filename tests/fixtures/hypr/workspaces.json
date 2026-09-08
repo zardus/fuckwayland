@@ -1,0 +1,21 @@
+[{
+    "id": 1,
+    "name": "1",
+    "monitor": "Virtual-1",
+    "monitorID": 0,
+    "windows": 4,
+    "hasfullscreen": false,
+    "lastwindow": "0x59daae933ac0",
+    "lastwindowtitle": "xmessage",
+    "ispersistent": false
+},{
+    "id": 2,
+    "name": "2",
+    "monitor": "HEADLESS-2",
+    "monitorID": 1,
+    "windows": 0,
+    "hasfullscreen": false,
+    "lastwindow": "0x0",
+    "lastwindowtitle": "",
+    "ispersistent": false
+}]

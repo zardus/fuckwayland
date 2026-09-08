@@ -1,0 +1,4 @@
+{
+ "wayland": "wayland-1",
+ "xwayland": ":1"
+}

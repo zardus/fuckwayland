@@ -23,7 +23,7 @@ import os
 import re
 import sys
 
-from fwcommon import passthrough, stdio
+from fwcommon import distro, passthrough, stdio
 from wxrandr import core, gnome_overlap
 from wxrandr.core import ArgErr, Fatal, Stanza
 
@@ -595,17 +595,34 @@ def _check_force(o):
 #: what `--backend` accepts.  Real xrandr has no such option (nor
 #: `--print-backend`/`--backends`), so every byte of its own surface --
 #: `--help`, the query, the errors -- is untouched by them.
-WAYLAND_BACKENDS = ("sway", "wlr", "mutter", "kwin")
+WAYLAND_BACKENDS = ("sway", "hypr", "wlr", "mutter", "cinnamon", "kwin")
 BACKEND_NAMES = ("auto", "x11") + WAYLAND_BACKENDS
-BACKEND_ALIASES = {"gnome": "mutter", "kde": "kwin"}
-#: the auto-detection order, unchanged: a sway/i3 IPC socket, then a
+BACKEND_ALIASES = {"gnome": "mutter", "kde": "kwin",
+                   "muffin": "cinnamon", "hyprland": "hypr"}
+#: the auto-detection order: a sway/i3 IPC socket, then a Hyprland one, then a
 #: compositor advertising kde_output_management_v2, then a session bus owning
-#: org.gnome.Mutter.DisplayConfig -- and wlr as what is left, which is
-#: therefore never probed for the decision.
-AUTO_ORDER = ("sway", "kwin", "mutter")
+#: org.gnome.Mutter.DisplayConfig or Muffin's copy of it -- and wlr as what is
+#: left, which is therefore never probed for the decision.
+#:
+#: hypr sits second for the reason wdotool's own order gives: the wlr path is
+#: honest for reading a Hyprland layout and cannot apply one -- the second apply
+#: of a session times out at 10 s with nothing changed, identically for
+#: `wlr-randr`, and with a second output present even the first one hangs
+#: [M recon2/hyprland.md §4, and the same on 0.56.2 in recon2/arch.md].
+#: cinnamon sits last of the bus names because Muffin's DisplayConfig is only
+#: ever there when Mutter's is not [M recon2/cinnamon.md §2.2].
+AUTO_ORDER = ("sway", "hypr", "kwin", "mutter", "cinnamon")
 AUTO_FALLBACK = "wlr"
 _SWAY_GET_VERSION = 7          # i3-ipc GET_VERSION
 _WLR_IFACE = "zwlr_output_manager_v1"
+#: COSMIC's extension to wlr-output-management. It changes no code path -- the
+#: token stays `wlr`, and rotation and 1.5x scale matched `cosmic-randr list
+#: --kdl` over the plain protocol [M recon2/cosmic.md §3] -- only the name the
+#: probe prints, which said `wlroots` on a desktop nobody calls that.
+_COSMIC_OUTPUT_IFACE = "zcosmic_output_manager_v1"
+#: Muffin's DisplayConfig: the same interface as Mutter's under Cinnamon's own
+#: bus name [M recon2/cinnamon.md §2.2, displayconfig-introspect.txt]
+CINNAMON_DEST = "org.cinnamon.Muffin.DisplayConfig"
 
 #: options that consume arguments, for the argv look-ahead below.  Kept in
 #: step with parse(): everything else consumes none, `--newmode` is special.
@@ -737,7 +754,11 @@ def _probe_x11(env):
     except passthrough.RealToolError as e:
         return Probe("x11", False, str(e).split("\n")[0])
     if real is None:
-        return Probe("x11", False, "no real xrandr on PATH (install x11-xserver-utils)")
+        # the package name is this box's, not Debian's: Fedora has no
+        # x11-xserver-utils and no xorg-x11-server-utils either (the package is
+        # called `xrandr`), Arch calls it xorg-xrandr, and a NixOS box was told
+        # to run apt [M recon2/fedora.md, arch.md, nixos.md]
+        return Probe("x11", False, "no real xrandr on PATH (%s)" % distro.hint("xrandr"))
     return Probe("x11", True, detail=real, compositor="X server (RandR)")
 
 
@@ -795,7 +816,8 @@ def _probe_mutter():
                  handle=bus)
 
 
-def _probe_wlr():
+def _probe_wlr(env=None):
+    env = os.environ if env is None else env
     from fwcommon import session as wsession
     try:
         from fwcommon.wayland_mini import WlConn
@@ -808,8 +830,9 @@ def _probe_wlr():
         return Probe("wlr", False, "cannot connect to the compositor")
     try:
         g = conn.find_global(_WLR_IFACE)
+        ifaces = {i for i, _v in conn.registry.values()}
     except Exception:
-        g = None
+        g, ifaces = None, set()
     if g is None:
         try:
             conn.close()
@@ -817,7 +840,70 @@ def _probe_wlr():
             pass
         return Probe("wlr", False, "the compositor does not advertise " + _WLR_IFACE)
     what = "%s version %d" % (_WLR_IFACE, g[1])
-    return Probe("wlr", True, detail=what, compositor="wlroots", protocol=what, handle=conn)
+    return Probe("wlr", True, detail=what, compositor=_wlr_name(ifaces, env),
+                 protocol=what, handle=conn)
+
+
+def _wlr_name(ifaces, env) -> str:
+    """What to call the compositor behind zwlr_output_manager_v1.
+
+    `wlroots` was the only answer, on desktops nobody calls that: `--print-backend --verbose` said `wlroots` on
+    COSMIC [M recon2/cosmic.md §3], on labwc, on Budgie and on Xfce-on-Wayland [M labwc.md, budgie.md,
+    xfce-wayland.md]. COSMIC is named from the protocol it adds to the wlr one, which is evidence; everything
+    else gets $XDG_CURRENT_DESKTOP appended, which is a hint and never a gate -- it decides no code path, it
+    only stops the line from being useless. sway sets the variable too and is already named by its own backend,
+    so it is left alone."""
+    if _COSMIC_OUTPUT_IFACE in ifaces:
+        return "COSMIC (wlr-output-management)"
+    xdg = (env.get("XDG_CURRENT_DESKTOP") or "").strip()
+    if xdg and xdg.lower() != "sway":
+        return "wlroots (XDG_CURRENT_DESKTOP=%s)" % xdg
+    return "wlroots"
+
+
+def _probe_hypr(verbose=False):
+    """Hyprland's own IPC. The socket is checked here rather than in wxrandr/hypr.py so that a session without
+    one costs no import and no connection, exactly as _probe_sway does."""
+    from fwcommon import session as wsession
+    sock = wsession.find_hypr_socket()
+    if not sock:
+        return Probe("hypr", False,
+                     "no Hyprland IPC socket ($HYPRLAND_INSTANCE_SIGNATURE)")
+    try:
+        from wxrandr import hypr as hypr_mod
+    except ImportError:
+        # The socket says this really is Hyprland, and `hypr` is second in AUTO_ORDER, so an ImportError here
+        # escapes probe_backend() and kills every wxrandr invocation on a Hyprland desktop -- including
+        # `--query`, which reads honestly over the wlr floor [M recon2/hyprland.md §4]. A probe never raises;
+        # an unbuilt backend is one more unavailable row, and the wlr fallback still answers.
+        return Probe("hypr", False, "the hypr display backend is not built into this install")
+    return hypr_mod.probe(sock, verbose=verbose)
+
+
+def _probe_cinnamon():
+    """Muffin's DisplayConfig, which is Mutter's interface under Cinnamon's bus name. A Cinnamon session owns
+    org.cinnamon.Muffin.DisplayConfig and never org.gnome.Mutter.DisplayConfig [M recon2/cinnamon.md §2.2], so
+    this is a separate name on the same bus and not a second flavour of the mutter probe."""
+    from fwcommon import session as wsession
+    from fwcommon.dbus_mini import Bus, DBusError
+    hit = wsession.find_session_bus()
+    if not hit:
+        return Probe("cinnamon", False, "no session bus")
+    try:
+        bus = Bus(hit[1])
+    except (DBusError, OSError, ValueError):
+        return Probe("cinnamon", False, "no session bus")
+    try:
+        owned = bus.name_has_owner(CINNAMON_DEST)
+    except DBusError:
+        owned = False
+    if not owned:
+        bus.close()
+        return Probe("cinnamon", False, "%s is not on the session bus" % CINNAMON_DEST)
+    return Probe("cinnamon", True,
+                 detail="%s on the session bus" % CINNAMON_DEST,
+                 compositor="Muffin", protocol="%s (D-Bus)" % CINNAMON_DEST,
+                 handle=bus)
 
 
 def probe_backend(name, env=None, verbose=False):
@@ -828,12 +914,16 @@ def probe_backend(name, env=None, verbose=False):
         return _probe_x11(env)
     if name == "sway":
         return _probe_sway(verbose)
+    if name == "hypr":
+        return _probe_hypr(verbose)
     if name == "kwin":
         return _probe_kwin()
     if name == "mutter":
         return _probe_mutter()
+    if name == "cinnamon":
+        return _probe_cinnamon()
     if name == "wlr":
-        return _probe_wlr()
+        return _probe_wlr(env)
     return Probe(name, False, "unknown backend")
 
 
@@ -914,7 +1004,9 @@ def backends_lines(env=None):
     for name in AUTO_ORDER + (AUTO_FALLBACK, "x11"):
         p = probes.get(name) or probe_backend(name, env=env)
         probes[name] = p
-        lines.append("%s %-6s  %-11s  %s"
+        # the name column is 8 wide, not 6: `cinnamon` is the longest token
+        # `--backend` takes and a ragged table is harder to read than a wide one
+        lines.append("%s %-8s  %-11s  %s"
                      % ("*" if name == auto else " ", name,
                         "available" if p.available else "unavailable",
                         p.detail if p.available else p.reason))
@@ -1183,6 +1275,15 @@ class Session:
                 self.impl = mutter_mod.MutterOutputs(bus=probe)
             except (mutter_mod.DBusError, OSError, ValueError):
                 self._cant_open()
+        elif self.backend in ("hypr", "cinnamon"):
+            # The tables, the probes and `--backends` know these two; their output backends are wxrandr/hypr.py
+            # (HyprOutputs over `j/monitors` + `keyword monitor`) and wxrandr/mutter.py's Muffin flavour, and
+            # neither is in the tree yet. A refusal, never a fall-through to WlrOutputs: on Hyprland the wlr
+            # apply path takes the first apply of a session and then times out at 10 s with nothing changed
+            # [M recon2/hyprland.md §4], and on Muffin there is no wlr output protocol at all, so answering as
+            # `wlr` here would be a wrong answer rather than a missing one.
+            raise Fatal("xrandr: the %s backend is named by --backend and is not built into this "
+                        "install\n" % self.backend)
         else:
             try:
                 self.impl = core.WlrOutputs(conn=wprobe)

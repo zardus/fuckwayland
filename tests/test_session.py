@@ -25,6 +25,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
@@ -156,6 +157,41 @@ class WaylandSocket(Tree):
 
 
 class SwaySocket(Tree):
+    """The sway/i3 IPC socket, over the names a live compositor really writes.
+
+    i3 was unfindable without `$I3SOCK`, and i3 puts `$I3SOCK` only into the environment of processes it starts
+    itself -- not into its own /proc/<pid>/environ, so nothing a root shell or cron runs inherits it. The old
+    scan looked for `i3-ipc.*.sock`, which no i3 and no sway has ever written [M recon2/i3.md §1: with
+    XDG_RUNTIME_DIR=/tmp/rti3 and `i3 --get-socketpath` answering /tmp/rti3/i3/ipc-socket.65857,
+    find_sway_socket() returned None]."""
+
+    def setUp(self):
+        super().setUp()
+        # the /tmp fallback is a real glob over a world-writable directory; point
+        # it at a private one so a stray i3 of this user cannot answer instead
+        self.tmpdir = os.path.join(self.tmp, "tmp")
+        os.mkdir(self.tmpdir)
+        old = session.TMP_DIR
+        session.TMP_DIR = self.tmpdir
+        self.addCleanup(setattr, session, "TMP_DIR", old)
+
+    def i3_runtime_socket(self, uid, pid=4242) -> str:
+        """`<runtime dir>/i3/ipc-socket.<pid>` -- a SUBDIRECTORY, which is the level the old scan never
+        entered."""
+        d = os.path.join(self.rtdir(uid), "i3")
+        os.makedirs(d, exist_ok=True)
+        p = os.path.join(d, "ipc-socket.%d" % pid)
+        open(p, "w").close()
+        return p
+
+    def i3_tmp_socket(self, user, suffix="abc", pid=4242) -> str:
+        """`/tmp/i3-<user>.XXXXXX/ipc-socket.<pid>` -- what i3 writes with no XDG_RUNTIME_DIR at all."""
+        d = os.path.join(self.tmpdir, "i3-%s.%s" % (user, suffix))
+        os.makedirs(d, exist_ok=True)
+        p = os.path.join(d, "ipc-socket.%d" % pid)
+        open(p, "w").close()
+        return p
+
     def test_the_environment_wins_when_the_socket_is_really_there(self):
         named = os.path.join(self.tmp, "named.sock")
         open(named, "w").close()
@@ -170,8 +206,51 @@ class SwaySocket(Tree):
         with env(SWAYSOCK=os.path.join(self.tmp, "gone.sock")):
             self.assertEqual(session.find_sway_socket(), p)
 
-    def test_i3_names_are_found_too(self):
-        p = self.sock(1000, "i3-ipc.1000.7.sock")
+    def test_a_stale_i3sock_falls_through_to_the_scan(self):
+        """`$I3SOCK` survives an i3 restart in whatever shell exported it; the socket it names does not."""
+        p = self.i3_runtime_socket(1000)
+        with env(I3SOCK=os.path.join(self.tmp, "gone.sock")):
+            self.assertEqual(session.find_sway_socket(), p)
+
+    def test_i3s_runtime_subdirectory_is_found(self):
+        p = self.i3_runtime_socket(1000)
+        self.assertEqual(session.find_sway_socket(), p)
+
+    def test_i3s_tmp_directory_is_found_and_owner_checked(self):
+        """/tmp is world-writable: anyone may create `/tmp/i3-<somebody else>.aaaaaa/ipc-socket.1` and answer
+        for a compositor that is not there, and every request -- the text of `type` included -- would be
+        delivered to them."""
+        import pwd as _pwd
+        me = _pwd.getpwuid(os.getuid())
+        self.rtdir(me.pw_uid)
+        p = self.i3_tmp_socket(me.pw_name)
+        self.assertEqual(session.find_sway_socket(), p)
+
+        owners = {os.path.realpath(p): me.pw_uid + 12345}
+        with mock.patch.object(session, "_owner",
+                               lambda path: owners.get(os.path.realpath(path),
+                                                       os.stat(path).st_uid)):
+            self.assertIsNone(session.find_sway_socket())
+
+    def test_the_runtime_directory_beats_tmp(self):
+        """i3 writes one or the other, never both; a box that has been run both ways keeps the stale one, and
+        the runtime directory is the live session's."""
+        import pwd as _pwd
+        me = _pwd.getpwuid(os.getuid())
+        self.i3_tmp_socket(me.pw_name)
+        p = self.i3_runtime_socket(me.pw_uid)
+        self.assertEqual(session.find_sway_socket(), p)
+
+    def test_the_dead_i3_ipc_pattern_is_gone(self):
+        """`i3-ipc.<uid>.<pid>.sock` was the pattern this scanned for and is a name nothing writes. Keeping it
+        is not harmless: it is the only thing a file of that name in a runtime directory can be, and answering
+        with one would send i3-ipc frames to whatever made it."""
+        self.sock(1000, "i3-ipc.1000.7.sock")
+        self.assertIsNone(session.find_sway_socket())
+
+    def test_sway_still_wins_over_an_i3_subdirectory(self):
+        p = self.sock(1000, "sway-ipc.1000.99.sock")
+        self.i3_runtime_socket(1000)
         self.assertEqual(session.find_sway_socket(), p)
 
     def test_nothing_anywhere(self):
@@ -341,6 +420,164 @@ class Closure(unittest.TestCase):
 
 
 # -- the session leader whose environment is read -----------------------------
+
+class Xauthority(Tree):
+    """Where the X11 cookie is looked for once the session leader cannot be read.
+
+    That is the `ssh root@box` / cron case the whole leader scan exists for, and on GNOME-on-Xorg it had a
+    hole: GDM keeps the cookie at `<runtime dir>/gdm/Xauthority`, one directory below everything
+    find_xauthority() globbed, so with no live readable gnome-shell it answered None although the file was
+    there [M recon2/gnome-xorg.md: find_xauthority(1000) -> /tmp/gx-runtime-1000/gdm/Xauthority with the
+    leader up, None with it gone]."""
+
+    def setUp(self):
+        super().setUp()
+        ctx = env(XAUTHORITY=None)
+        ctx.__enter__()
+        self.addCleanup(ctx.__exit__, None, None, None)
+        # "with no leader alive": the process scan is the other route to the
+        # cookie and is not what this is about
+        p = mock.patch.object(session, "_shell_environ", lambda uid: {})
+        p.start()
+        self.addCleanup(p.stop)
+
+    def cookie(self, uid, *parts) -> str:
+        d = self.rtdir(uid)
+        if len(parts) > 1:
+            d = os.path.join(d, *parts[:-1])
+            os.makedirs(d, exist_ok=True)
+        p = os.path.join(d, parts[-1])
+        open(p, "w").close()
+        return p
+
+    def test_gdms_cookie_one_directory_down_is_found(self):
+        self.sock(1000, "wayland-0")
+        want = self.cookie(1000, "gdm", "Xauthority")
+        self.assertEqual(session.find_xauthority(1000), want)
+
+    def test_it_is_ranked_with_the_others_by_mtime(self):
+        """The three globs share one newest-wins rule, and they have to: a box that has run both GDM and a
+        Mutter session has both files, and the one written last is this session's."""
+        self.sock(1000, "wayland-0")
+        gdm = self.cookie(1000, "gdm", "Xauthority")
+        mutter = self.cookie(1000, ".mutter-Xwaylandauth.QKQRV3")
+        os.utime(gdm, (1000, 1000))
+        os.utime(mutter, (2000, 2000))
+        self.assertEqual(session.find_xauthority(1000), mutter)
+        os.utime(gdm, (3000, 3000))
+        self.assertEqual(session.find_xauthority(1000), gdm)
+
+    def test_another_uids_runtime_directory_is_not_read(self):
+        self.sock(1000, "wayland-0")
+        self.cookie(1001, "gdm", "Xauthority")
+        self.assertIsNone(session.find_xauthority(1000))
+
+
+class SessionLeaderNames(unittest.TestCase):
+    """The nine names appended to `_SESSION_LEADERS`, and the nixpkgs comm spelling.
+
+    From `ssh root@box` with an empty environment all four tools failed on LXQt with "Authorization required,
+    but no authorization protocol specified": SDDM 0.21 writes /tmp/xauth_<random>, and no LXQt process was in
+    the tuple, so `_shell_environ()` never read the one environment that names it. Adding four names turned all
+    four tools from broken to working in the same session [M recon2/openbox.md §2]; the same gap was measured
+    for mate-session [M recon2/mate.md] and for i3 [M recon2/i3.md §2d].
+
+    Unlike `SessionLeaders` above this does not skip wholesale when a real leader of this uid is running: it
+    skips the one name that leader would outrank, and runs the rest. On the box this was written on the guest's
+    own `openbox` (rank 14) is up, which would otherwise have silenced every case here."""
+
+    def setUp(self):
+        self.uid = os.geteuid()
+        self.real_rank = self.best_real_rank()
+
+    @staticmethod
+    def rank(name: str) -> int:
+        return session._SESSION_LEADERS.index(name)
+
+    def best_real_rank(self) -> int:
+        """The best `_SESSION_LEADERS` rank among processes of this uid that this test did not start. A
+        stand-in ranked worse than that would lose to the box's own desktop and prove nothing."""
+        best = len(session._SESSION_LEADERS)
+        for entry in os.listdir("/proc"):
+            if not entry.isdigit():
+                continue
+            try:
+                with open("/proc/%s/comm" % entry) as f:
+                    comm = f.read().strip()
+                rank = session._LEADER_RANK.get(comm)
+                if rank is None or rank >= best:
+                    continue
+                if os.stat("/proc/" + entry).st_uid != self.uid:
+                    continue
+            except OSError:
+                continue
+            best = rank
+        return best
+
+    def need(self, name):
+        if self.rank(name) >= self.real_rank:
+            self.skipTest("a real leader ranked at or above %s is running here" % name)
+
+    def test_every_name_is_reachable_through_the_15_byte_comm(self):
+        """comm truncates at 15 bytes, and the tuple carries one 16-byte name (`cinnamon-session`), so the
+        match is on `name[:15]` and not on the name: an entry compared whole would silently never fire, which
+        is exactly the failure `startlxqtwayland` was kept out of the tuple for."""
+        for i, name in enumerate(session._SESSION_LEADERS):
+            comm, wrapped = session._leader_comms(name)
+            self.assertLessEqual(len(comm), 15, name)
+            self.assertLessEqual(len(wrapped), 15, name)
+            self.assertEqual(session._LEADER_RANK[comm], i, name)
+            self.assertEqual(session._LEADER_RANK[wrapped], i, name)
+        # every spelling is distinct, so no name is shadowed by another's
+        self.assertEqual(len(session._LEADER_RANK),
+                         2 * len(session._SESSION_LEADERS))
+        self.assertEqual(session._SESSION_LEADERS[:8],
+                         ("gnome-shell", "startplasma-x11", "kwin_x11", "kwin_wayland",
+                          "plasmashell", "ksmserver", "xfce4-session", "sway"))
+
+    def test_each_appended_name_carries_the_session(self):
+        added = ("i3", "mate-session", "cinnamon-session", "cinnamon",
+                 "lxqt-session", "lxsession", "openbox", "labwc", "wayfire")
+        for name in added:
+            self.assertIn(name, session._SESSION_LEADERS, name)
+            if self.rank(name) >= self.real_rank:
+                continue
+            cookie = tempfile.mkstemp(prefix="xauth_")[1]
+            self.addCleanup(os.unlink, cookie)
+            with support.leader_process(name, {"DISPLAY": ":91", "XAUTHORITY": cookie}), \
+                    support.env(DISPLAY=None, XAUTHORITY=None):
+                got = session._shell_environ(self.uid)
+                self.assertEqual(got.get("DISPLAY"), ":91", name)
+                self.assertEqual(session.find_xauthority(self.uid), cookie, name)
+
+    def test_the_tuple_order_decides_between_two_of_them(self):
+        """A session really can have both: LXQt's `openbox` runs under an Xfce-started session on a box that
+        has been switched, and the two environments name different displays."""
+        self.need("xfce4-session")
+        with support.leader_process("lxqt-session", {"DISPLAY": ":92"}), \
+                support.leader_process("xfce4-session", {"DISPLAY": ":93"}), \
+                support.env(DISPLAY=None, XAUTHORITY=None):
+            self.assertEqual(session._shell_environ(self.uid).get("DISPLAY"), ":93")
+
+    def test_a_nix_wrapped_leader_is_read(self):
+        """nixpkgs' gnome-shell is a wrapper binary beside a hidden real one, and comm comes from the file that
+        is executed: the running shell's comm is `.gnome-shell-wr`, which was in no list, so a NixOS GNOME
+        session lost $DISPLAY/$XAUTHORITY discovery for root and cron entirely [M recon2/nixos.md §6.1]."""
+        self.need("gnome-shell")
+        leader = support.leader_process(".gnome-shell-wrapped", {"DISPLAY": ":94"})
+        self.addCleanup(leader.stop)
+        self.assertEqual(leader.comm(), ".gnome-shell-wr")
+        with support.env(DISPLAY=None, XAUTHORITY=None):
+            self.assertEqual(session._shell_environ(self.uid).get("DISPLAY"), ":94")
+
+    def test_a_wrapped_name_that_is_not_a_leader_is_still_ignored(self):
+        """The rule is `.<name>-wrapped` for a name in the tuple, not "anything that starts with a dot": a
+        wrapped program of this user that is not a session leader must not be read for its environment."""
+        self.assertNotIn(".foot-wrapped"[:15], session._LEADER_RANK)
+        with support.leader_process(".foot-wrapped", {"DISPLAY": ":95"}), \
+                support.env(DISPLAY=None, XAUTHORITY=None):
+            self.assertNotEqual(session._shell_environ(self.uid).get("DISPLAY"), ":95")
+
 
 class SessionLeaders(unittest.TestCase):
     """Which of a session's processes is asked where the X plane is.

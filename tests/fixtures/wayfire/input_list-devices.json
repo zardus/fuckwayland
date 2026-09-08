@@ -1,0 +1,42 @@
+[
+ {
+  "id": 94731173975944,
+  "name": "stipc_pointer",
+  "vendor": "unknown",
+  "product": "unknown",
+  "type": "pointer",
+  "enabled": true
+ },
+ {
+  "id": 94731173976288,
+  "name": "stipc_keyboard",
+  "vendor": "unknown",
+  "product": "unknown",
+  "type": "keyboard",
+  "enabled": true
+ },
+ {
+  "id": 94731173976664,
+  "name": "stipc_touch",
+  "vendor": "unknown",
+  "product": "unknown",
+  "type": "touch",
+  "enabled": true
+ },
+ {
+  "id": 94731173976824,
+  "name": "stipc_tablet_tool",
+  "vendor": "unknown",
+  "product": "unknown",
+  "type": "tablet_tool",
+  "enabled": true
+ },
+ {
+  "id": 94731173977048,
+  "name": "stipc_tablet_pad",
+  "vendor": "unknown",
+  "product": "unknown",
+  "type": "tablet_pad",
+  "enabled": true
+ }
+]

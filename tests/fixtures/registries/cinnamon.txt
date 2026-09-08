@@ -1,0 +1,26 @@
+# Muffin 6.4.1 running Cinnamon 6.4.13 on Wayland [M recon2/cinnamon.md §2.1,
+# wl-globals-cinnamon.txt]: 23 globals, and neither foreign-toplevel protocol -- the reason the
+# Cinnamon bus name may never be swallowed by the registry step.
+gtk_primary_selection_device_manager 1
+gtk_shell1 3
+gtk_text_input_manager 1
+wl_compositor 4
+wl_data_device_manager 3
+wl_output 2
+wl_seat 5
+wl_shell 1
+wl_shm 2
+wl_subcompositor 1
+wp_viewporter 1
+xdg_wm_base 3
+zwp_keyboard_shortcuts_inhibit_manager_v1 1
+zwp_linux_dmabuf_v1 3
+zwp_pointer_constraints_v1 1
+zwp_pointer_gestures_v1 1
+zwp_primary_selection_device_manager_v1 1
+zwp_tablet_manager_v2 1
+zwp_text_input_manager_v3 1
+zxdg_exporter_v1 1
+zxdg_importer_v1 1
+zxdg_output_manager_v1 3
+zxdg_shell_v6 1

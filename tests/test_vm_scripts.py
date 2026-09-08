@@ -3,10 +3,11 @@
 
 Nothing in this file boots a virtual machine.  `vm/` is five bash scripts and a
 Python `vmctl`, and the interesting failures in them are not "the image did not
-come up" -- they are a status that was thrown away and a parser that counted a
-head that was not there.  Both are reachable by slicing the shipped script and
-feeding it text, which is what happens here; anything that needs the rig itself
-is gated on `VMCTL_LIVE`.
+come up" -- they are a status that was thrown away, a parser that counted a head
+that was not there, and (since the rig grew a second and a third distro) a
+package-manager line that only one distribution would have accepted.  All of
+those are reachable by slicing the shipped script and feeding it text, which is
+what happens here; anything that needs the rig itself is gated on `VMCTL_LIVE`.
 
 * `vm/build-iso-golden.sh` ran stage 2 down a pipeline (`$SSH ... | tee | sed`)
   and then read `$?`, which is `sed`'s and is 0 whatever ssh did.  Every stage-2
@@ -19,17 +20,28 @@ is gated on `VMCTL_LIVE`.
   a `grep` over the `Output:` line alone, so on Wayland it counted a *disabled*
   head as present -- and the rig test that unplugs a head and counts what is
   left was the one asking.  Fix 54: one parser for both.
+* `vm/build-image.sh` was apt from top to bottom (DEBIAN_FRONTEND, debconf,
+  netplan, snap, `dpkg-query -W`) with one `case` arm per desktop that also knew
+  that desktop's display manager.  It is now three layers -- `pkg_*` per package
+  manager, `dm_*` per display manager, `desktop_*` per desktop -- with a
+  dispatch table naming every `DESKTOPS` key of `vm/vmctl` and nothing else.
+  Each layer is sliced and run here against stubs.
 
 The kscreen fixtures are synthetic, in the two shapes the comment in the script
-describes: three heads with the third disabled, in 5.27's one-line format and
-6.x's block format, plus a 6.x X11 capture with a disconnected connector, which
-is the case libkscreen's XRandR backend produces and KWin on Wayland does not.
+describes.  The wlr-randr, hyprctl and cosmic-randr captures are real output;
+tests/fixtures/vm/README.md says which tool, which version and where each was
+recorded.
 """
 
+import json
 import os
+import pathlib
 import re
+import shlex
+import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
 
 # The suite never hands a tool over to the real X11 one: see tests/conftest.py
@@ -48,8 +60,12 @@ import support                                                    # noqa: E402
 
 VM = os.path.join(ROOT, "vm")
 KSCREEN = os.path.join(ROOT, "tests", "fixtures", "kscreen")
+VMFIX = os.path.join(ROOT, "tests", "fixtures", "vm")
 SELFTEST = os.path.join(VM, "selftest.sh")
 ISO_GOLDEN = os.path.join(VM, "build-iso-golden.sh")
+BUILD = os.path.join(VM, "build-image.sh")
+VMCTL = os.path.join(VM, "vmctl")
+FLAVORS = os.path.join(VM, "flavors")
 
 #: The five bash scripts under vm/.  vmctl is Python and is covered elsewhere.
 SCRIPTS = ("build-image.sh", "build-iso-golden.sh", "build-iso-image.sh",
@@ -57,6 +73,60 @@ SCRIPTS = ("build-image.sh", "build-iso-golden.sh", "build-iso-image.sh",
 
 LIVE = unittest.skipUnless(os.environ.get("VMCTL_LIVE"),
                            "needs the QEMU rig: set VMCTL_LIVE=1")
+
+
+def vmctl_module():
+    """`vm/vmctl` imported as a module.
+
+    It has no extension and is not on any path, so importlib does the work; the
+    file has no import-time side effects beyond building Paths out of $VMDATA."""
+    import importlib.util
+    spec = importlib.util.spec_from_loader(
+        "vmctl_under_test",
+        importlib.machinery.SourceFileLoader("vmctl_under_test", VMCTL))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def sh_layer(*names):
+    """Several functions of vm/build-image.sh, concatenated in the order given.
+
+    A layer function calls its neighbours (`pkg_install` calls `pkg_retry` calls
+    `wait_net`), so a slice of one alone would not run.  Sliced rather than
+    copied for the usual reason: what runs here is what ships."""
+    return "".join(support.sh_function(BUILD, n) for n in names)
+
+
+def stubs(tmp, names, log):
+    """A directory of stub executables that append `$0 $*` to `log` and exit 0.
+
+    `<name>=<n>` in `names` makes that stub exit n instead, which is how the
+    retry loops are made to run.  A leading `+` makes it append its STDIN to the
+    log as well (`+debconf-set-selections`): the answer a stub is piped is the
+    whole point of pkg_seed_dm, and a stub that discards stdin cannot tell its
+    three arms apart."""
+    d = os.path.join(tmp, "stub")
+    os.makedirs(d, exist_ok=True)
+    for spec in names:
+        stdin = spec.startswith("+")
+        name, _, rc = spec.lstrip("+").partition("=")
+        path = os.path.join(d, name)
+        with open(path, "w") as fh:
+            fh.write('#!/bin/sh\nprintf "%%s\\n" "$(basename "$0") $*" >> %s\n' % log)
+            if stdin:
+                fh.write('sed "s/^/stdin: /" >> %s\n' % log)
+            fh.write('exit %s\n' % (rc or "0"))
+        os.chmod(path, 0o755)
+    return d
+
+
+PREAMBLE = """
+set -u
+say() { printf 'say: %s\\n' "$*" >> "$FAKE_LOG"; }
+fail() { printf 'fail: %s\\n' "$*" >> "$FAKE_LOG"; exit 9; }
+written() { printf '%s\\n' "$@" >> "$WRITTEN"; }
+"""
 
 
 class TheyAllParse(unittest.TestCase):
@@ -134,6 +204,62 @@ class StageTwoReportsSshsStatus(unittest.TestCase):
                 self.fail("%s:%d: rc=$? after a pipeline" % (ISO_GOLDEN, i + 1))
 
 
+# -- vm/selftest.sh: one parser per native display tool -----------------------
+
+def selftest_arms():
+    """The top-level `case $desktop in` of selftest.sh as
+    {token: {"tool": ..., "oracle": ..., "sockets": ..., "heads_differ": ...}}."""
+    with open(SELFTEST, encoding="utf-8") as fh:
+        text = fh.read()
+    body = text.split("case $desktop in", 1)[1].split("\nesac", 1)[0]
+    arms, cur = {}, None
+    for line in body.splitlines():
+        m = re.match(r"^    ([a-z0-9|*-]+)\)(.*)$", line)
+        if m:
+            cur = m.group(1)
+            if cur == "*":
+                cur = None
+                continue
+            arms[cur] = {}
+            line = m.group(2)
+        if cur is None:
+            continue
+        for key, q, bare in re.findall(
+                r'\b(tool|oracle|sockets|logind_type|session_type|heads_differ)='
+                r'(?:"([^"]*)"|([^\s;]+))', line):
+            arms[cur][key] = q if q else bare
+    return arms
+
+
+def selftest_parser(oracle):
+    """The embedded `python3 -c` program of one arm of selftest.sh's heads()."""
+    body = support.sh_function(SELFTEST, "heads")
+    arm, keep = [], False
+    for line in body.splitlines():
+        m = re.match(r"^    ([a-z|]+)\)", line)
+        if m:
+            keep = oracle in m.group(1).split("|")
+        if keep:
+            arm.append(line)
+            if line.rstrip().endswith(";;"):
+                break
+    m = re.search(r"\| python3 -c '\n(.*?)'", "\n".join(arm), re.S)
+    assert m, "no python parser in selftest.sh heads() arm %s)" % oracle
+    return m.group(1)
+
+
+def run_parser(src, text):
+    got = subprocess.run([sys.executable, "-c", src], input=text,
+                         capture_output=True, text=True, timeout=60)
+    assert got.returncode == 0, got.stderr
+    return got.stdout.splitlines()
+
+
+def fixture(name):
+    with open(os.path.join(VMFIX, name), encoding="utf-8") as fh:
+        return fh.read()
+
+
 class TheKscreenParser(unittest.TestCase):
     """Fix 54, finding F7.7.  One parser, two Plasma generations, three
     captures.
@@ -143,29 +269,12 @@ class TheKscreenParser(unittest.TestCase):
     disabled head reports three when the test has just made it two, and the
     selftest passes on a rig that is not doing what it claims."""
 
-    @classmethod
-    def setUpClass(cls):
-        with open(SELFTEST, encoding="utf-8") as fh:
-            cls.sh = fh.read()
-
-    def parser(self):
-        """The embedded `python3 -c` program out of selftest.sh's monitors().
-
-        Sliced from the shipped file so that it cannot drift from what runs on
-        the rig -- which is the entire reason this is not a copy of the same
-        five lines."""
-        m = re.search(r"\| python3 -c '\n(import re, sys\n.*?)'", self.sh, re.S)
-        self.assertTrue(m, "the kscreen block parser is gone from selftest.sh")
-        return m.group(1)
-
-    def outputs(self, fixture):
-        path = os.path.join(KSCREEN, fixture)
+    def outputs(self, fixture_name):
+        path = os.path.join(KSCREEN, fixture_name)
         with open(path, encoding="utf-8") as fh:
             text = fh.read()
-        got = subprocess.run([sys.executable, "-c", self.parser()], input=text,
-                             capture_output=True, text=True, timeout=60)
-        self.assertEqual(got.returncode, 0, got.stderr)
-        return sorted({ln for ln in got.stdout.split() if ln.startswith("Virtual-")})
+        return sorted({ln.split()[0] for ln in run_parser(selftest_parser("kscreen"), text)
+                       if ln.startswith("Virtual-")})
 
     def test_plasma_5_27_one_line_format(self):
         """5.27 writes the whole state on the `Output:` line: `Output: 70
@@ -188,17 +297,159 @@ class TheKscreenParser(unittest.TestCase):
                          ["Virtual-1", "Virtual-2"])
 
     def test_wayland_and_x11_share_the_one_parser(self):
-        """The fix itself: inside monitors(), `kde)` and `kde-x11)` are one
-        case arm.  Two arms is two chances for the next Plasma format change to
-        be handled in only one of them -- and the arm that was wrong was the
-        Wayland one, which is the flavor every Plasma measurement in this
-        repository was taken on.  (`kde|kde-x11)` also appears in the layout
-        and geometry helpers; this looks inside monitors() alone.)"""
-        body = support.sh_function(SELFTEST, "monitors")
-        arms = re.findall(r"^    (\S+?\))", body, re.M)
-        self.assertIn("kde|kde-x11)", arms, arms)
-        self.assertNotIn("kde)", arms)
-        self.assertEqual(body.count("| python3 -c '\nimport re, sys"), 1)
+        """The fix itself: inside heads(), `kde` and `kde-x11` reach one arm --
+        they both set `oracle=kscreen`.  Two parsers is two chances for the next
+        Plasma format change to be handled in only one of them, and the one that
+        was wrong was the Wayland arm, which is the flavor every Plasma
+        measurement in this repository was taken on."""
+        arms = selftest_arms()
+        self.assertEqual(arms["kde"]["oracle"], "kscreen")
+        self.assertEqual(arms["kde-x11"]["oracle"], "kscreen")
+        body = support.sh_function(SELFTEST, "heads")
+        self.assertEqual(len(re.findall(r"re\.split\(r\"\(\?m\)\^Output: \"", body)), 1)
+
+
+class TheSelftestParsers(unittest.TestCase):
+    """R27.  The three parsers the wlroots, Hyprland and COSMIC flavors added to
+    selftest.sh's heads(), each sliced out of the shipped file and run over the
+    recorded output of the tool it reads.
+
+    They answer the two questions `expect_monitors` and `layout` ask -- which
+    heads are enabled, and where head 0 is -- so a parser that miscounts turns
+    the hot-plug half of the selftest into a test that passes on a rig doing
+    nothing."""
+
+    def test_wlr_randr_reads_position_per_enabled_head(self):
+        """wlr-randr 0.4.1 prints a block per output; the position is a
+        `Position: x,y` line inside it."""
+        self.assertEqual(run_parser(selftest_parser("wlr"),
+                                    fixture("wlr-randr-0.4.1-3heads.txt")),
+                         ["HEADLESS-3 2560,0", "HEADLESS-2 1280,0", "HEADLESS-1 0,0"])
+
+    def test_wlr_randr_skips_a_disabled_head(self):
+        """The case the parser exists for: a disabled head prints `Enabled: no`
+        and then stops -- no Modes, no Position -- so a parser keyed on the name
+        line alone would report a head the rig has just switched off."""
+        self.assertEqual(run_parser(selftest_parser("wlr"),
+                                    fixture("wlr-randr-0.4.1-3heads-one-disabled.txt")),
+                         ["HEADLESS-2 1280,0", "HEADLESS-1 0,0"])
+
+    def test_wlr_randr_on_the_rigs_connector_names(self):
+        """The same capture with virtio-vga's names: what `monitors()` filters on
+        is `^Virtual-`, so the substitution is the only difference that matters."""
+        self.assertEqual(run_parser(selftest_parser("wlr"),
+                                    fixture("wlr-randr-0.4.1-virtual-3heads-one-disabled.txt")),
+                         ["Virtual-2 1280,0", "Virtual-1 0,0"])
+
+    def test_hyprctl_monitors(self):
+        """`hyprctl -j monitors` from the Hyprland recon's VM: Virtual-1 at 0,0
+        and a runtime headless head at 1920,0 that came up scale 2.00 -- the
+        measurement the flavor's `monitor = , preferred, auto, 1` answers."""
+        got = run_parser(selftest_parser("hypr"),
+                         fixture("hyprctl-monitors-2heads.json"))
+        self.assertEqual(got, ["Virtual-1 0,0", "HEADLESS-2 1920,0"])
+
+    def test_hyprctl_skips_a_disabled_monitor(self):
+        """`disabled` is the field that says a head is off; it is false on both
+        recorded heads, so the negative case is made by flipping it."""
+        doc = json.loads(fixture("hyprctl-monitors-2heads.json"))
+        doc[1]["disabled"] = True
+        self.assertEqual(run_parser(selftest_parser("hypr"), json.dumps(doc)),
+                         ["Virtual-1 0,0"])
+
+    def test_cosmic_randr_kdl(self):
+        """`cosmic-randr list --kdl`: `output "NAME" enabled=#true {` and an
+        indented `position X Y`."""
+        self.assertEqual(run_parser(selftest_parser("cosmic"),
+                                    fixture("cosmic-randr-winit-1head.kdl")),
+                         ["WINIT-0 0,0"])
+
+    def test_cosmic_randr_reads_position_and_not_the_physical_size(self):
+        """Two heads and a disabled one, with a physical size that is not the
+        position: `physical` comes first inside the node, so a parser matching
+        the wrong key answers 0,0 for everything and the layout check passes on
+        a rig whose heads are stacked."""
+        self.assertEqual(run_parser(selftest_parser("cosmic"),
+                                    fixture("cosmic-randr-2heads-one-disabled.kdl")),
+                         ["Virtual-1 0,0", "Virtual-2 1920,0"])
+
+    def test_cosmic_randr_skips_a_disabled_output(self):
+        self.assertEqual(run_parser(selftest_parser("cosmic"),
+                                    fixture("cosmic-randr-winit-1head.kdl")
+                                    .replace("enabled=#true", "enabled=#false")),
+                         [])
+
+    def test_every_desktops_key_has_an_arm(self):
+        """selftest.sh keys off `# vmctl-desktop:`, so a DESKTOPS row with no arm
+        here is a flavor that boots and then dies at `unknown desktop`."""
+        self.assertEqual(sorted(selftest_arms()), sorted(vmctl_module().DESKTOPS))
+
+    def test_every_arm_names_a_parser_that_exists(self):
+        body = support.sh_function(SELFTEST, "heads")
+        labels = set()
+        for m in re.finditer(r"^    ([a-z|]+)\)", body, re.M):
+            labels.update(m.group(1).split("|"))
+        for token, arm in selftest_arms().items():
+            with self.subTest(token):
+                self.assertIn(arm["oracle"], labels)
+
+    def test_the_session_type_agrees_with_vmctls_table(self):
+        """Two tables, one fact: selftest.sh asserts `XDG_SESSION_TYPE` and
+        `loginctl Type` per desktop, and vmctl decides which sockets to wait for
+        from the same row.  Indexed and not `.get`-ed: an arm that forgets the
+        key is the failure this is named for, and a default that fell back to
+        the DESKTOPS value would have compared that value to itself."""
+        desktops = vmctl_module().DESKTOPS
+        for token, arm in selftest_arms().items():
+            with self.subTest(token):
+                self.assertEqual(arm["session_type"], desktops[token]["session"])
+                self.assertIn(arm["logind_type"], desktops[token]["logind"])
+
+    def test_heads_differ_is_set_exactly_where_a_panel_sits_on_one_head(self):
+        """`heads_differ` is what turns "head 0 and head 1 are byte-identical"
+        from a warning into a failure, so it may only be non-empty where the
+        desktop really does draw them differently.  sway and i3 put a bar on
+        every output, Hyprland, labwc, river and (as configured here) Wayfire,
+        Budgie and COSMIC draw the same wallpaper on every head -- the last
+        three unmeasured, which is why they are in the empty list and not the
+        other one."""
+        same = {"sway", "hypr", "labwc", "river", "wayfire", "budgie", "cosmic", "i3"}
+        for token, arm in selftest_arms().items():
+            with self.subTest(token):
+                if token in same:
+                    self.assertEqual(arm["heads_differ"], "")
+                else:
+                    self.assertTrue(arm["heads_differ"], token)
+
+    def test_the_first_run_check_is_not_a_literal_none_on_a_full_desktop(self):
+        """`layout` ends every arm with an `initial-setup:` line, and the run
+        asserts it says `none`; an arm that PRINTS the literal makes that
+        assertion vacuous.  That is honest for the bare compositors -- labwc,
+        river, Hyprland and COSMIC ship no first-run dialog -- but oracle=wlr
+        also serves xfce-wayland, lxqt-wayland and budgie, three full desktops
+        whose X11 twins are exactly why the xrandr arm greps wmctrl for a
+        display/welcome window (Xfce's is the reason the rig writes displays.xml
+        with Notify=3)."""
+        body = support.sh_function(SELFTEST, "layout")
+        arm = body.split("wlr|hypr|cosmic)", 1)[1]
+        self.assertIn("xfce-wayland|lxqt-wayland|budgie)", arm)
+        for name in ("xfce4-display-settings", "lxqt-config-monitor",
+                     "budgie-welcome", "update-notifier"):
+            with self.subTest(name):
+                self.assertIn(name, arm)
+        # -x and not -f: the pattern travels in that sh's own argv, and `pgrep -f`
+        # would match the shell running it and report a first-run window forever.
+        self.assertNotIn("pgrep -a -f", arm)
+
+    def test_the_muffin_arm_asks_cinnamons_own_bus_name(self):
+        """Muffin's DisplayConfig carries byte-identical signatures to Mutter's
+        under its own name, which is why one arm serves both and only the
+        destination and the object path change [recon2/cinnamon]."""
+        with open(SELFTEST, encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertIn("bus_dest=org.cinnamon.Muffin.DisplayConfig", text)
+        self.assertIn("bus_path=/org/cinnamon/Muffin/DisplayConfig", text)
+        self.assertEqual(selftest_arms()["cinnamon-wayland"]["oracle"], "muffin")
 
 
 class TheDeviationLists(unittest.TestCase):
@@ -238,6 +489,1230 @@ class TheDeviationLists(unittest.TestCase):
         section = self.docs["vm/README.md"]
         self.assertIn("There are eight, four in the flavor\nyaml and four in the "
                       "stage-2 script", section)
+
+
+class TheFlavorHeaders(unittest.TestCase):
+    """R01.  A flavor yaml is a cloud-config with four to seven `# vmctl-`
+    headers in its comments, and those headers are the whole interface between
+    the yaml and every script that reads it: which builder owns it, which
+    desktop it runs, which distro the host should expect, whether CI builds it
+    on every push."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.mod = vmctl_module()
+        cls.names = sorted(n[:-5] for n in os.listdir(FLAVORS) if n.endswith(".yaml"))
+        cls.text = {}
+        for n in cls.names:
+            with open(os.path.join(FLAVORS, n + ".yaml"), encoding="utf-8") as fh:
+                cls.text[n] = fh.read()
+
+    def test_exactly_one_build_kind_per_flavor(self):
+        """`vmctl build` (a cloud image), vm/build-iso-golden.sh (the Ubuntu
+        installer) and vm/build-nixos-golden.sh (a nix build) are three
+        different scripts; the header is how each recognises its own.  A yaml
+        with two, or none, is one no builder will touch."""
+        for name in self.names:
+            with self.subTest(name):
+                kinds = [k for k in ("base", "iso", "nix")
+                         if re.search(r"^#\s*vmctl-%s:" % k, self.text[name], re.M)]
+                self.assertEqual(len(kinds), 1, kinds)
+
+    def test_every_flavor_names_a_desktop_vmctl_knows(self):
+        for name in self.names:
+            with self.subTest(name):
+                found = re.findall(r"^#\s*vmctl-desktop:\s*(\S+)", self.text[name], re.M)
+                self.assertEqual(len(found), 1, found)
+                self.assertIn(found[0], self.mod.DESKTOPS)
+
+    def test_the_distro_and_ci_headers_are_what_the_thirteen_yamls_say(self):
+        """Both readers refuse a value outside their set, so `assertIn(...,
+        DISTROS)` could only ever have failed by the call raising.  The concrete
+        value is the claim worth pinning: every flavor that exists today is an
+        Ubuntu cloud image built on every push, and promoting the two ISO
+        flavors to `on-demand` is a deliberate one-word edit, not a drift."""
+        for name in self.names:
+            with self.subTest(name):
+                # the thirteen Ubuntu flavors say ubuntu; a nixos-* flavor (batch 4) says nixos
+                if name.startswith("nixos-"):
+                    self.assertEqual(self.mod.flavor_distro(name), "nixos")
+                    self.assertIn(self.mod.flavor_ci(name), ("push", "on-demand"))
+                else:
+                    self.assertEqual(self.mod.flavor_distro(name), "ubuntu")
+                    self.assertEqual(self.mod.flavor_ci(name), "push")
+
+    def flavors_dir(self, tmp):
+        """Point the module at `tmp` and put it back afterwards -- through
+        addCleanup, because a failing assertion between the two would otherwise
+        leave every later test in this class reading a deleted directory and
+        failing for a reason that is not its own."""
+        self.addCleanup(setattr, self.mod, "FLAVORS", pathlib.Path(FLAVORS))
+        self.mod.FLAVORS = pathlib.Path(tmp)
+        return self.mod.FLAVORS
+
+    def test_an_unknown_distro_is_refused_and_names_the_set(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.flavors_dir(tmp)
+            (self.mod.FLAVORS / "bogus.yaml").write_text(
+                "#cloud-config\n# vmctl-base: x.img\n# vmctl-distro: gentoo\n")
+            with self.assertRaises(self.mod.Fail) as e:
+                self.mod.flavor_distro("bogus")
+            self.assertIn("gentoo", str(e.exception))
+            self.assertIn("ubuntu|fedora|arch|nixos", str(e.exception))
+            (self.mod.FLAVORS / "sha.yaml").write_text(
+                "#cloud-config\n# vmctl-base: x.img\n# vmctl-base-sha256: nothex\n")
+            with self.assertRaises(self.mod.Fail):
+                self.mod.flavor_base_sha256("sha")
+            (self.mod.FLAVORS / "ok.yaml").write_text(
+                "#cloud-config\n# vmctl-base: x.img\n# vmctl-base-sha256: %s\n" % ("a1" * 32))
+            self.assertEqual(self.mod.flavor_base_sha256("ok"), "a1" * 32)
+
+    def test_a_nix_flavor_sends_vmctl_build_to_its_own_builder(self):
+        """The same refusal an ISO flavor gets, for the same reason: NixOS
+        publishes no cloud image at all, so there is nothing for `vmctl build`
+        to overlay [recon2/nixos]."""
+        with tempfile.TemporaryDirectory() as tmp:
+            self.flavors_dir(tmp)
+            (self.mod.FLAVORS / "nixos-sway.yaml").write_text(
+                "#cloud-config\n# vmctl-nix: nixos-sway\n# vmctl-distro: nixos\n")
+            with self.assertRaises(self.mod.Fail) as e:
+                self.mod.flavor_base("nixos-sway")
+            self.assertIn("build-nixos-golden.sh nixos-sway", str(e.exception))
+
+    def test_no_write_files_entry_carries_an_owner_key(self):
+        """The measured cloud-init trap: a `write_files` entry with
+        `owner: test:test` runs before the user exists and aborts the whole
+        module (`OSError: Unknown user or group ... 'test'`, cloud-init status:
+        error) [recon2/hyprland].  Write without `owner:`, chown in the build
+        script -- which is what build-image.sh does everywhere."""
+        for name in self.names:
+            with self.subTest(name):
+                block = self.text[name].split("write_files:", 1)
+                if len(block) == 1:
+                    continue
+                for line in block[1].splitlines():
+                    if re.match(r"^\s*runcmd:|^\s*power_state:", line):
+                        break
+                    self.assertNotRegex(line, r"^\s*(- )?owner:")
+
+
+class ThePackageLayer(unittest.TestCase):
+    """R02.  `pkg_*` sliced out of build-image.sh and run with stub package
+    managers, once per manager.  These are the lines that reach the network on a
+    machine nobody is watching; the retry loop around them is the reason a
+    golden build survives the networkd/NetworkManager hand-over, and the exact
+    argv is what makes the difference between an unattended install and a
+    prompt nobody answers."""
+
+    LAYER = ("detect_pkg", "wait_net", "pkg_retry", "pkg_update", "pkg_install",
+             "pkg_desktop", "pkg_seed_dm", "pkg_manifest")
+
+    def run_layer(self, pkg, script, extra_stubs=(), timeout=60):
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp, True)
+        log = os.path.join(tmp, "log")
+        open(log, "w").close()
+        names = ["apt-get", "dnf", "pacman", "sleep", "getent", "netplan",
+                 "+debconf-set-selections", "dpkg-query", "rpm", "sort",
+                 "systemctl", "snap"] + list(extra_stubs)
+        d = stubs(tmp, names, log)
+        env = dict(os.environ, PATH=d + ":" + os.environ["PATH"], FAKE_LOG=log,
+                   WRITTEN=os.path.join(tmp, "written"), PKG=pkg,
+                   APT="apt-get -y -q -o Dpkg::Options::=--force-confdef "
+                       "-o Dpkg::Options::=--force-confold",
+                   NET_HOST="example.invalid", NET_FIX="true")
+        got = subprocess.run(["bash", "-c", PREAMBLE + sh_layer(*self.LAYER) + "\n" + script],
+                             capture_output=True, text=True, timeout=timeout, env=env)
+        with open(log) as fh:
+            return got, [ln for ln in fh.read().splitlines() if ln]
+
+    def test_apt_install_is_todays_command_line(self):
+        """The five `-o` options are not decoration: --force-confold is what
+        keeps dpkg from stopping on a conffile prompt in a VM with no tty."""
+        _, log = self.run_layer("apt", 'pkg_install foo bar')
+        self.assertIn("apt-get -y -q -o Dpkg::Options::=--force-confdef "
+                      "-o Dpkg::Options::=--force-confold install foo bar", log)
+
+    def test_dnf_and_pacman_install_lines(self):
+        _, log = self.run_layer("dnf", 'pkg_install foo')
+        self.assertIn("dnf -y install foo", log)
+        _, log = self.run_layer("pacman", 'pkg_install foo')
+        self.assertIn("pacman -S --noconfirm --needed foo", log)
+
+    def test_pacman_syncs_the_keyring_before_anything_else(self):
+        """A cloud image weeks old carries keys older than the packages it is
+        about to fetch, so the keyring is its own `-Sy` and it is first
+        [recon2/arch]."""
+        _, log = self.run_layer("pacman", 'pkg_update\npkg_install foo')
+        self.assertEqual(log[0], "pacman -Sy --noconfirm --needed archlinux-keyring")
+        self.assertTrue(log.index("pacman -Sy --noconfirm --needed archlinux-keyring")
+                        < log.index("pacman -S --noconfirm --needed foo"))
+
+    def test_a_failing_install_is_retried_five_times(self):
+        """Five attempts, 15 s apart, each preceded by the network check and
+        followed by a metadata refresh: the failure this loop was written for is
+        an apt-get that ran while NetworkManager was taking the NIC over."""
+        got, log = self.run_layer("apt", 'pkg_install foo || echo GAVEUP',
+                                  extra_stubs=["apt-get=1"])
+        self.assertEqual(len([ln for ln in log if ln.startswith("apt-get") and "install" in ln]), 5)
+        self.assertEqual(len([ln for ln in log if ln == "sleep 15"]), 5)
+        self.assertIn("GAVEUP", got.stdout)
+
+    def test_wait_net_asks_getent_for_the_host_it_was_given(self):
+        """The network can vanish mid-build (the networkd/NetworkManager
+        hand-over left a 24.04 guest with no IP at all), so every package
+        command is preceded by a name lookup of the archive it is about to
+        talk to."""
+        _, log = self.run_layer("apt", 'NET_HOST=archive.ubuntu.com; wait_net && echo UP')
+        self.assertEqual(log, ["getent hosts archive.ubuntu.com"])
+
+    def test_each_manager_waits_for_its_own_archive(self):
+        """detect_pkg reads THIS machine's /etc/os-release, so the mapping is
+        asserted where it is written: running it would only ever measure the
+        distro the tests happen to run on."""
+        table = dict((pkg, host) for _id, pkg, host in re.findall(
+            r'\*" (\w+) "\*[^)]*\)\s+PKG=(\w+);\s+NET_HOST=(\S+);',
+            sh_layer("detect_pkg")))
+        self.assertEqual(table, {"apt": "archive.ubuntu.com",
+                                 "dnf": "mirrors.fedoraproject.org",
+                                 "pacman": "geo.mirror.pkgbuild.com"})
+
+    def test_wait_net_gives_up_and_says_so(self):
+        """90 tries, two seconds apart, is a minute and a half; the caller
+        (`pkg_retry`) carries on regardless and says `does not resolve`, because
+        a broken resolver is not always a broken network."""
+        got, log = self.run_layer("apt", 'wait_net || echo DOWN', extra_stubs=["getent=2"])
+        self.assertIn("DOWN", got.stdout)
+        self.assertEqual(len([ln for ln in log if ln.startswith("getent")]), 90)
+        self.assertEqual(len([ln for ln in log if ln == "say: network is down; true"]), 2)
+
+    def test_dnf_installs_an_environment_as_a_group(self):
+        """Fedora's desktops are comps environments, not packages:
+        `workstation-product-environment`, `kde-desktop-environment`,
+        `sway-desktop-environment` [recon2/pkg-rpm, recon2/fedora].  A word
+        ending in -environment goes to `dnf group install`, the rest to
+        `dnf install`, in that order."""
+        _, log = self.run_layer("dnf", 'pkg_desktop workstation-product-environment cosmic-randr foot')
+        self.assertIn("dnf -y group install workstation-product-environment", log)
+        self.assertIn("dnf -y install cosmic-randr foot", log)
+        self.assertLess(log.index("dnf -y group install workstation-product-environment"),
+                        log.index("dnf -y install cosmic-randr foot"))
+
+    def test_apt_does_not_invent_a_group_command(self):
+        """The same DESKTOP_PKG on Ubuntu is just packages: `-environment` is a
+        Fedora comps suffix and means nothing to apt."""
+        _, log = self.run_layer("apt", 'pkg_desktop ubuntu-desktop')
+        self.assertTrue(any("install ubuntu-desktop" in ln for ln in log))
+        self.assertFalse([ln for ln in log if "group install" in ln])
+
+    def test_the_manifest_is_names_only_per_manager(self):
+        """`vmctl build` parses this list off the serial console and refuses a
+        build whose count does not match, so its shape is a contract: names, one
+        per line, sorted, with no versions.  `rpm -qa` and `pacman -Q` both
+        print versions by default, which is what the two format flags are
+        for."""
+        for pkg, want in (("apt", "dpkg-query -W -f=${binary:Package}\\n"),
+                          ("dnf", "rpm -qa --qf %{NAME}\\n"),
+                          ("pacman", "pacman -Qq")):
+            with self.subTest(pkg):
+                _, log = self.run_layer(pkg, 'pkg_manifest >/dev/null')
+                self.assertEqual([ln for ln in log if not ln.startswith("sort")], [want])
+
+    def test_the_display_manager_question_is_answered_before_the_install(self):
+        """debconf is apt's alone, and the first display manager to configure
+        itself becomes THE display manager -- which is how a flavor that asked
+        for LightDM ends up on gdm3 because the desktop metapackage pulled
+        gnome-shell.  The ANSWER is the point, not the call: the three arms are
+        indistinguishable unless the line piped in is read back."""
+        for dm, want in (("dm_lightdm", "lightdm"), ("dm_sddm", "sddm"),
+                         ("dm_plasma", "sddm"), ("dm_gdm", "gdm3")):
+            with self.subTest(dm):
+                _, log = self.run_layer("apt", 'pkg_seed_dm %s' % dm)
+                self.assertIn("debconf-set-selections ", log[0])
+                self.assertIn("stdin: %s shared/default-x-display-manager select %s"
+                              % (want, want), log)
+        _, log = self.run_layer("dnf", 'pkg_seed_dm dm_lightdm; echo done')
+        self.assertEqual(log, [])
+
+
+class TheDisplayManagers(unittest.TestCase):
+    """R03.  Each `dm_*` sliced and run into a temp tree through the `VMCTL_ROOT`
+    prefix seam.  Autologin is the one thing every flavor depends on and the one
+    thing that cannot be checked without booting -- unless the files it writes
+    are checked here."""
+
+    LAYER = ("written", "wcat", "wdir", "accountsservice", "no_session_ambiguity",
+             "dm_gdm", "dm_sddm", "dm_plasmalogin", "dm_plasma", "dm_greetd", "dm_lightdm")
+
+    def run_dm(self, script, tree=(), links=(), exe=()):
+        tmp = os.path.realpath(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        root = os.path.join(tmp, "root")
+        for rel in tuple(tree) + tuple(exe):
+            path = os.path.join(root, rel)
+            os.makedirs(os.path.dirname(path) if not rel.endswith("/") else path, exist_ok=True)
+            if not rel.endswith("/"):
+                open(path, "w").close()
+        for rel in exe:   # dm_greetd tests -x, not -f
+            os.chmod(os.path.join(root, rel), 0o755)
+        for src, dst in links:
+            os.makedirs(os.path.dirname(os.path.join(root, src)), exist_ok=True)
+            os.symlink(os.path.join(root, dst), os.path.join(root, src))
+        log = os.path.join(tmp, "log")
+        open(log, "w").close()
+        d = stubs(tmp, ["systemctl", "usermod", "getent=2"], log)
+        env = dict(os.environ, PATH=d + ":" + os.environ["PATH"], FAKE_LOG=log,
+                   WRITTEN=os.path.join(tmp, "written"), VMCTL_ROOT=root, PKG="apt")
+        body = (PREAMBLE.replace('written() {', 'unused_written() {')
+                + sh_layer(*self.LAYER) + "\n" + script)
+        got = subprocess.run(["bash", "-c", body], capture_output=True, text=True,
+                             timeout=60, env=env)
+        return got, root, log
+
+    def read(self, root, rel):
+        with open(os.path.join(root, rel), encoding="utf-8") as fh:
+            return fh.read()
+
+    WL = "usr/share/wayland-sessions/"
+    XS = "usr/share/xsessions/"
+
+    def test_gdm_writes_gdm3_on_ubuntu_and_gdm_on_fedora(self):
+        """The directory the package created is the fact; the distro name is
+        not.  Ubuntu's gdm3 owns /etc/gdm3, Fedora's and Arch's gdm owns
+        /etc/gdm [recon2/fedora, recon2/arch, recon2/gnome-xorg]."""
+        got, root, _ = self.run_dm("dm_gdm wayland",
+                                   tree=["etc/gdm3/", self.WL + "ubuntu.desktop"])
+        self.assertEqual(got.returncode, 0, got.stderr)
+        self.assertIn("AutomaticLogin=test", self.read(root, "etc/gdm3/custom.conf"))
+        got, root, _ = self.run_dm("dm_gdm wayland",
+                                   tree=["etc/gdm/", self.WL + "gnome.desktop"])
+        self.assertEqual(got.returncode, 0, got.stderr)
+        self.assertIn("AutomaticLogin=test", self.read(root, "etc/gdm/custom.conf"))
+        self.assertFalse(os.path.exists(os.path.join(root, "etc/gdm3/custom.conf")))
+
+    def test_gdm_takes_the_session_name_off_the_disk_and_not_the_flavor(self):
+        """Ubuntu's gnome-session ships ubuntu.desktop / ubuntu-xorg.desktop;
+        Fedora 44's /usr/share/wayland-sessions holds exactly gnome.desktop,
+        cosmic.desktop and sway.desktop and its measured autologin row says
+        `Session=gnome` [recon2/fedora], and Arch's gnome-session ships
+        gnome.desktop too.  A hard-coded `ubuntu` would write an AccountsService
+        row naming a session that does not exist on two of the three distros and
+        lean on GDM's silent fallback -- so the name is resolved the way
+        dm_plasma resolves its four Plasma names: off the image being built."""
+        for tree, want in ((["etc/gdm3/", self.WL + "ubuntu.desktop",
+                             self.WL + "gnome.desktop"], "ubuntu"),
+                           (["etc/gdm/", self.WL + "gnome.desktop"], "gnome")):
+            with self.subTest(want):
+                got, root, _ = self.run_dm("dm_gdm wayland", tree=tree)
+                self.assertEqual(got.returncode, 0, got.stderr)
+                self.assertIn("Session=%s\n" % want,
+                              self.read(root, "var/lib/AccountsService/users/test"))
+        for tree, want in ((["etc/gdm3/", self.XS + "ubuntu-xorg.desktop"], "ubuntu-xorg"),
+                           (["etc/gdm/", self.XS + "gnome-xorg.desktop"], "gnome-xorg")):
+            with self.subTest(want):
+                got, root, _ = self.run_dm("dm_gdm x11", tree=tree)
+                self.assertEqual(got.returncode, 0, got.stderr)
+                self.assertIn("XSession=%s\n" % want,
+                              self.read(root, "var/lib/AccountsService/users/test"))
+
+    def test_gdm_refuses_and_lists_the_directory_when_no_session_is_there(self):
+        """A GNOME image with no GNOME session file is a build that would
+        otherwise finish and boot to a login loop forty minutes later; the
+        listing is what says which name it should have been looking for."""
+        got, _, log = self.run_dm("dm_gdm wayland",
+                                  tree=["etc/gdm3/", self.WL + "cosmic.desktop"])
+        self.assertEqual(got.returncode, 9)
+        with open(log, encoding="utf-8") as fh:
+            self.assertIn("cosmic.desktop", fh.read())
+
+    def test_wayland_enable_is_false_only_for_the_xorg_session(self):
+        """gdm3 46.2 reads daemon/WaylandEnable and 50.1 no longer does (both
+        read out of the debs [recon2/gnome-xorg]); false is the only way to
+        reach an Xorg session on the release that honours it, and true keeps GDM
+        off Xorg on the release that does not."""
+        _, root, _ = self.run_dm("dm_gdm wayland",
+                                  tree=["etc/gdm3/", self.WL + "ubuntu.desktop"])
+        self.assertIn("WaylandEnable=true", self.read(root, "etc/gdm3/custom.conf"))
+        _, root, _ = self.run_dm("dm_gdm x11",
+                                 tree=["etc/gdm3/", self.XS + "ubuntu-xorg.desktop"])
+        self.assertIn("WaylandEnable=false", self.read(root, "etc/gdm3/custom.conf"))
+        self.assertIn("XSession=ubuntu-xorg",
+                      self.read(root, "var/lib/AccountsService/users/test"))
+
+    def test_gdm_on_x11_refuses_when_the_session_file_is_missing(self):
+        got, _, _ = self.run_dm("dm_gdm x11", tree=["etc/gdm3/"])
+        self.assertEqual(got.returncode, 9)
+
+    def test_sddm_writes_its_autologin_file(self):
+        got, root, _ = self.run_dm("dm_sddm plasma.desktop",
+                                   tree=["usr/share/wayland-sessions/plasma.desktop"])
+        self.assertEqual(got.returncode, 0, got.stderr)
+        conf = self.read(root, "etc/sddm.conf.d/autologin.conf")
+        self.assertIn("User=test", conf)
+        self.assertIn("Session=plasma.desktop", conf)
+        self.assertIn("Relogin=false", conf)
+        self.assertIn("Session=plasma", self.read(root, "var/lib/AccountsService/users/test"))
+
+    def test_a_session_name_in_both_directories_is_refused(self):
+        """SDDM resolves the autologin session NAME against
+        /usr/share/wayland-sessions first (Display::attemptAutologin), so a name
+        in both directories would quietly start the other session type -- the
+        one thing a kde-x11 flavor must never do.  ubuntu.desktop really is in
+        both on noble [recon2/gnome-xorg]."""
+        got, _, _ = self.run_dm("dm_sddm plasma.desktop",
+                                tree=["usr/share/wayland-sessions/plasma.desktop",
+                                      "usr/share/xsessions/plasma.desktop"])
+        self.assertEqual(got.returncode, 9)
+
+    def test_plasmalogin_writes_the_three_keys_the_template_has(self):
+        """Fedora 44 replaced SDDM with plasma-login-manager in every KDE
+        variant; the keys are the rpm's own template's [recon2/fedora]."""
+        got, root, _ = self.run_dm("dm_plasmalogin plasma.desktop",
+                                   tree=["usr/share/wayland-sessions/plasma.desktop"])
+        self.assertEqual(got.returncode, 0, got.stderr)
+        conf = self.read(root, "etc/plasmalogin.conf.d/autologin.conf")
+        self.assertIn("[Autologin]", conf)
+        self.assertIn("User=test", conf)
+        self.assertIn("Session=plasma.desktop", conf)
+        self.assertIn("Relogin=false", conf)
+
+    def test_the_plasma_arm_picks_the_display_manager_that_is_installed(self):
+        """One DESKTOPS row, two display managers: SDDM on Ubuntu and Arch,
+        plasma-login-manager on Fedora 44, whose kde-desktop comps group carries
+        it and no sddm at all [recon2/fedora].  Which one is decided by what the
+        packages put on disk, never by the flavor's distro header."""
+        _, root, _ = self.run_dm("dm_plasma wayland",
+                                 tree=["usr/share/wayland-sessions/plasma.desktop"])
+        self.assertTrue(os.path.exists(os.path.join(root, "etc/sddm.conf.d/autologin.conf")))
+        self.assertFalse(os.path.exists(os.path.join(root, "etc/plasmalogin.conf.d/autologin.conf")))
+        _, root, _ = self.run_dm("dm_plasma wayland",
+                                 tree=["usr/share/wayland-sessions/plasma.desktop",
+                                       "etc/plasmalogin.conf.d/"])
+        self.assertTrue(os.path.exists(os.path.join(root, "etc/plasmalogin.conf.d/autologin.conf")))
+        self.assertFalse(os.path.exists(os.path.join(root, "etc/sddm.conf.d/autologin.conf")))
+
+    def test_the_plasma_arm_finds_five_twenty_seven_and_six_session_files(self):
+        """Plasma 5.27's Wayland session is plasmawayland.desktop and Plasma
+        6's is plasma.desktop; the X11 pair is plasma.desktop and
+        plasmax11.desktop.  Four names, one arm."""
+        _, root, _ = self.run_dm("dm_plasma wayland",
+                                 tree=["usr/share/wayland-sessions/plasmawayland.desktop"])
+        self.assertIn("Session=plasmawayland.desktop",
+                      self.read(root, "etc/sddm.conf.d/autologin.conf"))
+        _, root, _ = self.run_dm("dm_plasma x11",
+                                 tree=["usr/share/xsessions/plasmax11.desktop"])
+        self.assertIn("Session=plasmax11.desktop",
+                      self.read(root, "etc/sddm.conf.d/autologin.conf"))
+        got, _, _ = self.run_dm("dm_plasma x11", tree=["usr/share/xsessions/"])
+        self.assertEqual(got.returncode, 9)
+
+    def test_greetd_refuses_when_greetd_is_not_installed(self):
+        """The flavor names greetd in DESKTOP_PKG; if the install silently did
+        not happen, the image would boot to a text console and the failure
+        would be read forty minutes later, off a serial log."""
+        got, _, _ = self.run_dm('dm_greetd sway')
+        self.assertEqual(got.returncode, 9)
+        got, _, _ = self.run_dm('dm_greetd sway', tree=["usr/sbin/greetd"])
+        self.assertEqual(got.returncode, 9, "a greetd that is not executable is not greetd")
+
+    def test_greetd_writes_the_toml_and_the_getty_drop_in(self):
+        tmp = os.path.realpath(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        root = os.path.join(tmp, "root")
+        os.makedirs(os.path.join(root, "usr/sbin"))
+        with open(os.path.join(root, "usr/sbin/greetd"), "w") as fh:
+            fh.write("#!/bin/sh\n")
+        os.chmod(os.path.join(root, "usr/sbin/greetd"), 0o755)
+        log = os.path.join(tmp, "log")
+        open(log, "w").close()
+        d = stubs(tmp, ["systemctl"], log)
+        body = (PREAMBLE.replace('written() {', 'unused_written() {')
+                + sh_layer(*self.LAYER) + '\ndm_greetd "labwc"\n')
+        got = subprocess.run(["bash", "-c", body], capture_output=True, text=True, timeout=60,
+                             env=dict(os.environ, PATH=d + ":" + os.environ["PATH"],
+                                      FAKE_LOG=log, WRITTEN=os.path.join(tmp, "w"),
+                                      VMCTL_ROOT=root, PKG="apt"))
+        self.assertEqual(got.returncode, 0, got.stderr)
+        toml = self.read(root, "etc/greetd/config.toml")
+        self.assertEqual(toml.count('command = "labwc"'), 2)
+        self.assertIn("vt = 1", toml)
+        drop = self.read(root, "etc/systemd/system/greetd.service.d/vmctl-vt1.conf")
+        self.assertIn("Conflicts=getty@tty1.service", drop)
+        with open(log) as fh:
+            lines = fh.read().splitlines()
+        self.assertIn("systemctl disable getty@tty1.service", lines)
+        self.assertIn("systemctl enable greetd.service", lines)
+
+    def test_greetd_takes_the_whole_multi_word_command_of_the_dispatch_table(self):
+        """The one multi-word command in select_desktop is river's, and it is
+        the one that was broken: `$DM $DM_ARGS` at the bottom of build-image.sh
+        is UNQUOTED (dm_gdm needs the split -- its argument is a session kind),
+        so `local cmd=$1` in dm_greetd saw `river` alone and wrote
+        `command = "river"` into both stanzas.  river then starts with no `-c`:
+        no tinyrwm, no dbus-update-activation-environment, no layout helper --
+        the session the file's own comment says must not happen.  Driven
+        through the shipped dispatch line rather than a hand-typed command, so
+        that a table edit is covered too."""
+        got, root, _ = self.run_dm(
+            support.sh_function(BUILD, "select_desktop")
+            + "\nDESKTOP=river\nselect_desktop\n$DM $DM_ARGS\n",
+            exe=["usr/sbin/greetd"])
+        self.assertEqual(got.returncode, 0, got.stderr)
+        toml = self.read(root, "etc/greetd/config.toml")
+        self.assertEqual(toml.count('command = "river -c /usr/local/bin/vmctl-river-init"'), 2,
+                         toml)
+
+    def test_lightdm_writes_the_session_name_it_was_given(self):
+        """LightDM 1.32's sessions-directory already includes
+        /usr/share/wayland-sessions (read out of the shipped binary
+        [recon2/cinnamon, recon2/xfce-wayland]), so `autologin-session=
+        cinnamon-wayland` needs no extra key -- and AccountsService's XSession=
+        is meaningless for a Wayland session, so it is left out there."""
+        got, root, _ = self.run_dm("dm_lightdm cinnamon-wayland",
+                                   tree=["usr/lib/systemd/system/lightdm.service",
+                                         "usr/share/wayland-sessions/cinnamon-wayland.desktop"],
+                                   links=[("etc/systemd/system/display-manager.service",
+                                           "usr/lib/systemd/system/lightdm.service")])
+        self.assertEqual(got.returncode, 0, got.stderr)
+        self.assertIn("autologin-session=cinnamon-wayland",
+                      self.read(root, "etc/lightdm/lightdm.conf.d/50-autologin.conf"))
+        user = self.read(root, "var/lib/AccountsService/users/test")
+        self.assertIn("Session=cinnamon-wayland", user)
+        self.assertNotIn("XSession=", user)
+
+    def test_lightdm_refuses_when_display_manager_service_is_not_lightdm(self):
+        """The assertion that catches the debconf race: gdm3 configured itself
+        first and display-manager.service still points at it, which is a golden
+        image that boots into the wrong desktop."""
+        got, _, _ = self.run_dm("dm_lightdm xubuntu",
+                                tree=["usr/lib/systemd/system/lightdm.service",
+                                      "usr/lib/systemd/system/gdm3.service",
+                                      "usr/share/xsessions/xubuntu.desktop"],
+                                links=[("etc/systemd/system/display-manager.service",
+                                        "usr/lib/systemd/system/gdm3.service")])
+        self.assertEqual(got.returncode, 9)
+
+
+class ThePlasmaWelcomeCentre(unittest.TestCase):
+    """R03.  Plasma 6 does not autostart the welcome centre any more: kded's
+    kded_plasma_welcome module opens it whenever plasma-welcomerc's
+    LastSeenVersion is missing or older than the installed plasma-welcome, so
+    hiding the autostart entry is not enough and the version has to be looked
+    up.  selftest.sh's `pgrep -a -x plasma-welcome` is what fails when it is
+    not: "a first-run window is running in the session"."""
+
+    def run_kde(self, manager, version="6.4.0-1"):
+        tmp = os.path.realpath(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        root = os.path.join(tmp, "root")
+        os.makedirs(os.path.join(root, "home/test"))
+        log = os.path.join(tmp, "log")
+        open(log, "w").close()
+        # every package manager present, only the named one answering
+        d = stubs(tmp, ["chown", "kwriteconfig6", "dpkg-query=1", "rpm=1", "pacman=1"], log)
+        answer = {"apt": ("dpkg-query", version), "dnf": ("rpm", version.split("-")[0]),
+                  "pacman": ("pacman", "plasma-welcome " + version)}[manager]
+        with open(os.path.join(d, answer[0]), "w") as fh:
+            fh.write('#!/bin/sh\nprintf "%%s\\n" "$(basename "$0") $*" >> %s\n'
+                     'printf "%%s\\n" %s\n' % (log, shlex.quote(answer[1])))
+        os.chmod(os.path.join(d, answer[0]), 0o755)
+        with open(os.path.join(d, "install"), "w") as fh:
+            fh.write('#!/bin/sh\nargs=""\nwhile [ $# -gt 0 ]; do case $1 in\n'
+                     '  -o|-g) shift 2 ;;\n'
+                     '  *) args="$args \'$1\'"; shift ;;\nesac; done\n'
+                     'eval exec /usr/bin/install $args\n')
+        os.chmod(os.path.join(d, "install"), 0o755)
+        body = (PREAMBLE.replace("written() {", "unused_written() {")
+                + "TESTHOME=$VMCTL_ROOT/home/test\n"
+                + sh_layer("written", "wcat", "wdir", "hide_autostart", "desktop_kde")
+                + "\ndesktop_kde\n")
+        got = subprocess.run(["bash", "-c", body], capture_output=True, text=True, timeout=60,
+                             env=dict(os.environ, PATH=d + ":" + os.environ["PATH"],
+                                      FAKE_LOG=log, WRITTEN=os.path.join(tmp, "w"),
+                                      VMCTL_ROOT=root, PKG="apt"))
+        with open(log, encoding="utf-8") as fh:
+            return got, fh.read().splitlines()
+
+    def test_the_version_is_looked_up_on_every_package_manager(self):
+        """apt, dnf AND pacman: arch-kde is an on-demand flavor of this same
+        rig, and with no `pacman -Q` branch it alone would boot into the welcome
+        centre.  `pacman -Q` prints "name version", which is why its answer is
+        cut down the way pkg_manifest normalises the same shape; dpkg's carries
+        the Debian revision, which is why the tail is cut too."""
+        for manager in ("apt", "dnf", "pacman"):
+            with self.subTest(manager):
+                got, log = self.run_kde(manager)
+                self.assertEqual(got.returncode, 0, got.stderr)
+                wrote = [ln for ln in log if "plasma-welcomerc" in ln and "kwriteconfig" in ln]
+                self.assertEqual(len(wrote), 1, "\n".join(log))
+                self.assertTrue(wrote[0].endswith("--group General --key LastSeenVersion 6.4.0"),
+                                wrote[0])
+
+    def test_an_epoch_and_a_revision_are_stripped_from_the_version(self):
+        """kded compares LastSeenVersion with plasma-welcome's own version
+        string, which carries neither: dpkg's `4:6.4.0-1ubuntu2` has to become
+        6.4.0 or every boot decides the welcome centre has never been seen."""
+        _, log = self.run_kde("apt", version="4:6.4.0-1ubuntu2")
+        wrote = [ln for ln in log if "plasma-welcomerc" in ln][0]
+        self.assertTrue(wrote.endswith("LastSeenVersion 6.4.0"), wrote)
+
+    def test_a_package_manager_that_answers_nothing_writes_no_version(self):
+        """Better no file than a version nobody can compare: the autostart entry
+        is hidden either way, and the failure is then selftest's to report."""
+        got, log = self.run_kde("apt", version="")
+        self.assertEqual(got.returncode, 0, got.stderr)
+        self.assertEqual([ln for ln in log if "kwriteconfig" in ln
+                          and "plasma-welcomerc" in ln], [])
+        self.assertIn("say: warning: no plasma-welcome version from dpkg/rpm/pacman; "
+                      "plasma-welcomerc not written", log)
+
+    def test_the_autostart_entry_is_hidden_as_well(self):
+        """Plasma 5.27 still autostarts it; both mechanisms are covered."""
+        got, _ = self.run_kde("apt")
+        self.assertEqual(got.returncode, 0, got.stderr)
+
+
+class TheWlrLayoutHelper(unittest.TestCase):
+    """R03.  /usr/local/bin/vmctl-wlr-layout is vmctl-sway-layout for the
+    compositors with no IPC (labwc and the three desktops on it, river, and
+    whatever else wlroots names Virtual-N).  wlroots adds the initial outputs in
+    REVERSE enumeration order -- measured on labwc, where HEADLESS-1 landed at
+    +1280+0 [recon2/labwc, recon2/xfce-wayland] -- and the rig's contract is
+    head 0 = Virtual-1 at (0,0), so this script is the whole of that contract on
+    six flavors.  Sliced out of the heredoc and run against recorded wlr-randr
+    output with a stub `wlr-randr` that records the argv it is called back
+    with."""
+
+    @staticmethod
+    def script():
+        body = support.sh_function(BUILD, "wlr_layout")
+        return body.split("<<'EOF'\n", 1)[1].rsplit("\nEOF", 1)[0]
+
+    def place(self, text):
+        """Run the helper over `text` and return the argv of its second call."""
+        tmp = os.path.realpath(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        out = os.path.join(tmp, "wlr.txt")
+        with open(out, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        log = os.path.join(tmp, "log")
+        with open(os.path.join(tmp, "wlr-randr"), "w") as fh:
+            # no arguments = the query; anything else is the placement being asked for
+            fh.write('#!/bin/sh\n[ $# -eq 0 ] && exec cat %s\nprintf "%%s\\n" "$*" >> %s\n'
+                     % (out, log))
+        os.chmod(os.path.join(tmp, "wlr-randr"), 0o755)
+        src = os.path.join(tmp, "layout.py")
+        with open(src, "w", encoding="utf-8") as fh:
+            fh.write(self.script())
+        got = subprocess.run([sys.executable, src], capture_output=True, text=True, timeout=60,
+                             env=dict(os.environ, PATH=tmp + ":" + os.environ["PATH"]))
+        self.assertEqual(got.returncode, 0, got.stderr)
+        if not os.path.exists(log):
+            return ""
+        with open(log, encoding="utf-8") as fh:
+            return fh.read().strip()
+
+    def test_the_heads_are_placed_in_connector_order_from_zero(self):
+        """Connector order, not enumeration order: the fixture is what wlroots
+        answered, Virtual-3 first and Virtual-1 last."""
+        got = self.place(fixture("wlr-randr-0.4.1-virtual-3heads-one-disabled.txt"))
+        self.assertEqual(got, "--output Virtual-1 --pos 0,0 --output Virtual-2 --pos 1280,0")
+
+    def test_the_step_is_the_heads_own_width_and_not_a_constant(self):
+        """`vmctl start --head-size` is free to ask for anything, and the
+        recorded output above is 1280 wide: a hard-coded 1920 would leave a
+        640-pixel gap between every pair of heads and put Virtual-2 somewhere
+        wlr-randr never said a head was.  The width is on that head's own
+        `(current)` mode line, three lines further up."""
+        got = self.place(fixture("wlr-randr-0.4.1-virtual-3heads-one-disabled.txt"))
+        self.assertNotIn("1920,0", got)
+        self.assertIn("--pos 1280,0", got)
+        wide = fixture("wlr-randr-0.4.1-virtual-3heads-one-disabled.txt").replace(
+            "1280x720 px (current)", "1920x1080 px (current)")
+        self.assertEqual(self.place(wide),
+                         "--output Virtual-1 --pos 0,0 --output Virtual-2 --pos 1920,0")
+
+    def test_a_disabled_head_is_not_placed(self):
+        """Virtual-3 in the fixture is `Enabled: no` and has no mode line at
+        all; placing it would turn it back on."""
+        self.assertNotIn("Virtual-3",
+                         self.place(fixture("wlr-randr-0.4.1-virtual-3heads-one-disabled.txt")))
+
+    def test_nothing_is_asked_of_wlr_randr_when_there_are_no_heads(self):
+        self.assertEqual(self.place(""), "")
+
+
+class TheDesktopsOnLabwc(unittest.TestCase):
+    """R03.  Three of the nineteen desktops are not labwc -- they merely RUN on
+    it: Budgie, `startxfce4 --wayland` and `startlxqtwayland`.  Each starts its
+    own session manager (budgie-desktop, xfce4-session, lxqt-session) under
+    labwc, and where the rig's head-layout helper is hooked decides whether the
+    contract "head 0 = Virtual-1 at (0,0)" holds at all.
+
+    ~/.config/labwc is the wrong place for all three.  `startxfce4 --wayland`
+    runs `labwc --config-dir ~/.config/xfce4/labwc --config
+    ~/.config/xfce4/labwc/rc.xml --session xfce4-session` (read verbatim out of
+    /usr/bin/startxfce4 4.20.4-1 and measured as the process tree
+    [recon2/xfce-wayland]), so nothing under ~/.config/labwc is read and
+    wlroots' reverse enumeration leaves Virtual-1 at +3840; and labwc's
+    `environment` file OVERRIDES a variable that is already set -- measured on
+    labwc 0.9.3, where an environment carrying XDG_CURRENT_DESKTOP=LXQt:wlroots
+    came out as labwc:wlroots -- so writing it under an LXQt session would have
+    the rig rewrite the desktop identity the tools' own detection reads."""
+
+    LAYER = ("written", "wcat", "wdir", "hide_autostart", "wlr_layout",
+             "autostart_wlr_layout", "labwc_config", "xfce_settings",
+             "desktop_xfce_wayland", "desktop_lxqt_wayland", "desktop_budgie",
+             "desktop_labwc")
+
+    def run_desktop(self, fn, tree=(), stub=("chown", "labwc")):
+        tmp = os.path.realpath(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        root = os.path.join(tmp, "root")
+        os.makedirs(os.path.join(root, "home/test"))
+        for rel in tree:
+            path = os.path.join(root, rel)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            open(path, "w").close()
+        log = os.path.join(tmp, "log")
+        open(log, "w").close()
+        d = stubs(tmp, list(stub), log)
+        # `install -d -o test -g test` needs root and a `test` user; the directories
+        # still have to be made for real, so the stub strips the ownership flags and
+        # hands the rest to the real install.
+        with open(os.path.join(d, "install"), "w") as fh:
+            fh.write('#!/bin/sh\nargs=""\nwhile [ $# -gt 0 ]; do case $1 in\n'
+                     '  -o|-g) shift 2 ;;\n'
+                     '  *) args="$args \'$1\'"; shift ;;\nesac; done\n'
+                     'eval exec /usr/bin/install $args\n')
+        os.chmod(os.path.join(d, "install"), 0o755)
+        body = (PREAMBLE.replace("written() {", "unused_written() {")
+                + "TESTHOME=$VMCTL_ROOT/home/test\n" + sh_layer(*self.LAYER)
+                + "\n%s\n" % fn)
+        got = subprocess.run(["bash", "-c", body], capture_output=True, text=True, timeout=60,
+                             env=dict(os.environ, PATH=d + ":" + os.environ["PATH"],
+                                      STUBS=d, FAKE_LOG=log, WRITTEN=os.path.join(tmp, "w"),
+                                      VMCTL_ROOT=root, PKG="apt"))
+        return got, os.path.join(root, "home/test")
+
+    XFCE_TREE = ["usr/share/wayland-sessions/xfce-wayland.desktop"]
+
+    def test_the_layout_helper_is_hooked_through_xdg_autostart(self):
+        """xfce4-session, lxqt-session and budgie-desktop all run XDG autostart;
+        it is the one hook all three share and the only one this rig can reach
+        without owning the session script."""
+        for fn, tree in (("desktop_xfce_wayland", self.XFCE_TREE),
+                         ("desktop_lxqt_wayland", ()), ("desktop_budgie", ())):
+            with self.subTest(fn):
+                got, home = self.run_desktop(fn, tree)
+                self.assertEqual(got.returncode, 0, got.stderr)
+                entry = os.path.join(home, ".config/autostart/vmctl-wlr-layout.desktop")
+                self.assertTrue(os.path.exists(entry), "no XDG autostart entry")
+                with open(entry, encoding="utf-8") as fh:
+                    self.assertIn("Exec=/usr/local/bin/vmctl-wlr-layout", fh.read())
+
+    def test_a_desktop_on_labwc_writes_nothing_into_labwcs_own_config(self):
+        """The two failures this prevents, one per file: an autostart under
+        ~/.config/labwc that the session's labwc never reads (its --config-dir
+        is elsewhere), and an `environment` that would overwrite the desktop's
+        own XDG_CURRENT_DESKTOP if it did."""
+        for fn, tree in (("desktop_xfce_wayland", self.XFCE_TREE),
+                         ("desktop_lxqt_wayland", ()), ("desktop_budgie", ())):
+            with self.subTest(fn):
+                got, home = self.run_desktop(fn, tree)
+                self.assertEqual(got.returncode, 0, got.stderr)
+                self.assertFalse(os.path.exists(os.path.join(home, ".config/labwc")),
+                                 "wrote into ~/.config/labwc")
+
+    def test_the_bare_labwc_flavor_still_gets_its_own_config(self):
+        """labwc alone IS the session, `labwc` with no --config-dir, and it
+        draws nothing at all -- the swaybg line in that autostart is what keeps
+        head 0 from being one flat colour and failing vmctl's paint check."""
+        got, home = self.run_desktop("desktop_labwc")
+        self.assertEqual(got.returncode, 0, got.stderr)
+        with open(os.path.join(home, ".config/labwc/autostart"), encoding="utf-8") as fh:
+            auto = fh.read()
+        self.assertIn("/usr/local/bin/vmctl-wlr-layout &", auto)
+        self.assertIn("swaybg -i", auto)
+        with open(os.path.join(home, ".config/labwc/environment"), encoding="utf-8") as fh:
+            self.assertIn("XDG_CURRENT_DESKTOP=labwc:wlroots", fh.read())
+
+    def test_lxqt_wayland_names_the_compositor_where_lubuntu_cannot_outrank_it(self):
+        """lubuntu-default-settings ships /etc/xdg/xdg-Lubuntu/lxqt/session.conf
+        with window_manager=openbox and a Lubuntu session prepends xdg-Lubuntu to
+        XDG_CONFIG_DIRS [recon2/openbox], so the rig's /etc/xdg copy can lose on
+        the very key that decides whether startlxqtwayland takes its first-run
+        branch (a different config directory, and lxqt-config-session instead of
+        lxqt-session).  The user file outranks every system directory."""
+        got, home = self.run_desktop("desktop_lxqt_wayland")
+        self.assertEqual(got.returncode, 0, got.stderr)
+        with open(os.path.join(home, ".config/lxqt/session.conf"), encoding="utf-8") as fh:
+            self.assertIn("compositor=labwc", fh.read())
+
+    def test_the_xfce_wayland_arm_refuses_without_the_session_file_or_labwc(self):
+        """Both halves of "Xfce 4.20 on Wayland" have to be installed: the
+        session file comes from xfce4-session 4.20 and the compositor is a
+        separate package [recon2/xfce-wayland]."""
+        got, _ = self.run_desktop("desktop_xfce_wayland")
+        self.assertEqual(got.returncode, 9, "no session file, yet it built")
+        # PATH is the stub directory prepended to the caller's, so a labwc on the
+        # machine running the tests would answer `command -v`; the whole PATH goes.
+        got, _ = self.run_desktop("PATH=$STUBS; desktop_xfce_wayland", self.XFCE_TREE,
+                                  stub=("chown",))
+        self.assertEqual(got.returncode, 9, "no labwc, yet it built")
+        got, _ = self.run_desktop("desktop_xfce_wayland", self.XFCE_TREE)
+        self.assertEqual(got.returncode, 0, got.stderr)
+
+
+class TheDispatchTable(unittest.TestCase):
+    """R04.  build-image.sh's `select_desktop` and vmctl's DESKTOPS are one
+    table written twice: the host reads the yaml's `# vmctl-desktop:` and looks
+    it up in DESKTOPS, the guest takes the same token and picks a display
+    manager and a desktop function.  A token in one and not the other is a
+    flavor that builds and never logs in, or a flavor vmctl refuses to start."""
+
+    @classmethod
+    def setUpClass(cls):
+        with open(BUILD, encoding="utf-8") as fh:
+            cls.build = fh.read()
+        cls.body = support.sh_function(BUILD, "select_desktop")
+        cls.arms = {}
+        for m in re.finditer(r"^    ([a-z0-9-]+)\)\s+DM=(\S+)\s+DM_ARGS=\"([^\"]*)\"\s+DESK=(\S+)",
+                             cls.body, re.M):
+            cls.arms[m.group(1)] = (m.group(2), m.group(3), m.group(4))
+
+    def test_the_table_names_every_desktops_key_and_nothing_else(self):
+        self.assertEqual(sorted(self.arms), sorted(vmctl_module().DESKTOPS))
+
+    def test_every_function_the_table_names_exists(self):
+        for token, (dm, _args, desk) in self.arms.items():
+            with self.subTest(token):
+                self.assertIn("\n%s() {" % dm, self.build)
+                self.assertIn("\n%s() {" % desk, self.build)
+
+    def test_the_display_manager_matches_the_desktops_row(self):
+        """DESKTOPS' `dm` is what the failure hint tells a human to read the
+        journal of; the dispatch table is what actually configured it.  They may
+        not disagree."""
+        want = {"dm_gdm": "gdm", "dm_sddm": "sddm", "dm_plasma": "sddm",
+                "dm_greetd": "greetd", "dm_lightdm": "lightdm"}
+        desktops = vmctl_module().DESKTOPS
+        for token, (dm, _args, _desk) in self.arms.items():
+            with self.subTest(token):
+                self.assertIn(want[dm], desktops[token]["dm"])
+
+    def test_an_unknown_desktop_is_refused_by_name(self):
+        body = PREAMBLE + self.body + '\nDESKTOP=beos select_desktop\n'
+        got = subprocess.run(["bash", "-c", body], capture_output=True, text=True, timeout=60,
+                             env=dict(os.environ, FAKE_LOG="/dev/stdout", WRITTEN="/dev/null"))
+        self.assertEqual(got.returncode, 9)
+        self.assertIn("unknown DESKTOP=beos", got.stdout)
+
+    def test_the_wlroots_desktops_get_greetd_with_their_own_compositor(self):
+        """The command greetd runs is the compositor's own name, and it is what
+        `scanout_owner()` will look for in DRM debugfs -- `Hyprland` with a
+        capital H, measured [recon2/hyprland]."""
+        desktops = vmctl_module().DESKTOPS
+        for token in ("sway", "hypr", "labwc", "wayfire", "river"):
+            with self.subTest(token):
+                dm, args, _ = self.arms[token]
+                self.assertEqual(dm, "dm_greetd")
+                self.assertEqual(args.split()[0], desktops[token]["compositor"])
+
+    def test_the_only_multi_word_command_is_rivers_and_it_names_its_init(self):
+        """river has no config file: `river -c <executable>` is the whole of its
+        configuration [recon2/river], so the rest of the line is not decoration
+        -- it is where tinyrwm, the D-Bus environment publish and the layout
+        helper are started from.  Every other command is one word, which is why
+        the greetd tests used to be able to miss the truncation."""
+        multi = {t: a for t, (_dm, a, _d) in self.arms.items() if len(a.split()) > 1}
+        self.assertEqual(multi, {"river": "river -c /usr/local/bin/vmctl-river-init"})
+        self.assertIn('wcat "$VMCTL_ROOT/usr/local/bin/vmctl-river-init"', self.build)
+
+
+class TheDesktopsTable(unittest.TestCase):
+    """R05.  vmctl's DESKTOPS is read by `vmctl session`, `vmctl user`,
+    `wait_first_paint`, selftest.sh and the smoke; every one of them trusts the
+    row's shape."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.mod = vmctl_module()
+        with open(VMCTL, encoding="utf-8") as fh:
+            cls.text = fh.read()
+
+    def test_every_row_has_the_seven_fields(self):
+        for token, row in self.mod.DESKTOPS.items():
+            with self.subTest(token):
+                self.assertEqual(sorted(row),
+                                 ["compositor", "dm", "label", "logind", "session",
+                                  "shell", "splash"])
+
+    def test_session_logind_and_dm_are_from_their_sets(self):
+        for token, row in self.mod.DESKTOPS.items():
+            with self.subTest(token):
+                self.assertIn(row["session"], ("wayland", "x11"))
+                self.assertTrue(set(row["logind"]) <= {"wayland", "x11", "tty"}, row["logind"])
+                self.assertIsInstance(row["dm"], tuple)
+                self.assertTrue(row["dm"])
+                self.assertIsInstance(row["shell"], tuple)
+
+    def test_an_x11_desktop_has_the_x_server_as_its_scanout_owner(self):
+        """On X11 the compositor is a client: the X server owns head 0's
+        framebuffer, so kwin_x11/cinnamon/marco are never what DRM debugfs
+        names.  Measured on a live Lubuntu session, `allocated by = Xorg`
+        [recon2/openbox]."""
+        for token, row in self.mod.DESKTOPS.items():
+            if row["session"] == "x11":
+                with self.subTest(token):
+                    self.assertEqual(row["compositor"], "Xorg")
+
+    def test_a_greetd_desktop_may_report_a_tty_session(self):
+        """greetd registers the session as a plain tty one and the compositor's
+        libseat switches it to wayland, so both are legal for exactly the
+        desktops greetd starts."""
+        for token, row in self.mod.DESKTOPS.items():
+            with self.subTest(token):
+                self.assertEqual("tty" in row["logind"], "greetd" in row["dm"])
+
+    def test_the_hint_names_every_candidate_and_display_manager_service(self):
+        """One row may have two display managers (Fedora 44's KDE has
+        plasma-login-manager where Ubuntu has SDDM), and NixOS drives
+        display-manager.service directly [recon2/fedora, recon2/nixos].  The
+        hint after a timeout is the only thing a human has to go on."""
+        self.assertEqual(self.mod.dm_units("kde"), ("sddm", "plasmalogin", "display-manager"))
+        self.assertEqual(self.mod.dm_units("sway"), ("greetd", "display-manager"))
+
+    def test_the_paint_gate_covers_both_gnome_sessions(self):
+        """`GNOME Shell started` is emitted on startup-complete with no backend
+        condition, so it is the paint gate on Xorg too [recon2/gnome-xorg]; the
+        scanout branch below it would look for `gnome-shell` and find `Xorg`."""
+        self.assertIn('case "$DESKTOP" in gnome|gnome-x11)', self.mod.PAINT_SCRIPT)
+
+    def test_no_process_match_is_a_bare_pgrep_x(self):
+        """nixpkgs wraps GUI programs and a wrapped foo's comm is
+        `.foo-wrappe`, so every match goes through pg() [recon2/nixos].  A bare
+        `pgrep -x swaybg` would wait forever on a NixOS flavor."""
+        for name, script in (("PAINT_SCRIPT", self.mod.PAINT_SCRIPT),
+                             ("USER_WRAPPER", self.mod.USER_WRAPPER),
+                             ("SESSION_SCRIPT", self.mod.SESSION_SCRIPT)):
+            with self.subTest(name):
+                without_pg = re.sub(r"pg\(\) \{.*?\n\}", "", script, flags=re.S)
+                self.assertNotIn("pgrep", without_pg)
+        self.assertIn(r'''pgrep -x "$1|\.$(printf '%.14s' "$1-wrapped")"''',
+                      self.mod.PAINT_SCRIPT)
+
+    def pg_says(self, script, want, *names):
+        """Slice pg() out of `script`, run it under bash against the real
+        `pgrep`, and return what it said about each name -- with one live
+        process whose comm is `want`.
+
+        Nothing is re-implemented here: a Python `re` over a pattern typed into
+        the test would pass whatever pg() became, which is exactly how the
+        truncation bug below survived."""
+        tmp = os.path.realpath(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        # comm is argv[0]'s basename, so a copy of bash named `.kwin_wayland-wrapped`
+        # gives the kernel the same fifteen-character comm nixpkgs' wrapper does.
+        exe = os.path.join(tmp, want)
+        shutil.copy(shutil.which("bash"), exe)
+        proc = subprocess.Popen([exe, "-c", "read x"], stdin=subprocess.DEVNULL,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.addCleanup(proc.wait)
+        self.addCleanup(proc.kill)
+        m = re.search(r"^pg\(\) \{.*?\n\}", script, re.S | re.M)
+        self.assertTrue(m, "no pg() in this script")
+        out = {}
+        for n in names:
+            got = subprocess.run(["bash", "-c", m.group(0)
+                                  + '\npg %s >/dev/null 2>&1 && echo YES || echo NO\n'
+                                  % shlex.quote(n)],
+                                 capture_output=True, text=True, timeout=60)
+            out[n] = got.stdout.strip().splitlines()[-1] == "YES"
+        return out
+
+    def test_pg_matches_a_wrapped_name_whose_comm_was_truncated(self):
+        """`kwin_wayland` is twelve characters, so its wrapped comm is
+        `.kwin_wayland-w` -- fifteen characters with no `-wr` left in it, which
+        is what a `-wr` suffix pattern needed and did not get.  Every 12- and
+        13-character name in DESKTOPS (kwin_wayland, budgie-panel, cosmic-panel,
+        mate-session, lxqt-session) was in that hole."""
+        got = self.pg_says(self.mod.PAINT_SCRIPT, ".kwin_wayland-w",
+                           "kwin_wayland", "kwin", "kwin_waylandd")
+        self.assertTrue(got["kwin_wayland"], "the wrapped kwin_wayland was not found")
+        self.assertFalse(got["kwin"], "a prefix of the name must not match")
+        self.assertFalse(got["kwin_waylandd"], "a longer name must not match")
+
+    def test_pg_matches_the_wrapped_name_and_not_a_neighbour(self):
+        """The fifteen-character comm of a wrapped swaybg is `.swaybg-wrapped`
+        exactly; sway's would be `.sway-wrapped`, and the pattern for `sway`
+        must not swallow swaybg's.  Run against procps' own `pgrep -x`, whose
+        whole-match ERE semantics are the half of this that is not vmctl's."""
+        got = self.pg_says(self.mod.PAINT_SCRIPT, ".swaybg-wrapped",
+                           "swaybg", "sway", "swaybgd", "myswaybg")
+        self.assertTrue(got["swaybg"])
+        self.assertFalse(got["sway"], "pg sway must not match .swaybg-wrapped")
+        self.assertFalse(got["swaybgd"])
+        self.assertFalse(got["myswaybg"])
+
+    def test_the_user_wrappers_pg_is_the_same_rule_scoped_to_the_user(self):
+        """USER_WRAPPER runs under /bin/sh (dash on Ubuntu), where `${v:0:14}`
+        is not a substring; the shipped body uses `printf '%.14s'`, which is
+        POSIX, and it is the pids it prints and not a status."""
+        got = self.pg_says(self.mod.USER_WRAPPER, ".mate-session-w",
+                           "mate-session", "mate")
+        self.assertTrue(got["mate-session"])
+        self.assertFalse(got["mate"])
+        self.assertIn('pgrep -u "$(id -u)" -x', self.mod.USER_WRAPPER)
+
+
+class TheUserWrapper(unittest.TestCase):
+    """R06.  USER_WRAPPER is the shell `vmctl user` runs every command inside;
+    it rebuilds the session environment from the systemd user manager first, the
+    session leader's environ second and the sockets that are there third.  It is
+    sliced out of vmctl and run here with a stand-in `systemctl --user
+    show-environment`."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.wrapper = vmctl_module().USER_WRAPPER
+
+    def run_wrapper(self, desktop, session, showenv, extra_stubs=()):
+        tmp = os.path.realpath(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        d = os.path.join(tmp, "stub")
+        os.makedirs(d)
+        with open(os.path.join(d, "systemctl"), "w") as fh:
+            fh.write("#!/bin/sh\ncat <<'EOF'\n%s\nEOF\n" % showenv)
+        with open(os.path.join(d, "loginctl"), "w") as fh:
+            fh.write("#!/bin/sh\nexit 0\n")
+        with open(os.path.join(d, "pgrep"), "w") as fh:
+            fh.write("#!/bin/sh\nexit 1\n")
+        for name, body in extra_stubs:
+            with open(os.path.join(d, name), "w") as fh:
+                fh.write(body)
+        for f in os.listdir(d):
+            os.chmod(os.path.join(d, f), 0o755)
+        env = {"PATH": d + ":/usr/bin:/bin", "HOME": tmp, "XDG_RUNTIME_DIR": tmp,
+               "VMCTL_DESKTOP": desktop, "VMCTL_SESSION": session}
+        got = subprocess.run(["sh", "-c", self.wrapper, "vmctl-user", "env"],
+                             capture_output=True, text=True, timeout=60, env=env)
+        self.assertEqual(got.returncode, 0, got.stderr)
+        return dict(ln.split("=", 1) for ln in got.stdout.splitlines() if "=" in ln)
+
+    def test_the_three_new_socket_variables_are_imported(self):
+        """Hyprland's own /proc/<pid>/environ carries XDG_SESSION_TYPE=tty and
+        neither WAYLAND_DISPLAY nor the signature, while `systemctl --user
+        show-environment` carries both, because Hyprland exports them itself
+        [recon2/hyprland, recon2/arch].  The user manager is therefore the only
+        place these three can come from."""
+        env = self.run_wrapper("hypr", "wayland",
+                               "HYPRLAND_INSTANCE_SIGNATURE=v0.53.3_1757000000\n"
+                               "WAYFIRE_SOCKET=/run/user/1000/wayfire-wayland-1-.socket\n"
+                               "I3SOCK=/run/user/1000/i3/ipc-socket.812\n"
+                               "WAYLAND_DISPLAY=wayland-1")
+        self.assertEqual(env["HYPRLAND_INSTANCE_SIGNATURE"], "v0.53.3_1757000000")
+        self.assertEqual(env["WAYFIRE_SOCKET"], "/run/user/1000/wayfire-wayland-1-.socket")
+        self.assertEqual(env["I3SOCK"], "/run/user/1000/i3/ipc-socket.812")
+        self.assertEqual(env["WAYLAND_DISPLAY"], "wayland-1")
+
+    def test_a_variable_outside_the_whitelist_is_not_imported(self):
+        """imp() is a whitelist and not a filter: the user manager's environment
+        carries whatever the session put there, and `vmctl user` is not a way to
+        inherit it."""
+        env = self.run_wrapper("sway", "wayland",
+                               "VMCTL_NOT_WHITELISTED=x\nWAYLAND_DISPLAY=wayland-1")
+        self.assertNotIn("VMCTL_NOT_WHITELISTED", env)
+
+    def test_a_value_with_a_shell_character_is_refused(self):
+        """The values are exported by a shell, so what may be in them is a
+        closed set of characters -- this is the guard that keeps a session
+        variable from becoming a command."""
+        env = self.run_wrapper("sway", "wayland", "WAYLAND_DISPLAY=wayland-1;id")
+        self.assertNotIn("WAYLAND_DISPLAY", env)
+
+    def test_i3sock_is_asked_of_i3_itself(self):
+        """i3 writes $XDG_RUNTIME_DIR/i3/ipc-socket.<pid> and exports nothing,
+        so without this the tools forced onto our own code find no IPC socket at
+        all [recon2/i3].  `i3 --get-socketpath` is i3's own answer."""
+        tmp = os.path.realpath(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        sock = os.path.join(tmp, "ipc-socket.812")
+        import socket as socket_mod
+        s = socket_mod.socket(socket_mod.AF_UNIX)
+        s.bind(sock)
+        self.addCleanup(s.close)
+        env = self.run_wrapper("i3", "x11", "DISPLAY=:0",
+                               extra_stubs=[("i3", "#!/bin/sh\necho %s\n" % sock)])
+        self.assertEqual(env["I3SOCK"], sock)
+
+    def test_display_is_defaulted_before_i3_is_asked_for_its_socket(self):
+        """`i3 --get-socketpath` reads the I3_SOCKET_PATH property off the ROOT
+        WINDOW [recon2/i3]: with no DISPLAY it cannot open the connection and
+        answers nothing, and the find fallback -- which cannot tell two i3
+        sessions apart -- is what answers instead.  Ordering is the whole fix,
+        so ordering is what is asserted: the wrapper's DISPLAY default has to
+        come first.  The functional test above passes DISPLAY in through the
+        systemd environment and so cannot see this."""
+        w = vmctl_module().USER_WRAPPER
+        self.assertLess(w.index("export DISPLAY=:0"), w.index("i3 --get-socketpath"))
+
+    def test_the_desktop_falls_back_to_a_name_the_session_would_have_set(self):
+        """XDG_CURRENT_DESKTOP is what the tools' own detection reads when
+        nothing else answers; river is deliberately absent, having no such name
+        of its own."""
+        for desktop, want in (("labwc", "labwc:wlroots"), ("cosmic", "COSMIC"),
+                              ("hypr", "Hyprland"), ("cinnamon", "X-Cinnamon"),
+                              ("mate", "MATE"), ("lxqt-wayland", "LXQt"),
+                              ("gnome-x11", "ubuntu:GNOME"), ("budgie", "Budgie")):
+            with self.subTest(desktop):
+                env = self.run_wrapper(desktop, "wayland", "")
+                self.assertEqual(env.get("XDG_CURRENT_DESKTOP"), want)
+        self.assertNotIn("XDG_CURRENT_DESKTOP", self.run_wrapper("river", "wayland", ""))
+
+    def test_the_session_leader_is_not_always_the_compositor(self):
+        """On the Wayland Xfce and LXQt sessions labwc is the compositor, but
+        xfce4-session and lxqt-session are what hold DISPLAY and
+        XDG_CURRENT_DESKTOP in their environ [recon2/xfce-wayland,
+        recon2/openbox]; on Budgie the environ that matters is labwc's."""
+        block = self.wrapper.split('case "$VMCTL_DESKTOP" in', 1)[1].split("esac", 1)[0]
+        leaders = {}
+        for tokens, comp in re.findall(r"([a-z0-9|-]+)\) comp=(\S+)", block):
+            for t in tokens.split("|"):
+                leaders[t] = comp
+        for desktop, leader in (("xfce-wayland", "xfce4-session"),
+                                ("lxqt-wayland", "lxqt-session"),
+                                ("budgie", "labwc"), ("cosmic", "cosmic-comp"),
+                                ("hypr", "Hyprland"), ("i3", "i3")):
+            with self.subTest(desktop):
+                self.assertEqual(leaders.get(desktop), leader)
+
+
+class ThePackageListParser(unittest.TestCase):
+    """R07.  `vmctl build` reads the guest's package list off the serial console
+    and refuses the build when what it parsed does not match what the guest
+    said it wrote.  That check is the only proof the image finished; a name
+    regex that drops Fedora's `NetworkManager` would fail every Fedora build
+    with a count mismatch and no other clue."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.mod = vmctl_module()
+        # Sliced out of cmd_build rather than copied, for the reason every slice
+        # in this file exists: a parser that drifts from what runs is what this
+        # test cannot catch.
+        src = support.sh_block(VMCTL, 'm = re.search(r"VMCTL-PACKAGES-BEGIN',
+                               "guest reported {n[1] if n else '?'})\")")
+        cls.src = re.sub(r"^        ", "", src, flags=re.M).replace("raise Fail(",
+                                                                   "raise ValueError(")
+
+    def parse(self, text):
+        ns = {"re": re, "flavor": "x", "serial": "s", "text": text}
+        exec(self.src, ns)
+        return ns["pkgs"]
+
+    def test_a_dpkg_list_parses(self):
+        pkgs = self.parse(fixture("serial-packages-dpkg.txt"))
+        self.assertIn("libgtk-3-0t64", pkgs)
+        self.assertEqual(len(pkgs), 311)
+
+    def test_an_rpm_list_keeps_the_uppercase_names(self):
+        """Fedora has exactly two names in a desktop install that a lowercase-
+        only regex would drop, and dropping them is a count mismatch, which is
+        the message `build ... looks wrong` [recon2/pkg-rpm]."""
+        pkgs = self.parse(fixture("serial-packages-rpm.txt"))
+        self.assertIn("NetworkManager", pkgs)
+        self.assertIn("ModemManager", pkgs)
+        self.assertIn("xorg-x11-server-Xwayland", pkgs)
+
+    def test_a_pacman_list_parses_including_an_underscore(self):
+        """`pacman -Qq` prints names only (the guest's pkg_manifest does the
+        normalising), and Arch has package names with an underscore that
+        Debian's regex would have dropped."""
+        pkgs = self.parse(fixture("serial-packages-pacman.txt"))
+        self.assertIn("linux_api_headers", pkgs)
+        self.assertIn("archlinux-keyring", pkgs)
+
+    def test_a_short_list_fails_the_sanity_floor(self):
+        """Under 200 names is not a desktop image: the smallest measured one is
+        an Arch sway image at ~450 packages.  The floor catches a serial log
+        that was truncated, which looks exactly like a successful build."""
+        with self.assertRaises(ValueError) as e:
+            self.parse(fixture("serial-packages-short.txt"))
+        self.assertIn("150 entries parsed", str(e.exception))
+
+    def test_a_count_the_guest_disagrees_with_fails(self):
+        """The guest counts with `wc -l` and the host counts what it parsed;
+        the two numbers are the check."""
+        text = fixture("serial-packages-dpkg.txt").replace(
+            "311 packages installed", "312 packages installed")
+        with self.assertRaises(ValueError):
+            self.parse(text)
+
+
+class TheSELinuxRelabel(unittest.TestCase):
+    """R33.  On Fedora SELinux is Enforcing and every file cloud-init's runcmd
+    wrote carries whatever label that process had [recon2/fedora,
+    recon2/pkg-rpm].  Nothing tripped an AVC in the recon, but nothing in the
+    recon logged in either: the fix is cheap and the failure it prevents (a
+    display manager that cannot read its own autologin file) is not."""
+
+    @staticmethod
+    def layers():
+        """The dm_* and desktop_* half of build-image.sh: everything between the
+        layer-2 banner and the build itself."""
+        with open(BUILD, encoding="utf-8") as fh:
+            text = fh.read()
+        bar = "# ---------------------------------------------------------------- "
+        return text.split(bar + "layer 2")[1].split(bar + "the build itself")[0]
+
+    def test_every_write_in_the_layers_is_recorded(self):
+        """Recorded either by `wcat` (which writes and remembers in one) or by a
+        `written` call beside the redirection, for the three places that build a
+        file out of a group -- the sway, Hyprland and i3 configs, each of which is
+        the packaged default plus the rig's additions.  An unrecorded write is a
+        file `relabel` never sees, which on Fedora is a display manager that
+        cannot read its own autologin file."""
+        lines = self.layers().splitlines()
+        for i, line in enumerate(lines):
+            if not re.search(r'> "\$(VMCTL_ROOT|TESTHOME)', line):
+                continue
+            if line.lstrip().startswith("wcat "):
+                continue
+            near = "\n".join(lines[i:i + 12])
+            with self.subTest(line.strip()[:60]):
+                self.assertRegex(near, r'written "\$(VMCTL_ROOT|TESTHOME)',
+                                 "a write with no written() beside it")
+
+    def test_the_relabel_runs_after_the_desktop_function(self):
+        with open(BUILD, encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertIn("$DM $DM_ARGS\n$DESK\nrelabel\n", text)
+
+    def test_restorecon_is_run_over_the_recorded_paths_on_dnf_only(self):
+        tmp = os.path.realpath(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        log = os.path.join(tmp, "log")
+        open(log, "w").close()
+        d = stubs(tmp, ["restorecon"], log)
+        listing = os.path.join(tmp, "written")
+        with open(listing, "w") as fh:
+            fh.write("%s/etc\n%s/etc\n%s/gone\n" % (tmp, tmp, tmp))
+        os.makedirs(os.path.join(tmp, "etc"))
+        body = (PREAMBLE + sh_layer("relabel")
+                + '\nWRITTEN=%s\nrelabel\n' % listing)
+        for pkg, want in (("dnf", ["restorecon -R %s/etc" % tmp]), ("apt", [])):
+            with self.subTest(pkg):
+                open(log, "w").close()
+                got = subprocess.run(["bash", "-c", body], capture_output=True, text=True,
+                                     timeout=60,
+                                     env=dict(os.environ, PATH=d + ":" + os.environ["PATH"],
+                                              FAKE_LOG=log, PKG=pkg))
+                self.assertEqual(got.returncode, 0, got.stderr)
+                with open(log) as fh:
+                    lines = [ln for ln in fh.read().splitlines()
+                             if ln.startswith("restorecon")]
+                self.assertEqual(lines, want)
 
 
 @LIVE

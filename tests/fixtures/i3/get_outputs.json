@@ -1,0 +1,26 @@
+[
+ {
+  "name": "xroot-0",
+  "active": false,
+  "primary": false,
+  "rect": {
+   "x": 0,
+   "y": 0,
+   "width": 1920,
+   "height": 1080
+  },
+  "current_workspace": null
+ },
+ {
+  "name": "screen",
+  "active": true,
+  "primary": false,
+  "rect": {
+   "x": 0,
+   "y": 0,
+   "width": 1920,
+   "height": 1080
+  },
+  "current_workspace": "2"
+ }
+]

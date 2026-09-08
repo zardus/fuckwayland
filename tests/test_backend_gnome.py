@@ -7,6 +7,7 @@ for each ListNames outcome, and the shipped udev rule / installer /
 interface XML. No GNOME, no real bus needed."""
 
 import contextlib
+import importlib.util
 import io
 import json
 import os
@@ -30,6 +31,7 @@ from fwcommon.dbus_mini import Bus, DBusError, Variant
 from fwcommon.errors import CmdError
 from support import env
 from test_dbus_mini import MockBus
+import wl_fake
 from wdotool import backend_detect, backend_gnome
 from wdotool.backend import (View, Window, WindowBackend, Workspace,
                              hit_test, state_steps)
@@ -1643,21 +1645,68 @@ class ConstructorTests(_Base):
 
 
 class DetectTests(_Base):
-    """backend_detect order: WDOTOOL_BACKEND -> sway socket -> KWin name ->
-    GNOME name (never swallowed) -> wlr -> error, with one ListNames."""
+    """backend_detect's order: WDOTOOL_BACKEND -> sway socket -> Hyprland socket -> KWin / GNOME / Cinnamon
+    (one ListNames, none of the three ever swallowed) -> Wayfire socket -> one registry round trip, which
+    picks wlr or COSMIC -> the rc-2 sentence.
+
+    The registry step is a real `wl_fake.registry_server` replaying a recorded global list, not a stub: what
+    it decides is a question about bytes on a wl_registry and about nothing else, and the whole reason COSMIC
+    needed a step of its own is that cosmic-comp advertises `ext_foreign_toplevel_list_v1` and
+    `zcosmic_toplevel_info_v1` and no `zwlr_foreign_toplevel_manager_v1` at all [M recon2/cosmic.md §2, §3].
+    The makers are stubbed, because constructing a backend is the next test's subject and not this one's.
+
+    `session.RUN_USER_DIR` is pointed at a private tree: without that, the box the suite runs on decides
+    whether there is a Wayland socket to read a registry from."""
 
     def setUp(self):
         backend_detect.reset()
-        self._wlr = backend_detect._wlr
+        self.rundir = tempfile.mkdtemp(prefix="wdotool-detect-run-")
+        self.addCleanup(shutil.rmtree, self.rundir, ignore_errors=True)
+        p = mock.patch.object(session, "RUN_USER_DIR", self.rundir)
+        p.start()
+        self.addCleanup(p.stop)
+        self.made = []
+        self._orig = {}
         self._wlr_calls = []
+        self.real_makers = dict(backend_detect._MAKERS)
+        self.addCleanup(backend_detect._MAKERS.update, self.real_makers)
+        for name in ("_sway", "_hypr", "_wayfire", "_wlr", "_cosmic", "_cinnamon"):
+            self._orig[name] = getattr(backend_detect, name)
+            stub = self._stub(name)
+            setattr(backend_detect, name, stub)
+            # `_MAKERS` captured the function objects at import, so the forced
+            # path (WDOTOOL_BACKEND) has to be pointed at the stub as well
+            for key, fn in list(backend_detect._MAKERS.items()):
+                if fn is self._orig[name]:
+                    backend_detect._MAKERS[key] = stub
+        self.fake = None
 
-        def no_wlr():
-            self._wlr_calls.append(1)
-            raise CmdError("wlr: no foreign-toplevel")
-        backend_detect._wlr = no_wlr
+    def _stub(self, name):
+        """A maker that records the call and refuses, the way a backend whose protocol is not really there
+        does. `_sway` keeps its real constructor: the sway-socket test drives it against a real socket."""
+        real = self._orig[name]
+
+        def maker():
+            self.made.append(name)
+            if name == "_wlr":
+                self._wlr_calls.append(1)
+            if name == "_sway":
+                return real()
+            raise CmdError("%s: not in this session" % name[1:])
+        return maker
+
+    def compositor(self, fixture):
+        """Point the session at a `registry_server` replaying tests/fixtures/registries/<fixture>.txt."""
+        self.fake = wl_fake.registry_server(fixture)
+        self.addCleanup(self.fake.close)
+        ctx = env(WAYLAND_DISPLAY=self.fake.path)
+        ctx.__enter__()
+        self.addCleanup(ctx.__exit__, None, None, None)
+        return self.fake
 
     def tearDown(self):
-        backend_detect._wlr = self._wlr
+        for name, fn in self._orig.items():
+            setattr(backend_detect, name, fn)
         backend_detect.reset()
 
     def test_gnome_with_bridge(self):
@@ -1700,6 +1749,41 @@ class DetectTests(_Base):
             self.assertTrue(self.mock.wait_dropped(unique))
             bridge.close()
 
+    def test_cinnamon_is_detected_and_kwin_still_beats_it(self):
+        """U27. A Cinnamon session owns `org.Cinnamon` and neither of the other two names, so its place in the
+        order is decided by what it never collides with rather than by a preference [M recon2/cinnamon.md
+        §2.2]; the KWin branch keeps its precedence, because a Plasma box with Cinnamon's packages installed
+        is still Plasma."""
+        cin = Bus(self.mock.address)
+        self.addCleanup(cin.close)
+        self.assertEqual(cin.request_name(backend_detect.CINNAMON_NAME), 1)
+        with self.assertRaises(CmdError):
+            backend_detect.detect()
+        self.assertEqual(self.made, ["_cinnamon"])
+        self.made = []
+        kwin = Bus(self.mock.address)
+        try:
+            self.assertEqual(kwin.request_name(backend_detect.KWIN_NAME), 1)
+            backend_detect.reset()
+            self.assertEqual(backend_detect.detect().name, "kwin")
+        finally:
+            unique = kwin.unique_name
+            kwin.close()
+            self.assertTrue(self.mock.wait_dropped(unique))
+        self.assertEqual(self.made, [])
+
+    def test_cinnamon_costs_no_second_listnames(self):
+        """Three bus names, still one ListNames for the whole detection: the third check is a lookup in a list
+        that has already been fetched, not another round trip."""
+        cin = Bus(self.mock.address)
+        self.addCleanup(cin.close)
+        cin.request_name(backend_detect.CINNAMON_NAME)
+        before = backend_detect.session_names()
+        with self.assertRaises(CmdError):
+            backend_detect.detect()
+        self.assertIs(backend_detect.session_names(), before)
+        self.assertEqual(before.count(backend_detect.CINNAMON_NAME), 1)
+
     def test_sway_socket_wins_over_dbus(self):
         bridge = MockBridge(self.mock)
         srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -1715,6 +1799,173 @@ class DetectTests(_Base):
             os.unlink(path)
             bridge.close()
 
+    def test_the_hypr_socket_is_asked_before_the_bus(self):
+        """Hyprland owns no `org.kde.KWin` and no `org.gnome.Shell` [M recon2/hyprland.md §2], so nothing
+        below can shadow it -- but it does advertise `zwlr_foreign_toplevel_manager_v1`, so it would be
+        swallowed by the registry step, which is honest for reading and wrong about ids, minimize and geometry
+        there [M hyprland.md §3]."""
+        bridge = MockBridge(self.mock)
+        d = os.path.join(self.rundir, str(os.getuid()), "hypr", "sig_1_1")
+        os.makedirs(d)
+        open(os.path.join(d, ".socket.sock"), "w").close()
+        open(os.path.join(d, "hyprland.lock"), "w").close()
+        try:
+            b = backend_detect.detect()
+            self.addCleanup(b.bus.close)
+        finally:
+            bridge.close()
+        # the socket was asked about before the bus was, even though the bus
+        # here has an answer of its own
+        self.assertEqual(self.made, ["_hypr"])
+
+    def test_a_maker_whose_module_is_not_built_refuses_instead_of_tracebacking(self):
+        """Between this batch and batches 5, 6 and 8 the hypr/wayfire/cosmic makers import modules that are
+        not in the tree yet. detect() is written around CmdError -- the forced path lets it out and the socket
+        arms swallow it -- so a bare ModuleNotFoundError would reach the user as a traceback from every
+        wdotool command on a real Hyprland or Wayfire session, where the wlr floor answered before."""
+        for name, module in (("_hypr", "wdotool.backend_hypr"),
+                             ("_wayfire", "wdotool.backend_wayfire"),
+                             ("_cosmic", "wdotool.backend_cosmic")):
+            with self.subTest(name):
+                if importlib.util.find_spec(module) is not None:
+                    self.skipTest("%s is built here; its own batch owns this maker" % module)
+                # tearDown puts the stubs back, so the module attribute is simply set here
+                setattr(backend_detect, name, self._orig[name])
+                backend_detect._MAKERS[name[1:]] = self._orig[name]
+                backend_detect.reset()
+                self.made = []
+                with env(WDOTOOL_BACKEND=name[1:]):
+                    with self.assertRaises(CmdError) as cm:
+                        backend_detect.detect()
+                self.assertNotIsInstance(cm.exception, ModuleNotFoundError)
+                self.assertEqual(str(cm.exception),
+                                 "%s backend: not built into this install" % name[1:])
+                self.assertEqual(self.made, [])
+
+    def test_an_unbuilt_backend_on_its_own_socket_still_reaches_the_sentence(self):
+        """The other side of the same guard: with the socket really there and nothing to import, the arm
+        refuses like any other failing maker and detect() carries on to its own line -- rc 2 with an
+        explanation, not a traceback out of an import."""
+        if importlib.util.find_spec("wdotool.backend_hypr") is not None:
+            self.skipTest("wdotool/backend_hypr.py is built here; batch 5 owns this arm")
+        setattr(backend_detect, "_hypr", self._orig["_hypr"])
+        d = os.path.join(self.rundir, str(os.getuid()), "hypr", "sig_1_1")
+        os.makedirs(d)
+        open(os.path.join(d, ".socket.sock"), "w").close()
+        self.assertTrue(session.find_hypr_socket())
+        with self.assertRaises(NoSessionError) as cm:
+            backend_detect.detect()
+        self.assertIn("no sway/i3, Hyprland or Wayfire IPC socket", str(cm.exception))
+
+    def test_the_wayfire_socket_is_asked_after_the_bus_and_before_the_registry(self):
+        """Below the bus names because a Plasma box with wayfire installed must not be misdetected, and above
+        the registry because Wayfire does advertise the wlr manager and the floor is wrong there about ids,
+        geometry, desktops and WM_CLASS [M recon2/wayfire.md §1.1, §2.3, §2.4]."""
+        self.compositor("hyprland")          # a registry with the wlr manager in it
+        open(os.path.join(self.rtdir, "wayfire-wayland-1-.socket"), "w").close()
+        self.addCleanup(os.unlink, os.path.join(self.rtdir, "wayfire-wayland-1-.socket"))
+        bridge = MockBridge(self.mock)
+        try:
+            b = backend_detect.detect()
+            self.addCleanup(b.bus.close)
+            self.assertEqual(b.name, "gnome")     # the bus name still wins
+            self.assertEqual(self.made, [])
+        finally:
+            bridge.close()
+        backend_detect.reset()
+        self.made = []
+        with self.assertRaises(CmdError):
+            backend_detect.detect()
+        self.assertEqual(self.made, ["_wayfire", "_wlr"])
+
+    def test_a_cosmic_registry_with_no_wlr_manager_picks_cosmic(self):
+        """U15. Every window command answered the rc-2 sentence on COSMIC for one reason: there is no
+        `zwlr_foreign_toplevel_manager_v1` in cosmic-comp's 53 globals, and the detector had nothing else to
+        look for [M recon2/cosmic.md §3]."""
+        self.compositor("cosmic")
+        self.assertNotIn(backend_detect.WLR_TOPLEVEL,
+                         [i for i, _v in wl_fake.registry_fixture("cosmic")])
+        with self.assertRaises(CmdError):
+            backend_detect.detect()
+        self.assertEqual(self.made, ["_cosmic"])
+        self.assertEqual(self._wlr_calls, [])
+
+    def test_a_registry_with_both_families_keeps_wlr(self):
+        """Hyprland, labwc and river all advertise both; wlr is the older and better-tested path and stays the
+        answer, so COSMIC's step can never take a compositor away from it."""
+        for fixture in ("hyprland", "labwc", "river"):
+            with self.subTest(fixture):
+                backend_detect.reset()
+                self.made = []
+                ifaces = {i for i, _v in wl_fake.registry_fixture(fixture)}
+                self.assertIn(backend_detect.WLR_TOPLEVEL, ifaces)
+                self.assertIn(backend_detect.EXT_TOPLEVEL, ifaces)
+                fake = wl_fake.registry_server(fixture)
+                try:
+                    with env(WAYLAND_DISPLAY=fake.path):
+                        with self.assertRaises(CmdError):
+                            backend_detect.detect()
+                finally:
+                    fake.close()
+                self.assertEqual(self.made, ["_wlr"])
+
+    def test_a_registry_with_neither_family_reaches_the_sentence(self):
+        """Muffin advertises 23 globals and neither foreign-toplevel protocol, which is why the Cinnamon bus
+        name may never be swallowed by this step [M recon2/cinnamon.md §2.1]."""
+        self.compositor("cinnamon")
+        with self.assertRaises(NoSessionError) as cm:
+            backend_detect.detect()
+        self.assertEqual(self.made, [])
+        self.assertIn("neither wlr-foreign-toplevel nor the COSMIC toplevel protocols",
+                      str(cm.exception))
+
+    def test_forcing_wlr_on_cosmic_still_gives_the_wlr_refusal(self):
+        """`WDOTOOL_BACKEND` is a forcing and not a hint: it skips the whole order, so the answer comes from
+        the backend the user named and says what that backend is missing."""
+        self.compositor("cosmic")
+        for name, want in (("wlr", "_wlr"), ("cosmic", "_cosmic"), ("hypr", "_hypr")):
+            with self.subTest(name):
+                self.made = []
+                with env(WDOTOOL_BACKEND=name):
+                    with self.assertRaises(CmdError):
+                        backend_detect.detect()
+                self.assertEqual(self.made, [want])
+
+    def test_forcing_wlr_on_cosmic_gives_the_wlr_constructors_own_sentence(self):
+        """The other half of U15, with the stub taken back off `_wlr`: the routing is proved above, this is
+        the sentence the user actually reads. It comes from WlrBackend's constructor talking to the same
+        recorded cosmic-comp registry -- which has no wlr manager to bind [M recon2/cosmic.md §2, §3] -- and
+        not from the detector, which by then has stopped deciding anything."""
+        backend_detect._MAKERS["wlr"] = self._orig["_wlr"]
+        self.compositor("cosmic")
+        with env(WDOTOOL_BACKEND="wlr"):
+            with self.assertRaises(CmdError) as cm:
+                backend_detect.detect()
+        self.assertEqual(str(cm.exception),
+                         "wlr backend: compositor does not offer "
+                         "zwlr_foreign_toplevel_management_unstable_v1")
+        self.assertEqual(self.made, [])          # the stub was never reached
+
+    def test_a_registry_that_chose_wlr_does_not_get_the_neither_family_sentence(self):
+        """When the registry named the family, the backend's own refusal is the answer. Swallowing it and
+        falling through would print `the compositor offers neither wlr-foreign-toplevel nor the COSMIC
+        toplevel protocols` about a compositor that had just advertised one of them."""
+        for fixture, maker in (("labwc", "_wlr"), ("cosmic", "_cosmic")):
+            with self.subTest(fixture):
+                backend_detect.reset()
+                self.made = []
+                fake = wl_fake.registry_server(fixture)
+                try:
+                    with env(WAYLAND_DISPLAY=fake.path, WDOTOOL_BACKEND=None):
+                        with self.assertRaises(CmdError) as cm:
+                            backend_detect.detect()
+                finally:
+                    fake.close()
+                self.assertEqual(self.made, [maker])
+                self.assertNotIn("neither wlr-foreign-toplevel", str(cm.exception))
+                self.assertNotIsInstance(cm.exception, NoSessionError)
+                self.assertEqual(str(cm.exception), "%s: not in this session" % maker[1:])
+
     def test_env_override(self):
         bridge = MockBridge(self.mock)
         try:
@@ -1724,23 +1975,51 @@ class DetectTests(_Base):
                 with self.assertRaises(CmdError) as cm:
                     backend_detect.detect()
             self.assertIn("WDOTOOL_BACKEND=bogus", str(cm.exception))
+            self.assertIn("is not one of: sway, hypr, wayfire, wlr, cosmic, kwin, gnome, "
+                          "cinnamon", str(cm.exception))
         finally:
             bridge.close()
 
-    def test_nothing_on_the_bus_falls_to_wlr_then_errors(self):
+    def test_i3_is_accepted_as_a_spelling_of_sway(self):
+        """It buys nothing but the spelling -- the dialect is read off GET_VERSION and not off the variable --
+        so it is in the table and not in the refusal's list of eight."""
+        self.assertIs(self.real_makers["i3"], self.real_makers["sway"])
+        with env(WDOTOOL_BACKEND="i3"):
+            with self.assertRaises(CmdError) as cm:
+                backend_detect.detect()
+        self.assertNotIn("WDOTOOL_BACKEND=i3 is not one of", str(cm.exception))
+
+    def test_nothing_on_the_bus_falls_to_the_registry_then_errors(self):
         with self.assertRaises(CmdError) as cm:
             backend_detect.detect()
-        self.assertEqual(self._wlr_calls, [1])
-        self.assertIn("no KWin or GNOME Shell on the session D-Bus", str(cm.exception))
+        self.assertEqual(self._wlr_calls, [])
+        self.assertIn("no KWin, GNOME Shell or Cinnamon on the session D-Bus", str(cm.exception))
+        self.assertIn("no sway/i3, Hyprland or Wayfire IPC socket", str(cm.exception))
 
     def test_no_bus_reachable(self):
         with no_bus():
             with self.assertRaises(CmdError) as cm:
                 backend_detect.detect()
-        self.assertEqual(self._wlr_calls, [1])
         self.assertIn("no session D-Bus reachable", str(cm.exception))
         self.assertIsNone(backend_detect.session_names())
         self.assertNotIn(SHELL_NAME, backend_detect.session_names() or [])
+
+    def test_the_registry_is_read_once_per_process(self):
+        """It is one round trip, cached like the ListNames beside it: the detector used to pay it inside
+        `_wlr()` and throw the answer away, and every backend below would have paid it again."""
+        fake = self.compositor("cosmic")
+        with self.assertRaises(CmdError):
+            backend_detect.detect()
+        first = backend_detect.session_registry()
+        self.assertEqual(first["zcosmic_toplevel_info_v1"], 3)
+        self.assertIs(backend_detect.session_registry(), first)
+        self.assertEqual(fake.connections, 1)
+        backend_detect.reset()
+        self.assertIsNot(backend_detect.session_registry(), first)
+        self.assertEqual(fake.connections, 2)
+
+    def test_no_wayland_socket_at_all_is_not_an_error(self):
+        self.assertIsNone(backend_detect.session_registry())
 
 
 class ShippedFilesTests(unittest.TestCase):

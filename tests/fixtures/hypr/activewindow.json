@@ -1,0 +1,31 @@
+{
+    "address": "0x59daae933ac0",
+    "mapped": true,
+    "hidden": false,
+    "at": [300, 200],
+    "size": [400, 300],
+    "workspace": {
+        "id": 1,
+        "name": "1"
+    },
+    "floating": true,
+    "pseudo": false,
+    "monitor": 0,
+    "class": "Xmessage",
+    "title": "xmessage",
+    "initialClass": "Xmessage",
+    "initialTitle": "xmessage",
+    "pid": 11920,
+    "xwayland": true,
+    "pinned": false,
+    "fullscreen": 0,
+    "fullscreenClient": 0,
+    "grouped": [],
+    "tags": [],
+    "swallowing": "0x0",
+    "focusHistoryID": 0,
+    "inhibitingIdle": false,
+    "xdgTag": "",
+    "xdgDescription": "",
+    "contentType": "none"
+}

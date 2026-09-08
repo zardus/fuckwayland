@@ -1,0 +1,8 @@
+{
+ "api-version": 20250822,
+ "plugin-path": "/usr/lib/x86_64-linux-gnu/wayfire",
+ "plugin-xml-dir": "/usr/share/wayfire/metadata",
+ "xwayland-support": 1,
+ "build-commit": "unknown",
+ "build-branch": "unknown"
+}

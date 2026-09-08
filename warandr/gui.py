@@ -34,8 +34,9 @@ TITLE = "Screen Layout Editor"
 # Layout ▸ Backend, in wxrandr's own order (the label, then the token that
 # --backend takes)
 BACKEND_ITEMS = (("Automatic", "auto"), ("X11 (xrandr)", "x11"),
-                 ("sway", "sway"), ("wlroots (wlr)", "wlr"),
-                 ("GNOME (mutter)", "mutter"), ("KDE (kwin)", "kwin"))
+                 ("sway", "sway"), ("Hyprland (hypr)", "hypr"),
+                 ("wlroots (wlr)", "wlr"), ("GNOME (mutter)", "mutter"),
+                 ("Cinnamon (muffin)", "cinnamon"), ("KDE (kwin)", "kwin"))
 ZOOMS = (4, 8, 16)     # arandr's View menu; Zoom In/Out walk this list
 MARGIN = 12
 SNAP_PX = 5            # arandr: tolerance = factor * 5 layout pixels

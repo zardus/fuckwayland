@@ -77,7 +77,11 @@ from fwcommon.dbus_mini import (ERR, METHOD_CALL, NAME_FLAG_DO_NOT_QUEUE,
                                 NO_REPLY_EXPECTED, Bus, DBusError, no_bus_text)
 from fwcommon.errors import CmdError
 from wdotool import kwin_js
+from wdotool.backend import ID_BASE as _ID_BASE, ID_MASK as _ID_MASK, ID_SALT_STEP
 from wdotool.backend import View, Window, WindowBackend, Workspace, warn as _warn
+# The XWayland matcher moved to a module of its own (wdotool/xid_match.py): every wlroots-family
+# backend has the same pairing to do and none of them is KWin. Nothing about it changed.
+from wdotool.xid_match import match_xids as _match_xids
 from wdotool.ctx import NoSessionError
 
 KWIN_NAME = "org.kde.KWin"
@@ -1049,12 +1053,9 @@ def _norm_uuid(u: str) -> str:
     return u.strip().strip("{}").lower()
 
 
-# Native window ids are 0x40000000 | 30 bits of the uuid. 32-bit clean because everything downstream of us is
-# X-shaped and truncates there -- `wxprop -id` (dsimple.c parses into a 32-bit XID), the synthesized
-# _NET_CLIENT_LIST, wmctrl's 0x%08lx -- and biased into a range no Xwayland client ever gets (X ids are (client
-# << 21) | serial), so a native id can never be mistaken for the X id of an XWayland window in the same listing.
-_ID_BASE = 0x40000000
-_ID_MASK = 0x3FFFFFFF
+# Native window ids are 0x40000000 | 30 bits of the uuid, in wdotool.backend's shared minted-id range (the
+# reason for the range is written out there). The mint itself stays here: it is the uuid's own hex digits, it
+# predates backend.mint_id()'s digest, and every id KWin has ever printed comes out of it.
 
 
 def _wid(u: str, salt: int = 0) -> int:
@@ -1065,7 +1066,7 @@ def _wid(u: str, salt: int = 0) -> int:
     hexd = "".join(c for c in _norm_uuid(u) if c in "0123456789abcdef")
     if not hexd:
         return 0
-    n = int(hexd[:8], 16) + salt * 0x9E3779B1
+    n = int(hexd[:8], 16) + salt * ID_SALT_STEP
     return _ID_BASE | (n & _ID_MASK)
 
 
@@ -1086,146 +1087,3 @@ def _id_map(rows: "list[dict]") -> "dict[int, str]":
         d["_id"] = wid
         out[wid] = d["u"]
     return out
-
-
-def _simplified(s: str) -> str:
-    """QString::simplified(): every run of whitespace becomes one space and the ends are trimmed.
-
-    KWin stores an X11 window's caption that way -- X11Window::readName() ends in `.simplified()` -- while the X
-    server hands back the raw _NET_WM_NAME the client set. Comparing the two as they come makes any title with a
-    doubled, leading or trailing space compare *unequal to its own window* and equal to nothing, which does not
-    merely lose the title as a signal: it points it at the other window of the pair."""
-    return " ".join((s or "").split())
-
-
-def _match_xids(raw: "list[dict]", clients: "list[dict]",
-                ratio: "float | None" = 1.0) -> "dict[str, int]":
-    """Greedy best-first matching of KWin windows to Xwayland's clients.
-
-    pid and WM_CLASS are filters (an X client never changes them behind
-    KWin's back), the title and the geometry distance are the score -- two
-    untitled terminals of the same class differ only in where they are, and
-    the KWin rectangle is the frame while X reports the client area, so the
-    distance is small but not zero.
-
-    A pair also has to *agree* on something: an X client with neither
-    _NET_WM_PID nor WM_CLASS contradicts nothing, and matching it on
-    geometry alone hands its id to a native Wayland window, which then
-    claims to be an X11 client. Such a client keeps xid 0 instead -- an
-    unknown id beats a wrong one.
-
-    Neither of those separates two windows of one application that sit in
-    the same place under the same title -- two maximized editor windows,
-    two terminals stacked on each other. Title and geometry tie, and the
-    pairing was then decided by whichever uuid sorted first, which is a coin
-    flip: measured on Plasma 6.6, four runs in ten moved the other window.
-    So the *order* of the two lists is the third key, and it is not a
-    heuristic:
-
-        Workspace::propagateWindows() (src/layers.cpp) writes
-        _NET_CLIENT_LIST from m_windows, keeping only the managed X11
-        windows and their order, and workspace.windowList() *is* m_windows.
-
-    The X11 windows of the script's list, in `ix` order, are therefore the
-    client list, in its order -- so a pair whose two positions disagree is
-    the wrong pair. Positions are ranked over the windows and clients that
-    are actually in play, so a window with no X client (a native one, or an
-    override-redirect popup, which KWin lists but never publishes) only
-    shifts what it precedes, and only where the pairs already tied.
-
-    A tie the position cannot break either -- two windows that could each
-    take the same id, on a session where the script answered without `ix`
-    -- is left unresolved: those windows keep xid 0 and say so, rather than
-    being handed one of the two ids at random. `ix` is all-or-nothing on
-    purpose: ranking over the rows that happen to carry it puts the rest at
-    positions that are not their list positions, which is a wrong order
-    rather than a missing one.
-
-    `ratio` is X device pixels per KWin logical pixel (see
-    KwinBackend._x_ratio): every X rect is divided by it before the distance,
-    because on a 2x screen a window's own X rect is twice its KWin rect and
-    the raw distance between a window and *itself* then exceeds the distance
-    between the two windows of a tied pair. None means the layout has no one
-    ratio, and there the distance says nothing at all and is dropped."""
-    cand = []
-    for ci, c in enumerate(clients):
-        for d in raw:
-            if c["pid"] and d.get("p") and c["pid"] != d["p"]:
-                continue
-            kcls, kinst = (d.get("c") or ""), (d.get("n") or "")
-            if kcls and c["cls"] and kcls.lower() != c["cls"].lower():
-                continue
-            if kinst and c["inst"] and kinst.lower() != c["inst"].lower():
-                continue
-            if not (c["pid"] and c["pid"] == d.get("p")
-                    or kcls and kcls.lower() == (c["cls"] or "").lower()
-                    or kinst and kinst.lower() == (c["inst"] or "").lower()):
-                continue
-            x, y, w, h = c["geo"]
-            if ratio is None:
-                dist = 0
-            else:
-                r = ratio or 1.0
-                dist = int(round(
-                    abs(x / r - int(d.get("x", 0))) + abs(y / r - int(d.get("y", 0)))
-                    + abs(w / r - int(d.get("w", 0))) + abs(h / r - int(d.get("h", 0)))))
-            same_title = _simplified(c["name"]) == _simplified(d.get("t"))
-            cand.append((0 if same_title else 1, dist, ci, d))
-    # `ix` is the script's index into workspace.windowList(); a list without it (an older script, or 5.27,
-    # which never reaches here) leaves the key inert.
-    have_ix = bool(cand) and all("ix" in d for _t, _d, _c, d in cand)
-    # Positions are ranked *inside* each (title, distance) tie group, over the windows and clients of that group
-    # alone. Ranking them over every candidate instead let a window that is not in the tie shift the ranks of
-    # the two that are: an override-redirect popup listed *ahead* of a tied pair (ix=1 against ix=2 and ix=4)
-    # moved both windows one place down in the window ranking while the client ranking, which never saw it,
-    # stayed put -- and the pair came out swapped. Below the popup (ix=3, ix=6) it happened to cancel out, which
-    # is why the first version of this looked right.
-    pairs = []
-    cand.sort(key=lambda p: (p[0], p[1]))
-    i = 0
-    while i < len(cand):
-        j = i
-        while j < len(cand) and cand[j][0] == cand[i][0] and cand[j][1] == cand[i][1]:
-            j += 1
-        group = cand[i:j]
-        krank: "dict[str, int]" = {}
-        if have_ix:
-            seen = {d["u"]: int(d["ix"]) for _t, _d, _c, d in group}
-            for r, u in enumerate(sorted(seen, key=lambda k: (seen[k], k))):
-                krank[u] = r
-        crank = {ci: r for r, ci in enumerate(sorted({p[2] for p in group}))}
-        for t, dist, ci, d in group:
-            pairs.append((t, dist,
-                          abs(krank[d["u"]] - crank[ci]) if have_ix else 0,
-                          clients[ci]["xid"], d["u"]))
-        i = j
-    pairs.sort()
-    out: "dict[str, int]" = {}
-    used: "set[int]" = set()
-    blocked: "set[str]" = set()
-    i = 0
-    while i < len(pairs):
-        j = i
-        while j < len(pairs) and pairs[j][:3] == pairs[i][:3]:
-            j += 1
-        live = [p for p in pairs[i:j] if p[4] not in out and p[4] not in blocked and p[3] not in used]
-        by_win: "dict[str, set[int]]" = {}
-        by_id: "dict[int, set[str]]" = {}
-        for _t, _d, _o, xid, u in live:
-            by_win.setdefault(u, set()).add(xid)
-            by_id.setdefault(xid, set()).add(u)
-        for _t, _d, _o, xid, u in live:
-            if u in out or u in blocked or xid in used:
-                continue
-            if len(by_win[u]) > 1 or len(by_id[xid]) > 1:
-                blocked.update(by_id[xid])   # a coin flip: no id at all
-                continue
-            out[u] = xid
-            used.add(xid)
-        i = j
-    if blocked:
-        _warn("%d XWayland window(s) could not be told apart from each "
-              "other in the X client list; their X ids are left unset"
-              % len(blocked))
-    return out
-

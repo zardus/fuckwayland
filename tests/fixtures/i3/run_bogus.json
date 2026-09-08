@@ -1,0 +1,9 @@
+[
+ {
+  "success": false,
+  "parse_error": true,
+  "error": "Expected one of these tokens: <end>, '[', 'move', 'exec', 'exit', 'restart', 'reload', 'shmlog', 'debuglog', 'border', 'layout', 'append_layout', 'workspace', 'focus', 'kill', 'open', 'fullscreen', 'sticky', 'split', 'floating', 'mark', 'unmark', 'resize', 'rename', 'nop', 'scratchpad', 'swap', 'title_format', 'title_window_icon', 'mode', 'bar', 'gaps'",
+  "input": "nonexistent_command",
+  "errorposition": "^^^^^^^^^^^^^^^^^^^"
+ }
+]

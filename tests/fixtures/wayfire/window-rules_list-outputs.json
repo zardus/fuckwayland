@@ -1,0 +1,48 @@
+[
+ {
+  "id": 1,
+  "name": "HEADLESS-1",
+  "geometry": {
+   "x": 0,
+   "y": 0,
+   "width": 1280,
+   "height": 720
+  },
+  "workarea": {
+   "x": 0,
+   "y": 0,
+   "width": 1280,
+   "height": 720
+  },
+  "wset-index": 1,
+  "workspace": {
+   "x": 0,
+   "y": 0,
+   "grid_width": 3,
+   "grid_height": 3
+  }
+ },
+ {
+  "id": 9,
+  "name": "HEADLESS-2",
+  "geometry": {
+   "x": 1280,
+   "y": 0,
+   "width": 1920,
+   "height": 1080
+  },
+  "workarea": {
+   "x": 0,
+   "y": 0,
+   "width": 1920,
+   "height": 1080
+  },
+  "wset-index": 2,
+  "workspace": {
+   "x": 0,
+   "y": 0,
+   "grid_width": 3,
+   "grid_height": 3
+  }
+ }
+]

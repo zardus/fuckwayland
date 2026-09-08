@@ -18,6 +18,7 @@ import os
 import re
 import shutil
 import socket
+import subprocess
 import sys
 import tempfile
 import threading
@@ -39,7 +40,7 @@ from fwcommon.dbus_mini import ERR, Bus, DBusError, Message, Variant
 from fwcommon.errors import CmdError
 import support
 from test_dbus_mini import MockBus
-from wdotool import backend_detect, backend_kwin, kwin_js
+from wdotool import backend, backend_detect, backend_kwin, kwin_js, xid_match
 from wdotool.backend import hit_test
 from wdotool.backend_kwin import (BUS_NAME, IFACE, KWIN_IFACE,
                                   KWIN_NAME, KWIN_PATH, OBJECT_PATH,
@@ -1557,8 +1558,8 @@ class PayloadShapeTests(_Base):
                     "name": "Term", "geo": (300, 228, 400, 300)}]
         self.assertEqual(backend_kwin._match_xids(raw, clients),
                          {"a": 21, "b": 22})
-        self.assertEqual(backend_kwin._simplified("  a\t b \n"), "a b")
-        self.assertEqual(backend_kwin._simplified(None), "")
+        self.assertEqual(xid_match.simplified("  a\t b \n"), "a b")
+        self.assertEqual(xid_match.simplified(None), "")
 
     def test_three_identical_windows_keep_their_own_ids(self):
         raw = [dict(u=u, c="XTerm", n="xterm", p=900, t="Terminal",
@@ -2391,6 +2392,132 @@ def _capture_stderr():
             return self._redirect.__exit__(*exc)
 
     return _Ctx()
+
+
+class TheMatcherMoved(unittest.TestCase):
+    """U32: `wdotool/xid_match.py` is `backend_kwin`'s matcher, moved and not rewritten.
+
+    Every wlroots-family backend has the same pairing to do -- a compositor toplevel list with no X ids on one
+    side, `_NET_CLIENT_LIST` on the other -- and none of them is KWin: labwc, Budgie, Xfce-on-Wayland, Wayfire
+    and Hyprland all listed an xterm whose real X id is `0x40000c` as a synthetic id with the wrong WM_CLASS
+    [M recon2/labwc.md §4, budgie.md, xfce-wayland.md, wayfire.md §2.4, hyprland.md §3]. The 25 matcher tests
+    above are the proof that the move changed nothing: they run against the new module through the name
+    backend_kwin still imports it under, and this pins that they are the same object."""
+
+    def test_backend_kwin_imports_the_moved_function(self):
+        self.assertIs(backend_kwin._match_xids, xid_match.match_xids)
+
+    def test_the_module_carries_no_copy_of_its_own(self):
+        """A second definition left behind in backend_kwin.py would keep every test above green while the
+        wlroots backends read a matcher nobody exercises."""
+        with open(os.path.join(ROOT, "wdotool", "backend_kwin.py"), encoding="utf-8") as fh:
+            src = fh.read()
+        self.assertNotIn("def _match_xids(", src)
+        self.assertNotIn("def _simplified(", src)
+        self.assertIn("from wdotool.xid_match import match_xids", src)
+
+    def test_it_imports_without_backend_kwin(self):
+        """The point of the move: a backend that has no D-Bus, no KWin scripting and no Qt gets the matcher
+        without dragging 1200 lines of KWin in behind it."""
+        out = subprocess.run(
+            [sys.executable, "-c",
+             "import sys; from wdotool import xid_match; "
+             "print('wdotool.backend_kwin' in sys.modules); "
+             "print(xid_match.match_xids([], []))"],
+            capture_output=True, text=True, cwd=ROOT, timeout=60)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(out.stdout.split(), ["False", "{}"])
+
+    def test_the_shared_minted_id_range_is_one_definition(self):
+        """KWin's ids and the ids Hyprland and COSMIC will mint have to be in the same range and out of
+        Xwayland's, or a native id in a listing could be read as an X window's."""
+        self.assertIs(backend_kwin._ID_BASE, backend.ID_BASE)
+        self.assertIs(backend_kwin._ID_MASK, backend.ID_MASK)
+        self.assertEqual(backend.ID_BASE, 0x40000000)
+        self.assertEqual(backend.ID_BASE | backend.ID_MASK, 0x7FFFFFFF)
+        for uuid in ("c0ffee00-1111-2222-3333-444444444444", "0", "ffffffff-0-0-0-0"):
+            self.assertEqual(backend_kwin._wid(uuid) & ~backend.ID_MASK, backend.ID_BASE, uuid)
+
+
+class MintedIds(unittest.TestCase):
+    """`backend.mint_id`: the id a backend whose compositor publishes none has to make up.
+
+    Three do: KWin's handle is a uuid string (and keeps its own older mint, from the uuid's hex), Hyprland's is
+    `address` -- a heap pointer, because `stableId` does not exist before 0.56 [M recon2/arch.md, hyprland
+    fixtures] -- and COSMIC's is `identifier`, 32 base62 characters [M recon2/cosmic.md §4]. The property that
+    matters is the one the wlr floor's arrival-order ids do not have: the id survives another window closing
+    [M recon2/hyprland.md §3: `0x000f4241` became `0x000f4240`]."""
+
+    #: two of the recorded COSMIC identifiers and two recorded Hyprland addresses
+    KEYS = ("LsUebsS7Qe8NowEoh7IP065Bbw8xd69L", "2eoqv7wMaz7wrTrUQORF0E7otL6j0vF9",
+            "0x59daae6de8f0", "0x59daae933ac0")
+
+    def test_an_id_is_stable_and_in_range(self):
+        for key in self.KEYS:
+            wid = backend.mint_id(key)
+            self.assertEqual(wid, backend.mint_id(key), key)
+            self.assertEqual(wid & ~backend.ID_MASK, backend.ID_BASE, key)
+            self.assertLess(wid, 1 << 31, key)
+
+    def test_two_windows_of_one_session_do_not_share_an_id(self):
+        ids = {backend.mint_id(k) for k in self.KEYS}
+        self.assertEqual(len(ids), len(self.KEYS))
+
+    def test_addresses_that_differ_in_the_low_bits_alone_still_separate(self):
+        """Hyprland's handles are heap pointers: two windows opened in a row differ by 0x20, and a mint that
+        sliced the front of the string would give them the same id."""
+        base = 0x59DAAE6DE8F0
+        ids = {backend.mint_id("0x%x" % (base + 0x20 * i)) for i in range(16)}
+        self.assertEqual(len(ids), 16)
+
+    def test_an_empty_handle_is_zero_and_not_an_id(self):
+        self.assertEqual(backend.mint_id(""), 0)
+        self.assertEqual(backend.mint_id(None), 0)
+
+    def test_a_salt_re_mints_into_a_different_id(self):
+        for key in self.KEYS:
+            self.assertNotEqual(backend.mint_id(key), backend.mint_id(key, 1), key)
+            self.assertEqual(backend.mint_id(key, 1) & ~backend.ID_MASK, backend.ID_BASE)
+
+    def test_a_collision_leaves_every_window_addressable(self):
+        """30 bits is about 1e-6 odds of two live windows colliding; a plain dict comprehension would drop one
+        of them and leave it with no id at all -- unlistable and unaddressable."""
+        keys = list(self.KEYS)
+        table = backend.mint_map(keys)
+        self.assertEqual(sorted(table), sorted(keys))
+        self.assertEqual(len(set(table.values())), len(keys))
+
+        # A real 30-bit collision needs ~40k handles to find, so the first mint is forced by a stand-in. What
+        # is asserted about it is mint_map's rule and not the stand-in's numbers: three handles mint to one
+        # id, and the third clashes again on its first re-mint, so the walk has to keep going rather than
+        # stop at salt 1. The salt arithmetic itself is mint_id's, pinned by the test above.
+        real = backend.mint_id
+        forced = {(keys[0], 0): 1,
+                  (keys[1], 0): 1, (keys[1], 1): 2,
+                  (keys[2], 0): 1, (keys[2], 1): 2, (keys[2], 2): 3}
+        calls = []
+
+        def colliding(key, salt=0):
+            calls.append((key, salt))
+            low = forced.get((key, salt))
+            return real(key, salt) if low is None else backend.ID_BASE | low
+
+        with mock.patch.object(backend, "mint_id", colliding):
+            table = backend.mint_map(keys)
+        self.assertEqual(sorted(table), sorted(keys))             # nobody dropped
+        self.assertEqual(len(set(table.values())), len(keys))     # nobody sharing
+        self.assertEqual(table[keys[0]], backend.ID_BASE | 1)     # first in the list keeps the mint
+        self.assertEqual(table[keys[1]], backend.ID_BASE | 2)
+        self.assertEqual(table[keys[2]], backend.ID_BASE | 3)     # walked past a second clash
+        # and it walked one at a time from 0, never skipping and never asking the same salt twice
+        self.assertEqual([salt for key, salt in calls if key == keys[2]], [0, 1, 2])
+
+    def test_a_repeated_handle_is_one_window(self):
+        """One handle listed twice is one window and not a collision with itself: it keeps its own mint
+        rather than being salted out of the way of the id it already holds."""
+        table = backend.mint_map(list(self.KEYS) + [self.KEYS[0]])
+        self.assertEqual(len(table), len(self.KEYS))
+        self.assertEqual(table[self.KEYS[0]], backend.mint_id(self.KEYS[0]))
 
 
 if __name__ == "__main__":

@@ -15,6 +15,8 @@
 # key; the contents of vm/build-image.sh). The base image lives in $VMIMAGES:
 # vmctl-base: stonking-server-cloudimg-amd64.img
 # vmctl-desktop: gnome
+# vmctl-distro: ubuntu
+# vmctl-ci: push
 hostname: stonking-gnome
 manage_etc_hosts: true
 disable_root: false

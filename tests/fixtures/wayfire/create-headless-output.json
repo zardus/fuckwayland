@@ -1,0 +1,26 @@
+{
+ "result": "ok",
+ "output": {
+  "id": 9,
+  "name": "HEADLESS-2",
+  "geometry": {
+   "x": 1280,
+   "y": 0,
+   "width": 1920,
+   "height": 1080
+  },
+  "workarea": {
+   "x": 0,
+   "y": 0,
+   "width": 1920,
+   "height": 1080
+  },
+  "wset-index": 2,
+  "workspace": {
+   "x": 0,
+   "y": 0,
+   "grid_width": 3,
+   "grid_height": 3
+  }
+ }
+}

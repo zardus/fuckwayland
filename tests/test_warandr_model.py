@@ -963,7 +963,7 @@ class ForcedBackend(unittest.TestCase):
         with self.assertRaises(randr.RandrError) as cm:
             randr.choose({}, forced="banana")
         self.assertEqual(str(cm.exception), "unknown backend 'banana' "
-                         "(valid: auto, x11, sway, wlr, mutter, kwin)")
+                         "(valid: auto, x11, sway, hypr, wlr, mutter, cinnamon, kwin)")
 
     def test_the_override_is_still_the_command_that_runs(self):
         env = self.fake_env()

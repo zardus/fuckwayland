@@ -1,0 +1,11 @@
+{
+    "id": 1,
+    "name": "1",
+    "monitor": "Virtual-1",
+    "monitorID": 0,
+    "windows": 4,
+    "hasfullscreen": false,
+    "lastwindow": "0x59daae933ac0",
+    "lastwindowtitle": "xmessage",
+    "ispersistent": false
+}

@@ -1,0 +1,13 @@
+output "WINIT-0" enabled=#true {
+  description make="COSMIC" model="WINIT-0"
+  physical 0 0
+  position 0 0
+  scale 1.00
+  transform "flipped180"
+  adaptive_sync_support #false
+  adaptive_sync "automatic"
+  xwayland_primary #false
+  modes {
+    mode 1920 1080 60000 current=#true preferred=#true
+  }
+}

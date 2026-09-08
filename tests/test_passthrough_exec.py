@@ -528,8 +528,8 @@ class BackendFlag(Tree):
         self.assertEqual(self.records(), [])
         p, out, err = self.run_tool("xrandr", "--backends")
         self.assertEqual(p.returncode, 0, err)
-        rows = {ln[2:8].strip(): ln for ln in out.splitlines()}
-        self.assertEqual(sorted(rows), ["kwin", "mutter", "sway", "wlr",
+        rows = {ln[2:10].strip(): ln for ln in out.splitlines()}   # the name column is 8 wide
+        self.assertEqual(sorted(rows), ["cinnamon", "hypr", "kwin", "mutter", "sway", "wlr",
                                         "x11"])
         self.assertTrue(rows["x11"].startswith("* x11"), out)
         self.assertIn("available", rows["x11"])

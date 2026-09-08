@@ -6,6 +6,8 @@
 # key; the contents of vm/build-image.sh). The base image lives in $VMIMAGES:
 # vmctl-base: ubuntu-26.04-server-cloudimg-amd64.img
 # vmctl-desktop: xfce
+# vmctl-distro: ubuntu
+# vmctl-ci: push
 hostname: resolute-xfce
 manage_etc_hosts: true
 disable_root: false

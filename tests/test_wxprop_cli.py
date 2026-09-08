@@ -371,7 +371,7 @@ class NoSessionErrorTest(CliTestBase):
         self.assertTrue(err.startswith("xprop: error: cannot examine the "
                                        "root window: "), err)
         self.assertIn("xprop: no Wayland session found", err)
-        self.assertIn("no KWin or GNOME Shell on the session D-Bus", err)
+        self.assertIn("no KWin, GNOME Shell or Cinnamon on the session D-Bus", err)
         self.assertNotIn("wdotool", err)
         self.assertEqual(backend.program(), "xprop")
 

@@ -1,0 +1,26 @@
+[
+ {
+  "index": 1,
+  "name": "2",
+  "output-id": 1,
+  "output-name": "HEADLESS-1",
+  "workspace": {
+   "x": 0,
+   "y": 0,
+   "grid_width": 3,
+   "grid_height": 3
+  }
+ },
+ {
+  "index": 2,
+  "name": "10",
+  "output-id": 9,
+  "output-name": "HEADLESS-2",
+  "workspace": {
+   "x": 0,
+   "y": 0,
+   "grid_width": 3,
+   "grid_height": 3
+  }
+ }
+]
