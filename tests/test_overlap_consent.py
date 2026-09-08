@@ -30,6 +30,7 @@ import re
 import sys
 import types
 import unittest
+from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
@@ -234,6 +235,131 @@ class Recording(ConsentCase):
             self.assertIn("there is nothing to agree to", err)
             self.assertFalse(os.path.exists(self.path()))
 
+    def test_an_agreement_is_recordable_on_every_measured_generation(self):
+        """`--gnome-overlap-allow` over each record in GENERATIONS.
+
+        The label is the point.  Through GNOME 50 libmutter's API version was a
+        counter of its own -- 46 carried libmutter-14, 50 carried libmutter-18 --
+        and code that spelled it `major - 32` worked by accident; mutter 51 set
+        `libmutter_api_version = '51'` (meson.build line 10 of the 51~rc
+        tarball) and the arithmetic is gone.  So what is recorded is the table's
+        text label, and `"51"` must not arrive as the integer 51 -- a record
+        written as an int reads back as one, and `consent_drift` would then be
+        comparing 51 with "51".  Measured on the 46.0 golden: the file really
+        written was {"libmutter": "14", ..., "shell": "46.0", "struct_size": 72}.
+        """
+        for g in gnome_overlap.GENERATIONS:
+            with self.subTest(shell=g["shell_major"]):
+                ov = self.mock.overlap
+                ov.shell = "%d.0" % g["shell_major"]
+                ov.libmutter = g["libmutter"]
+                ov.instance_size = ov.declared_size = g["struct_size"]
+                ov.sonames = [g["soname"]]
+                ov.meta_typelib = g["meta_typelib"]
+                gnome_overlap.forget_consent()
+                out = self.agree()
+                self.assertIn("GNOME Shell %d.0 (libmutter-%s build "
+                              % (g["shell_major"], g["libmutter"]), out)
+                self.assertIn("MetaMonitorsConfig %d bytes)" % g["struct_size"], out)
+                with open(self.path(), encoding="utf-8") as fh:
+                    rec = json.load(fh)
+                self.assertEqual(rec["libmutter"], g["libmutter"])
+                self.assertIsInstance(rec["libmutter"], str)
+                self.assertEqual(rec["shell"], "%d.0" % g["shell_major"])
+                self.assertEqual(rec["struct_size"], g["struct_size"])
+
+    def test_the_generation_label_compares_as_text_however_it_was_written(self):
+        """An agreement written by an older wxrandr holds the label as a JSON
+        number; this one writes a string.  They are the same generation and
+        `consent_drift` has to say so -- otherwise upgrading wxrandr would
+        withdraw every agreement on disk."""
+        for recorded, reported in ((51, "51"), ("51", 51), (18, "18"), ("18", 18)):
+            self.assertIsNone(gnome_overlap.consent_drift(
+                {"libmutter": recorded, "struct_size": 80},
+                {"libmutter": reported, "struct_size": 80}), (recorded, reported))
+        # ...and two different generations still differ, whichever way round
+        self.assertIn("libmutter generation", gnome_overlap.consent_drift(
+            {"libmutter": "18", "struct_size": 80},
+            {"libmutter": 51, "struct_size": 80}))
+
+    def test_an_agreement_from_one_measured_release_does_not_cover_the_next(self):
+        """50.1 and 51.0 are both measured, and an agreement to one is not an
+        agreement to the other: they carry different libmutters (18 and 51)
+        even though MetaMonitorsConfig happens to be 80 bytes in both, so size
+        alone would have said yes."""
+        self.record(shell="50.1", libmutter="18", struct_size=80)
+        self.mock.overlap.shell = "51.0"
+        self.mock.overlap.libmutter = "51"
+        code, out, err = self.run_cli(FLAG, *MOVE)
+        self.assertEqual(code, 0, err)
+        self.assertNotIn("as agreed on", err)
+        self.assertTrue(err.startswith(WARNING.split("What it does:")[0]), err[:300])
+        ok, why = gnome_overlap.consent_covers({"shell": "50.1"}, "51.0")
+        self.assertFalse(ok)
+        self.assertIn("given on GNOME Shell 50.1", why)
+        self.assertIn("this session is GNOME Shell 51.0", why)
+
+    def test_a_dryrun_of_the_agreement_records_nothing(self):
+        """Everywhere else in this program `--dryrun` writes nothing, and this
+        is the one command whose entire effect is a file.
+
+        Measured at HEAD: `wxrandr --dryrun --gnome-overlap-allow` ran the
+        probe, printed the agreement paragraph and then "recorded in
+        <path>" -- a dry run that recorded a consent, which is the one thing
+        somebody types a dry run to be sure of not doing.  The checks still run,
+        because the paragraph names the build they measured and a rehearsal of
+        this command that skipped them would be showing a made-up build."""
+        code, out, err = self.run_cli("--dryrun", ALLOW)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.ext_calls(), ["Probe"])
+        self.assertEqual(self.applied(), [])
+        self.assertFalse(os.path.exists(self.path()))
+        self.assertIn("dryrun: nothing was recorded", out)
+        self.assertIn(self.path(), out)
+        self.assertNotIn("recorded in", out)
+        # it still shows what would have been agreed to
+        self.assertIn("Agreeing to --unsafe-gnome-overlap on GNOME Shell 50.1", out)
+
+    def test_a_layout_typed_beside_the_agreement_is_a_usage_error(self):
+        """`--gnome-overlap-allow` answers for itself and returns before any
+        stanza is applied, so `--output ... --pos ...` beside it is a move that
+        never happens.
+
+        Measured at HEAD: `--gnome-overlap-allow --output Virtual-2 --pos 960x0`
+        exited 0, probed, wrote the agreement and moved nothing, with no line
+        anywhere saying so.  It is refused at parse time now, the way
+        `--persistent` and the flag are: before a session is opened and before
+        anything on the bus is asked."""
+        code, out, err = self.run_cli(ALLOW, *MOVE)
+        self.assertEqual(code, 1)
+        self.assertIn("cannot both happen", err)
+        self.assertIn("Virtual-2", err)
+        self.assertIn("Record the agreement first, then apply the layout", err)
+        self.assertEqual(self.ext_calls(), [])
+        self.assertEqual(self.applied(), [])
+        self.assertFalse(os.path.exists(self.path()))
+
+    def test_a_query_typed_beside_it_is_accepted_and_then_ignored(self):
+        """The refusal above is about a *layout*, not about company: `--query`
+        describes a session rather than asking for a change to one, so it is
+        accepted -- and then it does not happen.
+
+        Measured here: `wxrandr --gnome-overlap-allow --query` exits 0, probes,
+        prints the agreement paragraph and `recorded in ...`, and prints no
+        `Screen 0:` listing at all, because `_do_overlap_allow()` answers for
+        the whole run and returns.  That is the same silent drop fix 23 refuses
+        for a layout, in a much smaller size: nothing is lost but a listing the
+        user can ask for again.  Pinned as it is rather than as it ought to be,
+        so that a later fix which prints the listing has to come past this
+        test."""
+        code, out, err = self.run_cli(ALLOW, "--query")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.ext_calls(), ["Probe"])
+        self.assertTrue(os.path.exists(self.path()))
+        self.assertIn("recorded in %s" % self.path(), out)
+        self.assertNotIn("Screen 0:", out)
+        self.assertNotIn("Virtual-1 connected", out)
+
     def test_a_file_that_is_not_an_agreement_is_not_one(self):
         for bad in ("", "{", "[]", '{"shell": "50.1"}',
                     '{"format": 99, "shell": "50.1"}',
@@ -355,6 +481,57 @@ class ADifferentBuild(ConsentCase):
         code, out, err = self.run_cli(FLAG, *MOVE)
         self.assertTrue(err.startswith(WARNING), err[:300])
 
+    @unittest.expectedFailure
+    def test_a_new_libmutter_is_asked_about_before_the_write_and_not_after(self):
+        """Fix 17 (F1.3): when a record exists, one Probe before the apply, and
+        `consent_covers(rec, facts(probe))` -- not `consent_covers(rec, version)`
+        -- decides whether the paragraph is printed.
+
+        Today the only thing compared before the write is the GNOME Shell
+        version string, and that string demonstrably cannot see a libmutter
+        swapped under it: Ubuntu 24.04 carries mutter 46.2 under GNOME Shell
+        46.0, and 46.0 -> 46.2 under one unchanged shell version was measured
+        applying with all six checks green.  So an agreement given for build
+        aaaa.. is *spent* quietly on build bbbb.., and the disagreement is only
+        noticed by `consent_drift()` after the eight bytes are already in.  The
+        agreement text promises the opposite -- "stops applying the moment any
+        of that changes" -- and withdrawing an agreement after acting on it is
+        not stopping.
+
+        wxrandr/gnome_overlap.py:834-849 plus `_overlap_client` in
+        wxrandr/mutter.py is where the extra Probe goes; the same Probe is what
+        `--gnome-overlap-status` should be answering from.
+        """
+        self.record(shell="50.1", libmutter=18, libmutter_build="a" * 40)
+        self.mock.overlap.build_id = "b" * 40
+        code, out, err = self.run_cli(FLAG, *MOVE)
+        # the check runs before the write, so the extension is asked twice
+        self.assertEqual(self.ext_calls(), ["Probe", "ApplyOverlap"])
+        # ...and the user reads the paragraph, not a line saying they agreed
+        self.assertTrue(err.startswith(WARNING.split("What it does:")[0]), err[:300])
+        self.assertNotIn("as agreed on", err)
+        self.assertEqual(code, 0, err)
+
+    @unittest.expectedFailure
+    def test_the_status_asks_the_same_question_the_apply_would(self):
+        """Fix 17 (F1.3), the reporting half: `--gnome-overlap-status` answers
+        from `overlap_available()`, which reads the Shell's version property and
+        whether the extension owns its bus name -- and nothing else.  With an
+        agreement recorded against a libmutter build that is no longer the one
+        mapped, it therefore says `agreed` about an agreement the next apply
+        will withdraw.  It has to say `available`, and say what it would ask
+        about."""
+        self.record(shell="50.1", libmutter=18, libmutter_build="a" * 40)
+        self.mock.overlap.build_id = "b" * 40
+        lines = self.lines_of(STATUS)
+        self.assertEqual(lines[0], "available")
+        self.assertTrue(any("libmutter build" in ln for ln in lines), lines)
+
+    def lines_of(self, *argv):
+        code, out, err = self.run_cli(*argv)
+        self.assertEqual(code, 0, err)
+        return [ln for ln in out.splitlines() if ln.strip()]
+
     def test_the_same_library_is_not_a_difference(self):
         self.record(shell="50.1", libmutter=18,
                     libmutter_build=self.mock.overlap.build_id)
@@ -388,6 +565,59 @@ class ADifferentBuild(ConsentCase):
         # a fact the reply did not carry is not a difference
         self.assertIsNone(gnome_overlap.consent_drift(
             dict(f), {"shell": "50.1", "libmutter": None, "struct_size": None}))
+
+
+class RootsAgreementIsNotTheUsers(ConsentCase):
+    """Fix 18 (F7.4): `consent_path()` is `$XDG_CONFIG_HOME` or `$HOME/.config`,
+    read out of the environment of whoever is running the command.
+
+    `sudo wxrandr` keeps the caller's HOME on Ubuntu (sudo's default
+    `env_keep` does not include HOME, but `always_set_home` is off in
+    /etc/sudoers there, so HOME survives), so root reads and writes the
+    invoking user's agreement file -- and, the other way round, a root shell
+    with its own HOME reads root's, agrees on root's behalf, and the session
+    that a wrong offset would end belongs to uid 1000.  The module's own
+    docstring says the opposite: "Per user, never per system: it is the user's
+    own session that a wrong offset ends, so root's answer must not stand in
+    for anybody else's."
+
+    What the fix pins: when `os.geteuid()` and `fwcommon.session.session_uid()`
+    disagree, the agreement is keyed on the *session* user's home
+    (`pwd.getpwuid(session_uid()).pw_dir`), and if that cannot be worked out
+    the paragraph is printed regardless.  The control below is the same run
+    with the two uids agreeing, which must keep today's quiet behaviour
+    exactly."""
+
+    def setUp(self):
+        super().setUp()
+        self.record(shell="50.1", libmutter=18, struct_size=80)
+
+    @unittest.expectedFailure
+    def test_roots_run_does_not_spend_the_session_users_agreement(self):
+        with mock.patch("os.geteuid", return_value=0), \
+                mock.patch("fwcommon.session.session_uid", return_value=1000):
+            code, out, err = self.run_cli(FLAG, *MOVE)
+        self.assertEqual(code, 0, err)
+        self.assertNotIn("as agreed on", err)
+        self.assertTrue(err.startswith(WARNING.split("What it does:")[0]), err[:300])
+
+    @unittest.expectedFailure
+    def test_the_status_root_reads_is_not_the_session_users(self):
+        with mock.patch("os.geteuid", return_value=0), \
+                mock.patch("fwcommon.session.session_uid", return_value=1000):
+            code, out, err = self.run_cli(STATUS)
+        self.assertEqual(code, 0, err)
+        self.assertEqual([ln for ln in out.splitlines() if ln.strip()][0], "available")
+
+    def test_the_same_user_keeps_the_quiet_line(self):
+        """The control: two uids that agree are the ordinary case, and nothing
+        about it may change."""
+        with mock.patch("os.geteuid", return_value=1000), \
+                mock.patch("fwcommon.session.session_uid", return_value=1000):
+            code, out, err = self.run_cli(FLAG, *MOVE)
+        self.assertEqual(code, 0, err)
+        self.assertIn("as agreed on 2026-01-02", err)
+        self.assertNotIn("What it risks:", err)
 
 
 # ------------------------------------- what no agreement can do: skip a check
@@ -537,22 +767,55 @@ class Quiet(ConsentCase):
             self.assertNotIn(gone, err)
 
     def test_a_saved_file_that_moved_is_still_shouted_about(self):
-        """What survives `quiet` is the one line that is not reassurance."""
-        ov = self.mock.overlap
-        base = ov.answer
+        """What survives `quiet` is the one line that is not reassurance -- and
+        the audit after it, which an agreed run owes whatever the reply said.
 
-        def moved(member, req):
-            out = base(member, req)
-            if member == "ApplyOverlap":
-                out["saved_config"] = {"path": "/home/u/.config/monitors.xml",
-                                       "before": "absent", "after": "d41d8c",
-                                       "unchanged": False}
-            return out
-        ov.answer = moved
+        The reply is `FakeOverlap.saved_config_moved`, the shape
+        extension.js:1100-1108 really produces: `applied: true`, `ok: false`, no
+        `check`, no `reason`.  Before wxrandr/mutter.py:851 grew `and not
+        reply.get("applied")` this went down the refusal path, so an agreed run
+        printed "refused (?): no reason given", skipped `applied_text()`
+        entirely and never reached `consent_drift()` -- an agreement left
+        standing for a build it had just stopped matching.
+
+        The build the extension reports is the build that was agreed to, so the
+        audit finds nothing and the agreement survives; that it *ran* is proved
+        by a spy, and by where in the run it ran (after the write, with the
+        apply already in the extension's call log).  Deliberately not proved by
+        moving the build id under a standing agreement: an agreement spent on a
+        build the checks never passed on and withdrawn only afterwards is
+        finding F1.3, which fix 17 removes by probing before the write -- a
+        test that demanded that ordering would go red the day the bug is
+        fixed."""
+        self.mock.overlap.saved_config_moved = True
+        self.record(shell="50.1", libmutter=18, struct_size=80,
+                    libmutter_build=self.mock.overlap.build_id)
+        seen = []
+        real = gnome_overlap.consent_drift
+
+        def spy(rec, facts):
+            seen.append((len(self.mock.overlap.calls), rec, facts))
+            return real(rec, facts)
+        gnome_overlap.consent_drift = spy
+        self.addCleanup(setattr, gnome_overlap, "consent_drift", real)
         code, out, err = self.run_cli(FLAG, *MOVE)
-        self.assertEqual(code, 0, err)
         self.assertIn("CHANGED across this call", err)
         self.assertIn("please report it", err)
+        self.assertNotIn("no reason given", err)
+        # the quiet line is still the first thing said: this was an agreed run
+        self.assertTrue(err.startswith("xrandr: --unsafe-gnome-overlap: applying "
+                                       "a layout GNOME refuses"), err[:200])
+        # the audit ran, once, on the reply of the call that had just been made
+        self.assertEqual(len(seen), 1, seen)
+        at, rec, facts = seen[0]
+        self.assertEqual(at, 1)                      # the ApplyOverlap has happened
+        self.assertEqual(facts["libmutter_build"], self.mock.overlap.build_id)
+        self.assertEqual(rec["libmutter_build"], self.mock.overlap.build_id)
+        # ...found nothing, so the agreement stands
+        self.assertNotIn("the agreement has been withdrawn", err)
+        self.assertTrue(os.path.exists(self.path()))
+        # ...and only then the status the `ok: false` decides
+        self.assertEqual(code, 1)
 
     def test_the_dryrun_is_never_quiet(self):
         """--dryrun exists to be read; it is what somebody runs to find out what
@@ -768,10 +1031,6 @@ class WarandrSide(unittest.TestCase):
             self.assertNotIn("import gnome_overlap", src, name)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class WarandrNeverAsks(unittest.TestCase):
     """`warandr --unsafe-gnome-overlap`: somebody who has already decided,
     starting the window from a hotkey or a desktop entry where a dialog is the
@@ -827,3 +1086,7 @@ class WarandrNeverAsks(unittest.TestCase):
             self.assertNotIn("never_ask", ln)
         # and the flag itself is nowhere near the recording method
         self.assertNotIn("never_ask", inspect.getsource(randr.Backend.allow_overlap))
+
+
+if __name__ == "__main__":
+    unittest.main()

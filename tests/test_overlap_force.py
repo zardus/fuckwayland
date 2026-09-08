@@ -47,7 +47,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, "tests"))
 
-from test_gnome_overlap import Case, EXT_DIR, GIR_DIR, FakeOverlap
+from test_gnome_overlap import Case, EXT_DIR, GIR_DIR, FakeOverlap, load_gen_gir
 from wxrandr import cli, gnome_overlap
 
 os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
@@ -57,6 +57,26 @@ FORCE = gnome_overlap.FORCE_FLAG
 MOVE = ("--output", "Virtual-2", "--pos", "960x0")
 
 TABLE_JSON = os.path.join(EXT_DIR, "generations.json")
+
+
+def documents_text(relative):
+    """One of the repository's markdown files, whole."""
+    with open(os.path.join(ROOT, relative), encoding="utf-8") as fh:
+        return fh.read()
+
+
+def markdown_section(text, heading):
+    """One `#### ...` section of a markdown document, up to the next heading of
+    the same depth or shallower -- "" when the heading is not there, so a
+    renamed section is a readable failure rather than a ValueError from
+    str.index()."""
+    at = text.find("\n" + heading)
+    if at < 0:
+        return ""
+    body = text[at + 1:]
+    hashes = heading.split(" ", 1)[0]
+    end = re.search(r"\n#{1,%d} " % len(hashes), body)
+    return body[:end.start()] if end else body
 
 #: A GNOME nobody in this tree has measured: ONE PAST the newest record, worked
 #: out from the table rather than written down here.  It used to be written
@@ -100,6 +120,20 @@ def unmeasured(mock, shell=UMV):
 
 class Reachability(Case):
     """Every way in, and the far larger number of ways that are not one."""
+
+    def record_agreement(self, **over):
+        """An agreement for the build this Case's mock reports, written by hand
+        -- the supported route (`--gnome-overlap-allow`) cannot be typed with
+        the force flag, which is the whole point of the test that uses this."""
+        rec = {"format": gnome_overlap.CONSENT_FORMAT, "shell": "50.1",
+               "libmutter": 18, "struct_size": 80,
+               "agreed": "2026-01-02T03:04:05Z", "how": "by hand"}
+        rec.update(over)
+        path = gnome_overlap.consent_path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps(rec))
+        return rec
 
     def test_the_flag_alone_does_nothing_and_says_so(self):
         """It is a modifier, never an entry point.  Forgetting the dangerous
@@ -151,6 +185,60 @@ class Reachability(Case):
         self.assertEqual(code, 0, err)
         self.assertEqual(self.ext_calls(), ["ApplyOverlap"])
 
+    @unittest.expectedFailure
+    def test_forcing_a_measured_gnome_is_a_no_op_and_says_so(self):
+        """Fix 21 (F2.5): when `generation_for(version)` is not None the force
+        skips nothing, because the check it exists to skip passes on its own.
+
+        Measured at HEAD on this harness, with an agreement recorded for GNOME
+        Shell 50.1: `--unsafe-gnome-overlap --unsafe-gnome-overlap-unmeasured 50
+        --output Virtual-2 --pos 960x0` printed the whole forcing paragraph
+        ("forcing past the one check that says this GNOME has been measured.
+        This session may end."), threw the agreement away because the applying
+        path does not read one while forcing, and put `force: {"shell_major":
+        50}` in the request -- so a user on a measured GNOME who typed the flag
+        out of caution got a louder, less-checked-looking run than one who did
+        not, describing a risk that is not being taken.
+
+        What the fix does: drop `force` for a major the table already has, warn
+        once that the flag changed nothing, and let the run be the ordinary
+        agreed one."""
+        self.record_agreement()
+        code, out, err = self.run_cli(FLAG, FORCE, "50", *MOVE)
+        self.assertEqual(code, 0, err)
+        # the *last* call and not the whole list: fix 17 (F1.3, pinned in
+        # tests/test_overlap_consent.py ADifferentBuild) puts one Probe in front
+        # of every apply that has an agreement to check, and the two fixes have
+        # to be able to land in either order.
+        self.assertEqual(self.ext_calls()[-1], "ApplyOverlap")
+        self.assertNotIn("forcing past the one check", err)
+        self.assertIn("as agreed on", err)
+        self.assertIn("GNOME Shell 50 is measured", err)
+        for _member, req in self.mock.overlap.calls:
+            self.assertNotIn("force", req)
+        # the control, in the same test: the refusal is dropped for a major the
+        # table has, and for no other.  A fix that stopped forcing altogether
+        # would satisfy every line above and break the feature.
+        unmeasured(self.mock, UMV)
+        code, out, err = self.run_cli(FLAG, FORCE, UM, *MOVE)
+        self.assertEqual(code, 0, err)
+        self.assertIn("forcing past the one check", err)
+
+    @unittest.expectedFailure
+    def test_a_dryrun_of_a_measured_gnome_is_not_the_refused_rehearsal(self):
+        """Fix 21, the other half.  `--dryrun` with the force flag is refused
+        because reaching an *unmeasured* build means loading a description built
+        for another one, and gjs aborts rather than raising -- measured on a
+        real GNOME 51, where the first forced run ever attempted was a --dryrun
+        and it ended the session.  None of that applies to GNOME 50, whose
+        description is the one shipped for it: there is nothing to rehearse
+        dangerously, because there is nothing being forced.  The refusal stays
+        exactly as it is for an unmeasured major (ADryRunCannotBeForced)."""
+        code, out, err = self.run_cli("--dryrun", FLAG, FORCE, "50", *MOVE)
+        self.assertEqual(code, 0, err)
+        self.assertNotIn("cannot be rehearsed with --dryrun", err)
+        self.assertEqual(self.ext_calls(), ["Probe"])
+
     def test_a_layout_gnome_accepts_never_reaches_any_of_it(self):
         unmeasured(self.mock, UMV)
         code, out, err = self.run_cli(FLAG, FORCE, UM, "--output", "Virtual-2",
@@ -158,6 +246,63 @@ class Reachability(Case):
         self.assertEqual(code, 0, err)
         self.assertEqual(self.ext_calls(), [])
         self.assertNotIn(FORCE, err)
+
+
+class TheFlagOnAnXSession(unittest.TestCase):
+    """The handover, as a real process: an X11 session hands wxrandr's argv to
+    the distribution's xrandr, and our own options must not go with it.
+
+    The tree is the one tests/test_passthrough_exec.py describes, reduced to
+    what this needs: `WXRANDR_REAL_XRANDR` names the stand-in directly, so no
+    PATH walk and no real xrandr on the developer's machine can take part, and
+    `FAKE_REAL_LOG` is the proof of what the original was asked to do."""
+
+    def run_wxrandr(self, *argv):
+        tmp = tempfile.mkdtemp(prefix="overlap-x11-")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        log = os.path.join(tmp, "log")
+        env = {"PATH": "/usr/bin:/bin", "HOME": tmp, "DISPLAY": ":0",
+               "PYTHONPATH": ROOT, "FUCKWAYLAND_PASSTHROUGH": "always",
+               "WXRANDR_REAL_XRANDR": os.path.join(ROOT, "tests", "fixtures",
+                                                   "fake_real_tool.py"),
+               "FAKE_REAL_LOG": log}
+        rc = subprocess.run([sys.executable, "-m", "wxrandr"] + list(argv),
+                            capture_output=True, text=True, env=env, timeout=120)
+        handed = []
+        if os.path.exists(log):
+            with open(log, encoding="utf-8") as fh:
+                handed = [json.loads(ln) for ln in fh if ln.strip()]
+        return rc, handed
+
+    def test_the_flag_itself_is_our_usage_error_and_never_reaches_xrandr(self):
+        """The control, and it passes today: `--unsafe-gnome-overlap` is in
+        OWN_APPLY_FLAGS, so `_walk_argv` drops it and the pre-handover check
+        answers in our own words."""
+        rc, handed = self.run_wxrandr(FLAG, "--output", "X", "--pos", "960x0")
+        self.assertEqual(rc.returncode, 1, rc.stdout + rc.stderr)
+        self.assertIn("only means anything on GNOME", rc.stderr)
+        self.assertEqual(handed, [])
+
+    @unittest.expectedFailure
+    def test_the_force_flag_alone_is_our_usage_error_too(self):
+        """Fix 22 (F1.9): `--unsafe-gnome-overlap-unmeasured` is not in
+        `OWN_APPLY_FLAGS`, so on an X11 session the whole command line is
+        handed to the distribution's xrandr.
+
+        Measured at HEAD, as a real process: `python3 -m wxrandr
+        --unsafe-gnome-overlap-unmeasured 52 --output X --auto` with
+        `FUCKWAYLAND_PASSTHROUGH=always`, DISPLAY set and WAYLAND_DISPLAY unset
+        exec'd the stand-in with argv `["--unsafe-gnome-overlap-unmeasured",
+        "52", "--output", "X", "--auto"]` and exited 0.  Real xrandr would
+        answer "unrecognized option" and exit 1 with the layout unapplied --
+        the same wrong answer `--persistent` used to give and that
+        OWN_APPLY_FLAGS exists to prevent -- and `52` would be read as a
+        positional.  `_check_force`'s words are the right answer on every
+        session type, and this is the one where they are not given."""
+        rc, handed = self.run_wxrandr(FORCE, "52", "--output", "X", "--auto")
+        self.assertEqual(rc.returncode, 1, rc.stdout + rc.stderr)
+        self.assertIn("only means something together with %s" % FLAG, rc.stderr)
+        self.assertEqual(handed, [])
 
 
 class NotADefault(Case):
@@ -501,6 +646,52 @@ class WhatARefusalPrints(Case):
         self.assertIn("the rest needs the extension", err)
         self.assertIn("sh gnome/install-overlap.sh", err)
 
+    @unittest.expectedFailure
+    def test_an_unmeasured_gnome_with_no_extension_names_the_package_step(self):
+        """Fix 19 (F7.0): `INSTALL_HINT` is a constant, and a constant cannot
+        say the one thing this reader needs.
+
+        The reader here is on a GNOME nobody has measured -- `%s` -- with the
+        package installed and the extension not on the bus.  gnome-shell will
+        not load an extension whose metadata.json does not list the running
+        major, so `gnome-extensions enable fuckwayland-overlap@fuckwayland`
+        cannot bring it up on that release however many times it is typed:
+        measured on the 26.10 stonking-gnome golden, where the shipped bridge
+        was "OUT OF DATE" for exactly this reason and the advice printed
+        ("reinstall a matching gnome/ from the repo") could not help, because
+        the repo's copy carried the same list.
+
+        `gnome/install-overlap.sh --system` is the step that does help -- it
+        adds the running major to the installed copy's metadata (measured: one
+        line appended to shell-version plus a reboot brought the bridge up on
+        51.beta).  `INSTALL_HINT` becomes `install_hint(shell_major)`, and for
+        a major the table does not have it says so.
+        """ % UMV
+        ov = unmeasured(self.mock, UMV)
+        ov.present = False
+        code, out, err = self.run_cli(FLAG, FORCE, UM, *MOVE)
+        self.assertEqual(code, 1)
+        self.assertIn("gnome-extensions enable fuckwayland-overlap@fuckwayland", err)
+        self.assertIn("install-overlap.sh --system", err)
+        self.assertIn("Shell %s" % UM, err)
+
+    @unittest.expectedFailure
+    def test_the_documents_name_the_package_step_too(self):
+        """Fix 19, the documents half.  README's "#### Overlapping monitors on
+        GNOME" tells a reader to run `sh gnome/install-overlap.sh`, which is the
+        clone route; somebody who installed the .deb has the files already and
+        needs `--system` (and, on an unmeasured major, needs it to rewrite the
+        installed metadata).  WXRANDR.md's forcing section says nothing about
+        either."""
+        section = markdown_section(documents_text("README.md"),
+                                   "#### Overlapping monitors on GNOME")
+        self.assertTrue(section, "README lost that heading")
+        self.assertIn("install-overlap.sh --system", section)
+        wx = documents_text(os.path.join("docs", "WXRANDR.md"))
+        at = wx.find(gnome_overlap.FORCE_FLAG)
+        self.assertNotEqual(at, -1, "WXRANDR.md lost the forcing section")
+        self.assertIn("install-overlap.sh --system", wx[at:at + 8000])
+
     def test_the_agreement_option_gives_the_same_message(self):
         """`--gnome-overlap-allow` on a new release is exactly where a
         maintainer lands, so it is the same message and not a shorter one."""
@@ -708,12 +899,37 @@ struct _MetaMonitorsConfig
 
 
 class GenGirIsTheOnlyGenerator(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.gen = load_gen_gir()
+
     def test_the_generated_files_are_in_step_with_the_table(self):
-        if shutil.which("g-ir-compiler") is None:
-            self.skipTest("no g-ir-compiler")
-        rc = subprocess.run([sys.executable, os.path.join(GIR_DIR, "gen-gir.py"),
-                             "--check"], capture_output=True, text=True)
-        self.assertEqual(rc.returncode, 0, rc.stdout + rc.stderr)
+        """The checked-in .gir and metadata.json against what the table
+        generates, in this process and with no compiler involved.
+
+        It used to run `gen-gir.py --check`, which compiled each description and
+        compared the result with the shipped typelib byte for byte -- so on any
+        machine whose g-ir-compiler is not the one that produced the checked-in
+        files this went red about a description that is correct.  Measured on
+        Ubuntu 26.04 and on nixpkgs, both carrying g-ir-compiler 1.86.0: 17
+        four-byte words differ per typelib and nothing else does.  The typelibs
+        are compared by meaning in tests/test_gnome_overlap.py ShippedExtension;
+        what belongs here is the half that is pure text -- that no .gir was
+        edited by hand and no record was added without regenerating."""
+        for record in self.gen.load_table():
+            ns, text = self.gen.gir(record)
+            with self.subTest(ns=ns):
+                path = os.path.join(GIR_DIR, "%s-1.0.gir" % ns)
+                self.assertTrue(os.path.exists(path), path)
+                with open(path, encoding="utf-8") as fh:
+                    self.assertEqual(fh.read(), text)
+        with open(os.path.join(EXT_DIR, "metadata.json"), encoding="utf-8") as fh:
+            meta = json.load(fh)
+        table = self.gen.load_table()
+        self.assertEqual(meta["shell-version"],
+                         self.gen.metadata_shell_versions(table))
+        self.assertEqual(meta["description"],
+                         self.gen.metadata_description(table, meta["description"]))
 
     def test_gen_is_gone_and_says_what_replaced_it(self):
         """`--gen 18` used to mean the libmutter generation.  The table is keyed
@@ -945,6 +1161,115 @@ class TheDescriptionNamesNoLibrary(unittest.TestCase):
     that on Ubuntu 26.10, on a `--dryrun` that writes nothing.
     """
 
+    #: the C symbols the descriptions make callable -- 17 function entries over
+    #: 13 distinct identifiers, because g_memdup2 is described five times, once
+    #: per record shape it copies.  Written out, because "what this extension
+    #: can reach inside gnome-shell" is exactly the list that must not grow by
+    #: accident.
+    SYMBOLS = {
+        "g_memdup2", "g_strndup", "g_object_ref", "g_object_unref",
+        "g_type_name_from_instance", "memcpy",
+        "meta_monitor_manager_get_config_manager",
+        "meta_monitor_config_manager_get_current",
+        "meta_monitor_config_manager_create_linear",
+        "meta_monitors_config_get_switch_config",
+        "meta_monitors_config_set_switch_config",
+        "meta_verify_monitors_config",
+        "meta_monitor_manager_apply_monitors_config",
+    }
+
+    def girs(self):
+        out = {}
+        for name in sorted(os.listdir(GIR_DIR)):
+            if name.endswith(".gir"):
+                with open(os.path.join(GIR_DIR, name), encoding="utf-8") as fh:
+                    out[name] = fh.read()
+        self.assertTrue(out)
+        return out
+
+    def test_the_string_copy_is_owned_by_whoever_asked_for_it(self):
+        """`g_strndup` returns freshly allocated memory, so the description has
+        to say `transfer-ownership="full"` or gjs converts the bytes to a JS
+        string and frees nothing.
+
+        It said "none" until 0.4.1: one connector name leaked per monitor per
+        read, inside gnome-shell, which lives for the session.  Small, and
+        wrong, and the kind of wrong that a description is the only place to
+        fix -- the extension has no address to free."""
+        want = ('<function name="strn" c:identifier="g_strndup">\n'
+                '      <return-value transfer-ownership="full">')
+        for name, text in self.girs().items():
+            self.assertIn(want, text, name)
+        gen = load_gen_gir()
+        self.assertIn(want, gen.BODY)
+        # and in the artifact gnome-shell actually loads.  The .gir is a source
+        # file; the typelib is what gjs reads, it is checked in compiled, and
+        # the two have been out of step before -- the typelibs shipped up to
+        # 0.4.1 say caller_owns 0 for exactly this function while their .gir
+        # said "full".  2 is GI_TRANSFER_EVERYTHING.
+        shipped = os.path.join(EXT_DIR, "typelib")
+        for g in gnome_overlap.GENERATIONS:
+            ns = g["namespace"]
+            with self.subTest(ns=ns):
+                summary, why = gen.typelib_summary(shipped, ns)
+                if why == gen.NO_GIREPOSITORY:
+                    self.skipTest("no GIRepository")
+                self.assertIsNotNone(summary, "%s: %s" % (ns, why))
+                self.assertEqual(summary["functions"]["strn"]["symbol"], "g_strndup")
+                self.assertEqual(summary["functions"]["strn"]["transfer"], 2)
+
+    @unittest.expectedFailure
+    def test_every_bounded_copy_is_freed(self):
+        """Fix 16 (F1.7), deferred: each `g_memdup2` wrapper returns
+        `transfer-ownership="none"`, so every struct the extension walks is
+        copied and never freed -- 72 or 80 bytes per struct, a few hundred bytes
+        per Probe or ApplyOverlap, in gnome-shell.
+
+        Either the return becomes `full`, or an `fr` (`g_free`, taking the
+        guint64 the extension already holds) is described and `extension.js`
+        calls `lib.fr(` after each copy.  Both are changes to the read path
+        inside a live compositor, which is why this is written down rather than
+        guessed at: gen-gir.py's `_memdup` docstring carries the same note."""
+        with open(os.path.join(EXT_DIR, "extension.js"), encoding="utf-8") as fh:
+            js = fh.read()
+        for name, text in self.girs().items():
+            for block in re.findall(r'<function name="dup_\w+".*?</function>',
+                                    text, re.S):
+                freed = ('transfer-ownership="full"' in block.split("</return-value>")[0]
+                         or ('c:identifier="g_free"' in text and "lib.fr(" in js))
+                self.assertTrue(freed, "%s: %s" % (name, block.splitlines()[0]))
+
+    def test_nothing_else_is_callable_through_a_description(self):
+        """The list of C symbols the extension can reach inside gnome-shell,
+        whole.  It grows only on purpose."""
+        for name, text in self.girs().items():
+            got = set(re.findall(r'c:identifier="([^"]+)"', text))
+            self.assertEqual(got - {"g_free"}, self.SYMBOLS, name)
+
+    def test_the_generator_does_not_tell_a_maintainer_to_name_a_library(self):
+        """gen-gir.py's TABLE comment said `soname` "goes into the .gir's
+        `shared-library`" long after HEAD stopped putting it there and started
+        explaining, at length, why nothing may.  A maintainer reading the
+        comment beside the table -- which is where somebody adding a GNOME
+        reads -- was being told to make the one edit that has actually ended a
+        session here (measured, Ubuntu 26.10, a forced --dryrun)."""
+        with open(os.path.join(GIR_DIR, "gen-gir.py"), encoding="utf-8") as fh:
+            script = fh.read()
+        table = script[script.index("#: THE TABLE"):script.index("TABLE_PATH =")]
+        self.assertNotRegex(table, r"soname[\s\S]{0,200}shared-library")
+        self.assertIn("/proc/self/maps", table)
+
+    def test_the_soname_reaches_no_generated_byte(self):
+        """The proof rather than the promise: change the record's soname to
+        something absurd and the description that comes out is identical."""
+        gen = load_gen_gir()
+        record = gen.load_table()[0]
+        self.assertEqual(gen.gir(record),
+                         gen.gir(dict(record, soname="libfoo.so.9")))
+        for name, text in self.girs().items():
+            self.assertNotIn("shared-library=", text, name)
+            self.assertNotIn("libmutter-", text.split("-->")[-1], name)
+
     def test_the_extension_refuses_a_description_naming_an_absent_library(self):
         """The guard for descriptions this project did not generate: one left
         behind by an older install, or built by hand.  It is a static read of
@@ -1168,10 +1493,6 @@ class TheMetadataDescriptionComesFromTheTable(unittest.TestCase):
                       meta["description"])
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class ADryRunCannotBeForced(unittest.TestCase):
     """Measured on a real GNOME 51: the first forced run ever attempted was a
     `--dryrun`, and it ended the session. Forcing picks a description by size,
@@ -1207,3 +1528,7 @@ class ADryRunCannotBeForced(unittest.TestCase):
         err = self._err(["--unsafe-gnome-overlap", "--unsafe-gnome-overlap-unmeasured",
                          "51", "--output", "X", "--pos", "1x0"])
         self.assertNotIn("cannot be rehearsed", err)
+
+
+if __name__ == "__main__":
+    unittest.main()

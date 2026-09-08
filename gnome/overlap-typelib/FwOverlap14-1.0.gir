@@ -112,9 +112,12 @@
         <parameter name="n" transfer-ownership="none"><type name="guint64" c:type="gsize"/></parameter>
       </parameters>
     </function>
-    <!-- a bounded copy of at most n bytes of a string -->
+    <!-- a bounded copy of at most n bytes of a string.  g_strndup returns
+         freshly allocated memory, so the caller owns it: declared "none" the
+         string was converted to a JS value and then leaked, one connector name
+         per monitor per read. -->
     <function name="strn" c:identifier="g_strndup">
-      <return-value transfer-ownership="none"><type name="utf8" c:type="char*"/></return-value>
+      <return-value transfer-ownership="full"><type name="utf8" c:type="char*"/></return-value>
       <parameters>
         <parameter name="s" transfer-ownership="none"><type name="guint64" c:type="guint64"/></parameter>
         <parameter name="n" transfer-ownership="none"><type name="guint64" c:type="gsize"/></parameter>

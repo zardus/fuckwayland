@@ -186,6 +186,16 @@ enable_setting() {
         '@as []'|'[]') as_user gsettings set org.gnome.shell enabled-extensions "['$UUID']" ;;
         *) as_user gsettings set org.gnome.shell enabled-extensions "${cur%]}, '$UUID']" ;;
     esac
+    # disabled-extensions wins over enabled-extensions in gnome-shell, so a uuid
+    # left in both lists is an extension that never loads -- the state anybody
+    # who ran `--uninstall` (or the disable button) and then reinstalled is in.
+    # install-bridge.sh has cleared it since 0.3; this one did not.
+    cur=$(as_user gsettings get org.gnome.shell disabled-extensions 2>/dev/null || echo '[]')
+    case $cur in
+        *"'$UUID'"*)
+            new=$(printf '%s' "$cur" | sed -e "s/, *'$UUID'//" -e "s/'$UUID', *//" -e "s/'$UUID'//")
+            as_user gsettings set org.gnome.shell disabled-extensions "$new" ;;
+    esac
 }
 
 disable_setting() {

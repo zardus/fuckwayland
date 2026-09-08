@@ -58,7 +58,11 @@ place to forget.
 
 Needs `g-ir-compiler` (Ubuntu: libgirepository1.0-dev).  The compiled typelibs are
 checked in because no desktop has that package installed; `--check` recompiles and
-compares, which is how CI notices a .gir edited without a rebuild.
+compares, which is how CI notices a .gir edited without a rebuild.  Its exit status
+has three values, because "nothing disagreed" and "nothing was compared" are not the
+same answer: 0 every namespace compared and agreed, 1 something is stale, 2 the
+comparison could not be made here (no GIRepository to read a typelib with).  A CI
+that treats 2 as a pass is a CI that ships whatever the .gir happened to say.
 
 `--from-header` is the answer to a `typelib` or `sentinel` refusal after a GNOME
 upgrade, and the only route by which a new generation should ever be added.  It reads
@@ -86,8 +90,10 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 EXT_DIR = os.path.join(os.path.dirname(HERE), "fuckwayland-overlap@fuckwayland")
@@ -101,12 +107,19 @@ EXT_DIR = os.path.join(os.path.dirname(HERE), "fuckwayland-overlap@fuckwayland")
 #: script uses are `namespace` (what the description is called) and `tail_slots`
 #: (4-byte slots between `disabled_monitor_specs` and `layout_mode`, which is
 #: the whole of what differs between the shipped descriptions and is what
-#: `--from-header` derives from a release's own source).  `soname` goes into the
-#: .gir's `shared-library`, written out rather than composed from a number:
-#: through GNOME 50 libmutter's API version was a counter of its own, and mutter
-#: 51 made it the GNOME major instead (`libmutter_api_version = '51'`), so
-#: `libmutter-%d.so.0` describes the two builds it was written for and nothing
-#: after them.
+#: `--from-header` derives from a release's own source).
+#:
+#: `soname` is NOT one of them, and nothing generated here names a library: see
+#: the note at the top of HEAD below.  A description is a layout, the symbols
+#: resolve out of gnome-shell's own global scope, and `soname` is only ever
+#: matched against /proc/self/maps by the extension, to say which libmutter is
+#: actually mapped.  It is written out in the record rather than composed from a
+#: number because through GNOME 50 libmutter's API version was a counter of its
+#: own and mutter 51 made it the GNOME major instead
+#: (`libmutter_api_version = '51'`), so `libmutter-%d.so.0` describes the two
+#: builds it was written for and nothing after them.  This comment said the
+#: opposite until 0.4.1, which is an invitation to a maintainer to "put the
+#: shared library back" -- the one edit that has actually killed a session here.
 TABLE_PATH = os.path.join(EXT_DIR, "generations.json")
 TABLE_FIELDS = ("shell_major", "libmutter", "soname", "meta_typelib",
                 "namespace", "struct_size", "tail_slots")
@@ -213,7 +226,20 @@ TAIL_FIELD = ('      <field name="u{off}" writable="1">'
 
 
 def _memdup(name, ret):
-    """g_memdup2(number, n) -> a copy of exactly n bytes, read as `ret`."""
+    """g_memdup2(number, n) -> a copy of exactly n bytes, read as `ret`.
+
+    KNOWN LEAK, and a deliberate one for now: the return is declared
+    `transfer-ownership="none"`, so gjs reads the fields out of the copy and
+    frees nothing -- 72 or 80 bytes per struct walked, a few hundred bytes per
+    Probe or ApplyOverlap, in a process (gnome-shell) that lives for the
+    session.  A user who ran this a thousand times would be out well under a
+    megabyte.  It is not "full" because these are plain records with no
+    registered free function and the copy's address is what the range checks are
+    built on; the fix is an `fr` (`g_free`, taking the guint64 the extension
+    already holds) called after each copy in extension.js, which is a change to
+    the extension's read path and wants measuring on a live compositor first.
+    tests/test_overlap_force.py TheDescriptionNamesNoLibrary holds the gap open.
+    """
     return f'''    <function name="{name}" c:identifier="g_memdup2">
       <return-value transfer-ownership="none"><type name="{ret}" c:type="gpointer"/></return-value>
       <parameters>
@@ -230,9 +256,12 @@ BODY = (
     + _memdup('dup_lmc', 'LMCN')
     + _memdup('dup_mc', 'MCN')
     + _memdup('dup_ms', 'MSN')
-    + '''    <!-- a bounded copy of at most n bytes of a string -->
+    + '''    <!-- a bounded copy of at most n bytes of a string.  g_strndup returns
+         freshly allocated memory, so the caller owns it: declared "none" the
+         string was converted to a JS value and then leaked, one connector name
+         per monitor per read. -->
     <function name="strn" c:identifier="g_strndup">
-      <return-value transfer-ownership="none"><type name="utf8" c:type="char*"/></return-value>
+      <return-value transfer-ownership="full"><type name="utf8" c:type="char*"/></return-value>
       <parameters>
         <parameter name="s" transfer-ownership="none"><type name="guint64" c:type="guint64"/></parameter>
         <parameter name="n" transfer-ownership="none"><type name="guint64" c:type="gsize"/></parameter>
@@ -514,6 +543,172 @@ def gir(record: dict) -> tuple:
     return ns, text
 
 
+# -- what a typelib *means*, as against what bytes it happens to be ----------
+#
+# `--check` used to compare the shipped typelib with a fresh compile byte for
+# byte, and that comparison does not survive a compiler upgrade: g-ir-compiler
+# 1.86 (Ubuntu 26.04, and nixpkgs) writes a different reserved word into every
+# FunctionBlob than the 1.80 that compiled the files checked in here -- 17
+# four-byte words per typelib, 0x00000001 against 0x03FF0FFD -- and the two
+# 1.86 compilers agree with each other.  Nothing about the description changed:
+# all six checks pass live on GNOME 46.0 with the shipped bytes (noble-gnome
+# golden, package route).  So the byte hash is printed and decides nothing, and
+# what is compared is what the extension actually depends on: the namespace,
+# that no shared library is named, every function's name and C symbol, and
+# every record's size and field offsets.
+#
+# It is read back with GIRepository, in a subprocess per typelib, because a
+# process has exactly one default repository and two namespaces of the same
+# name cannot both be in it.
+
+_DUMP = r"""
+import json, sys
+
+try:
+    import gi
+    for _v in ("3.0", "2.0"):
+        try:
+            gi.require_version("GIRepository", _v)
+            break
+        except ValueError:
+            pass
+    from gi.repository import GIRepository as G
+except ImportError:
+    # exit 3 and nothing else: "there is no GIRepository on this machine" is a
+    # different answer from "this typelib would not load", and a caller that
+    # cannot tell them apart passes a broken file.
+    raise SystemExit(3)
+
+directory, ns = sys.argv[1], sys.argv[2]
+repo = (G.Repository.dup_default() if hasattr(G.Repository, "dup_default")
+        else G.Repository.get_default())
+repo.prepend_search_path(directory)
+repo.require(ns, "1.0", 0)
+
+
+def call(obj, name, *args):
+    # GIRepository 3.0 made the info accessors methods; 2.0 has them as module
+    # functions named <kind>_info_get_<what>.  Both spellings are tried so this
+    # reads the same typelib on 24.04 and on 26.04.  `get_caller_owns` is the
+    # one that is not named after the info's own kind: it lives on
+    # CallableInfo, so 2.0 spells it g_callable_info_get_caller_owns for a
+    # FunctionInfo, and the callable fallback is tried after the derived name.
+    if hasattr(obj, name):
+        return getattr(obj, name)(*args)
+    kind = type(obj).__name__.replace("Info", "").lower()
+    for spelling in ("%s_info_%s" % (kind, name), "callable_info_%s" % name):
+        fn = getattr(G, spelling, None)
+        if fn is not None:
+            return fn(obj, *args)
+    raise AttributeError(name)
+
+
+def shared():
+    if hasattr(repo, "get_shared_libraries"):
+        return list(repo.get_shared_libraries(ns) or [])
+    lib = repo.get_shared_library(ns)
+    return [p for p in (lib or "").split(",") if p]
+
+
+out = {"namespace": ns, "shared_libraries": shared(), "functions": {},
+       "records": {}}
+for i in range(repo.get_n_infos(ns)):
+    info = repo.get_info(ns, i)
+    name, kind = info.get_name(), type(info).__name__
+    if kind == "FunctionInfo":
+        # transfer as well as the symbol: transfer-ownership is the difference
+        # between gjs freeing what g_strndup allocated and leaking it once per
+        # call, it is invisible in the .gir's neighbours and in every size and
+        # offset here, and it is a real difference between two typelibs that
+        # describe the same 17 functions.
+        out["functions"][name] = {"symbol": call(info, "get_symbol"),
+                                  "transfer": int(call(info, "get_caller_owns"))}
+    elif kind == "StructInfo":
+        fields = {}
+        for j in range(call(info, "get_n_fields")):
+            f = call(info, "get_field", j)
+            fields[f.get_name()] = call(f, "get_offset")
+        out["records"][name] = {"size": call(info, "get_size"), "fields": fields}
+    else:
+        out.setdefault("other", {})[name] = kind
+print(json.dumps(out, sort_keys=True))
+"""
+
+
+#: `typelib_summary` could not read the file because this machine has no
+#: GIRepository at all -- a skip, and never a pass.
+NO_GIREPOSITORY = "no GIRepository"
+
+#: `--check`'s third exit status, and `_check_meaning`'s: nothing was compared
+#: here.  It is not 0, because a caller that cannot tell "agreed" from "did not
+#: look" will read the second as the first exactly once, on the day it matters.
+SKIPPED = 2
+
+
+def typelib_summary(directory: str, ns: str):
+    """`(summary, why not)` for `<directory>/<ns>-1.0.typelib`.
+
+    `why not` is `NO_GIREPOSITORY` when the bindings are simply absent (which is
+    most desktops -- the typelibs are checked in precisely so that nobody needs
+    them), and the reader's own stderr when the file is there and will not
+    load."""
+    rc = subprocess.run([sys.executable, "-c", _DUMP, directory, ns],
+                        capture_output=True, text=True)
+    if rc.returncode == 3:
+        return None, NO_GIREPOSITORY
+    if rc.returncode != 0:
+        return None, (rc.stderr.strip().splitlines() or ["exit %s" % rc.returncode])[-1]
+    try:
+        return json.loads(rc.stdout), None
+    except ValueError:
+        return None, "the reader printed something that is not JSON"
+
+
+def compare_typelibs(shipped: dict, fresh: dict) -> list:
+    """Every way two typelib summaries disagree, one sentence each.  Empty
+    means the shipped file describes what the .gir beside it says.
+
+    Namespace, shared libraries, every function's C symbol *and* its return
+    transfer, every record's size and every field's offset.  Transfer is in the
+    list because it is the only thing the strn fix changed in the shipped bytes
+    (`transfer-ownership="none"` -> `"full"`, caller_owns 0 -> 2): a comparison
+    without it would have called a typelib that leaks one connector name per
+    monitor per read identical to one that does not."""
+    bad = []
+    if shipped.get("namespace") != fresh.get("namespace"):
+        bad.append("namespace %s, not %s"
+                   % (shipped.get("namespace"), fresh.get("namespace")))
+    for which, s in (("shipped", shipped), ("fresh", fresh)):
+        if s.get("shared_libraries"):
+            bad.append("the %s typelib names a shared library (%s); a description "
+                       "here is a layout and must name none"
+                       % (which, ", ".join(s["shared_libraries"])))
+    for name in sorted(set(shipped.get("functions", {})) | set(fresh.get("functions", {}))):
+        a = shipped.get("functions", {}).get(name) or {}
+        b = fresh.get("functions", {}).get(name) or {}
+        if a.get("symbol") != b.get("symbol"):
+            bad.append("function %s is %s, not %s"
+                       % (name, a.get("symbol"), b.get("symbol")))
+        if a.get("transfer") != b.get("transfer"):
+            bad.append("function %s returns transfer %s, not %s (0 none, 2 full: "
+                       "whether the caller owns and frees what it got back)"
+                       % (name, a.get("transfer"), b.get("transfer")))
+    for name in sorted(set(shipped.get("records", {})) | set(fresh.get("records", {}))):
+        a = shipped.get("records", {}).get(name) or {}
+        b = fresh.get("records", {}).get(name) or {}
+        if a.get("size") != b.get("size"):
+            bad.append("%s is %s bytes, not %s" % (name, a.get("size"), b.get("size")))
+        for f in sorted(set(a.get("fields", {})) | set(b.get("fields", {}))):
+            if a.get("fields", {}).get(f) != b.get("fields", {}).get(f):
+                bad.append("%s.%s is at offset %s, not %s"
+                           % (name, f, a.get("fields", {}).get(f),
+                              b.get("fields", {}).get(f)))
+    if shipped.get("other") != fresh.get("other"):
+        bad.append("the typelib describes %s, not %s"
+                   % (shipped.get("other"), fresh.get("other")))
+    return bad
+
+
 def metadata_shell_versions(table):
     """`metadata.json`'s `shell-version`, derived from the table rather than
     kept beside it.  gnome-shell reads that list to decide whether to load the
@@ -604,6 +799,7 @@ def main(argv):
     here = HERE
     table = load_table()
     outdir = args[0] if args else os.path.join(EXT_DIR, "typelib")
+    compared = skipped = 0
     os.makedirs(outdir, exist_ok=True)
     bad = write_metadata(table, check)
     for record in table:
@@ -623,15 +819,59 @@ def main(argv):
         if check:
             old = open(tpath, "rb").read() if os.path.exists(tpath) else b""
             new = open(tmp, "rb").read()
-            os.unlink(tmp)
             if old != new:
-                print("stale: %s (%s != %s)"
+                # informational, and deliberately not a verdict: see the note
+                # above compare_typelibs().
+                print("note: %s and a fresh compile differ in bytes (%s != %s); "
+                      "compared by meaning below"
                       % (tpath, hashlib.sha256(old).hexdigest()[:12],
                          hashlib.sha256(new).hexdigest()[:12]))
-                bad = 1
+            verdict = _check_meaning(outdir, os.path.dirname(tmp), ns, tpath, tmp)
+            if verdict == SKIPPED:
+                skipped += 1
+            else:
+                compared += 1
+                bad = max(bad, verdict)
+            os.unlink(tmp)
         else:
             print("%s  %s  %s" % (ns, gpath, tpath))
+    if check:
+        print("--check: %d compared, %d skipped" % (compared, skipped))
+        # A skip loses to a stale -- something known wrong outranks something
+        # unknown -- and beats an all-clear, which is the whole reason it has a
+        # status of its own.
+        return 1 if bad else (SKIPPED if skipped else 0)
     return bad
+
+
+def _check_meaning(shipped_dir, fresh_dir, ns, tpath, tmp) -> int:
+    """The semantic half of `--check`, over one namespace: namespace, shared
+    libraries, function symbols, return transfer, record sizes and field
+    offsets.
+
+    The fresh compile is written next to the shipped one as `<ns>-1.0.typelib.new`,
+    which GIRepository will not load, so it is linked into a scratch directory
+    under its proper name for the read.  A missing GIRepository is a skip and not
+    a pass: it returns SKIPPED (2), which main() carries out to the exit status,
+    because "nothing was compared" and "nothing disagreed" are different
+    answers."""
+    shipped, why = typelib_summary(shipped_dir, ns)
+    if why == NO_GIREPOSITORY:
+        print("skipped: %s (no GIRepository here to read a typelib with)" % tpath)
+        return SKIPPED
+    if shipped is None:
+        print("stale: %s: it will not load (%s)" % (tpath, why))
+        return 1
+    with tempfile.TemporaryDirectory(prefix="gen-gir-") as scratch:
+        shutil.copyfile(tmp, os.path.join(scratch, "%s-1.0.typelib" % ns))
+        fresh, why = typelib_summary(scratch, ns)
+    if fresh is None:
+        print("stale: %s: the fresh compile will not load (%s)" % (tpath, why))
+        return 1
+    bad = compare_typelibs(shipped, fresh)
+    for line in bad:
+        print("stale: %s: %s" % (tpath, line))
+    return 1 if bad else 0
 
 
 if __name__ == "__main__":

@@ -149,6 +149,22 @@ def _text(e: DBusError) -> str:
     return (e.message or e.name) + "\n"
 
 
+def _not_ok_why(reply) -> str:
+    """' (struct-size: 88 bytes)' for a reply that named a check, and the empty
+    string for the one that did not.
+
+    The shape with no `check` and no `reason` is the one extension.js produces
+    when the monitors.xml digest moved across an apply that went in, and
+    `gnome_overlap.refusal_text()` renders it "refused (?): no reason given" --
+    a sentence about a layout that is on screen.  So the caller composes its
+    own line and this only appends what the reply actually carried."""
+    check = (reply.get("check") or "").strip()
+    reason = (reply.get("reason") or "").strip()
+    if check and reason:
+        return " (%s: %s)" % (check, reason)
+    return (" (%s)" % (check or reason)) if (check or reason) else ""
+
+
 def _refused(e: DBusError) -> str:
     """A rejected ApplyMonitorsConfig, in Mutter's name.  We pass every layout on unchanged -- overlaps
     included, which X11, KWin and wlroots all take -- so when one comes back refused the limit is GNOME's, and
@@ -848,7 +864,17 @@ class MutterOutputs:
             warn("GNOME's rule this breaks: %s\n" % fault)
         core.record_lastmodes(state, targets)
         reply = ov.apply(self.layout_mode, expect, want, force)
-        if not reply.get("ok"):
+        # `ok` and `applied` are two different answers, and the shape that has
+        # both of them is the one this branch exists for: extension.js:1100-1108
+        # re-digests ~/.config/monitors.xml after the apply, and a file that
+        # moved across the call clears `ok` on a reply that already says
+        # `applied: true`, with no `check` and no `reason`.  Raising the refusal
+        # there printed "the overlap extension refused (?): no reason given"
+        # about a layout that is on screen -- so a write that went in is
+        # reported as a write that went in, and the exit status is the only
+        # thing `ok: false` still decides.
+        applied = bool(reply.get("applied"))
+        if not reply.get("ok") and not applied:
             raise Fatal(self._overlap_refusal(reply, version, force))
         notes = gnome_overlap.notes_text(reply)
         if notes:
@@ -865,7 +891,26 @@ class MutterOutputs:
             if drift:
                 gnome_overlap.forget_consent()
                 warn("%s: %s" % (gnome_overlap.FLAG, drift))
-        return self.snapshot(state)
+        fresh = self.snapshot(state)
+        if not reply.get("ok"):
+            # Applied, and not ok.  Everything above has already been said --
+            # including whatever applied_text() shouted about monitors.xml --
+            # and the snapshot is taken, because the layout on screen is the
+            # new one and the state file has to agree with the screen.  The
+            # save is here and not at the caller because the caller is
+            # cli.py:_do_apply, whose own `sess.state.save()` is three lines
+            # past a call that is about to raise: without this the lastmodes
+            # recorded above and the primary snapshot() just re-synced would be
+            # thrown away on the one branch where the screen really did change.
+            # What is left after that is the exit status: a run that ends here
+            # is not a success, and a script must not read it as one.
+            state.save()
+            raise Fatal("%s: the extension applied this layout and then reported "
+                        "it as not ok%s; the layout above is what is running now, "
+                        "and `%s` puts it back.\n"
+                        % (gnome_overlap.FLAG, _not_ok_why(reply),
+                           gnome_overlap.undo_command(expect)))
+        return fresh
 
     def apply(self, state: core.State, targets: list, persistent: bool = False) -> list:
         """One ApplyMonitorsConfig for the whole layout, then wait for MonitorsChanged (<= 5 s) and return the
@@ -881,7 +926,7 @@ class MutterOutputs:
             warn(PERSIST_WARNING)
             # Only this branch ever opens monitors.xml: a temporary apply, which is
             # what nearly every run does, does not go near the file.
-            saved = monitors_xml.snapshot()
+            saved = monitors_xml.snapshot(uid=wsession.session_uid())
             for line in monitors_xml.describe(saved, self._file_layout_mode()):
                 warn(line)
             if self._rots_with_the_layout_mode(plan, targets, state):

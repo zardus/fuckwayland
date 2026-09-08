@@ -41,6 +41,7 @@ import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tests"))
 
 from fwcommon import dbus_mini
@@ -95,6 +96,13 @@ xrandr: --unsafe-gnome-overlap: GNOME will not place these monitors, so they are
 
 # ---------------------------------------------------------------- the mocks
 
+#: two sha256 digests of ~/.config/monitors.xml, before and after one apply.
+#: Only their difference matters; they are full-length because the message
+#: prints them and a truncated digest in a bug report is not one.
+SAVED_BEFORE = "9d4f0e8c" + "1" * 56
+SAVED_AFTER = "7a2b6f31" + "2" * 56
+
+
 class FakeOverlap:
     """The extension, as a bus name that answers Probe and ApplyOverlap.
 
@@ -123,6 +131,14 @@ class FakeOverlap:
         # refusal on an unmeasured build hands back for the maintainer message
         self.sonames = ["libmutter-18.so.0"]
         self.meta_typelib = "18"
+        # The one reply shape that says both things at once: the write went in
+        # and the answer is not ok.  extension.js:1100-1108 digests
+        # ~/.config/monitors.xml before and after the apply and clears `ok` when
+        # the two differ, leaving `applied: true` and no `check`/`reason` at all
+        # -- so it is set here as an attribute rather than assembled by hand in
+        # a test, because a hand-written dict drifts away from the extension and
+        # then the test proves nothing.
+        self.saved_config_moved = False
 
     def found(self):
         """The public measurements the real extension carries out with a
@@ -219,6 +235,10 @@ class FakeOverlap:
                                  "before": "absent", "after": "absent",
                                  "unchanged": True},
             })
+            if self.saved_config_moved:
+                out["saved_config"].update(
+                    {"before": SAVED_BEFORE, "after": SAVED_AFTER, "unchanged": False})
+                out["ok"] = False
         if self.instance_size is None:
             out.pop("instance_size")
         if self.strip_typelib_check:
@@ -313,6 +333,20 @@ VIRTUALS = {
                    twm.M("1280x720@60.000", 1280, 720, 60.0, [1.0])],
                   {"width-mm": 508, "height-mm": 286, "is-builtin": False,
                    "display-name": "Virtual 2"}),
+    # a third head, so a layout can have more groups than the two the extension
+    # was first written against, and so an undo command has three stanzas
+    "Virtual-3": (("Virtual-3", "QEMU", "Virtual", "0"),
+                  [twm.M("1920x1080@60.000", 1920, 1080, 60.0, [1.0], preferred=True)],
+                  {"width-mm": 508, "height-mm": 286, "is-builtin": False,
+                   "display-name": "Virtual 3"}),
+    # the scaled one: the same panel, offering 2.0 as well.  A scale changes the
+    # logical size a position is measured against, and that arithmetic happens
+    # out here rather than in the extension -- which is handed positions only.
+    "Virtual-S": (("Virtual-S", "QEMU", "Virtual", "0"),
+                  [twm.M("1920x1080@60.000", 1920, 1080, 60.0, [1.0, 2.0],
+                         preferred=True)],
+                  {"width-mm": 508, "height-mm": 286, "is-builtin": False,
+                   "display-name": "Virtual S"}),
 }
 
 
@@ -326,6 +360,32 @@ def two_virtuals():
         [(0, 0, 1.0, 0, True, [("Virtual-1", "1920x1080@60.000")]),
          (1920, 0, 1.0, 0, False, [("Virtual-2", "1920x1080@60.000")])],
         layout_mode=1)
+
+
+def three_virtuals():
+    """Three 1920x1080 heads in a row, 1:1: 0, 1920, 3840."""
+    return twm.FakeMutter(
+        ["Virtual-1", "Virtual-2", "Virtual-3"],
+        [(0, 0, 1.0, 0, True, [("Virtual-1", "1920x1080@60.000")]),
+         (1920, 0, 1.0, 0, False, [("Virtual-2", "1920x1080@60.000")]),
+         (3840, 0, 1.0, 0, False, [("Virtual-3", "1920x1080@60.000")])],
+        layout_mode=1)
+
+
+def mixed_virtuals(layout_mode=1):
+    """Virtual-1 at 1:1 and Virtual-S at scale 2 beside it.
+
+    In `layout_mode` 1 (logical, GNOME's default with fractional scaling on)
+    Virtual-S is 960x540 of layout space and sits at 1920..2880; in mode 2
+    (physical) the same monitor is 1920x1080 of it and sits at 1920..3840.  The
+    extension is handed positions and nothing else, so which of those is true
+    is decided out here -- and getting it wrong would offer the overlap route
+    for a layout Mutter accepts, or the other way round."""
+    return twm.FakeMutter(
+        ["Virtual-1", "Virtual-S"],
+        [(0, 0, 1.0, 0, True, [("Virtual-1", "1920x1080@60.000")]),
+         (1920, 0, 2.0, 0, False, [("Virtual-S", "1920x1080@60.000")])],
+        layout_mode=layout_mode)
 
 
 class Case(unittest.TestCase):
@@ -410,6 +470,27 @@ def core_state(path):
     return State("overlap-test", path=path)
 
 
+def identifiers_in_gir(ns):
+    """Every `c:identifier` in one shipped .gir: the C symbols the description
+    makes callable, which is the list the compiled typelib has to carry and
+    nothing more."""
+    text = open(os.path.join(GIR_DIR, "%s-1.0.gir" % ns), encoding="utf-8").read()
+    return re.findall(r'c:identifier="([^"]+)"', text)
+
+
+def load_gen_gir():
+    """gnome/overlap-typelib/gen-gir.py as a module.  It has a hyphen in its
+    name and lives outside any package, so it is loaded by path -- three test
+    classes here need what is in it and none of them may have its own copy of
+    the rules."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "gen_gir", os.path.join(GIR_DIR, "gen-gir.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 class _redirect:
     def __init__(self, out, err):
         self.out, self.err = out, err
@@ -426,17 +507,35 @@ class _redirect:
 # ---------------------------------------------------------------- pure logic
 
 class VersionGate(unittest.TestCase):
-    def test_the_two_measured_releases_are_the_only_ones(self):
-        for v in ("46.0", "46.2", "46", "50.1", "50"):
-            self.assertIsNone(gnome_overlap.unsupported_reason(v), v)
+    def test_the_measured_releases_are_the_only_ones(self):
+        """Every major in the table, and the two spellings a shell uses -- the
+        bare major and a point release of it.  Written down as "46 and 50" once,
+        this test went on passing about two releases while a third was being
+        added, which is the kind of half-edit the table exists to prevent."""
+        for major in gnome_overlap.SUPPORTED_MAJORS:
+            for v in (str(major), "%d.0" % major, "%d.2" % major):
+                self.assertIsNone(gnome_overlap.unsupported_reason(v), v)
 
     def test_everything_else_is_refused_by_name(self):
-        for v in ("45.9", "47.0", "48.4", "49.1", "3.38.5",
-                  "%d.0" % (max(gnome_overlap.SUPPORTED_MAJORS) + 1)):
+        """...and the refusal lists every measured major, not a prefix of them.
+
+        `assertIn("46 and 50", why)` passed vacuously the day GNOME 51 was
+        added, because the sentence had become "46 and 50 and 51" and the old
+        pin is a substring of it.  The list is built from the table here, so it
+        cannot go stale in that direction."""
+        listed = " and ".join(str(m) for m in gnome_overlap.SUPPORTED_MAJORS)
+        below = min(gnome_overlap.SUPPORTED_MAJORS) - 1
+        above = max(gnome_overlap.SUPPORTED_MAJORS) + 1
+        unmeasured = ["%d.9" % below, "3.38.5", "%d.0" % above]
+        unmeasured += ["%d.1" % m for m in range(below + 1, above)
+                       if m not in gnome_overlap.SUPPORTED_MAJORS]
+        for v in unmeasured:
             why = gnome_overlap.unsupported_reason(v)
             self.assertIsNotNone(why, v)
             self.assertIn(v, why)
-            self.assertIn("46 and 50", why)
+            self.assertIn(listed, why)
+            for major in gnome_overlap.SUPPORTED_MAJORS:
+                self.assertIn(str(major), why)
 
     def test_an_unreadable_version_is_refused_not_guessed(self):
         for v in (None, "", "banana", "  ", object()):
@@ -689,6 +788,99 @@ class TheOrdinaryPathIsUntouched(Case):
         self.assertIn("GNOME's Mutter refused this layout", err)
         self.assertEqual(self.ext_calls(), [])
 
+    def _pair(self, layout, argv, expect):
+        """The same command line with and without the flag, as (without, with).
+
+        A fresh mock for each, because the point is the *bytes* on stderr and a
+        layout carried over from the first run would change them; `layout` is
+        the head arrangement the command is typed at, because a stanza naming an
+        output that is not there is answered by the parser
+        ("warning: output Virtual-2 not found; ignoring") and never reaches
+        plan() at all -- two identical strings that agree about nothing.
+        `expect` is the plan() warning the run must have produced, asserted on
+        the plain half, so that a row which stops short is a failure here rather
+        than a pass everywhere."""
+        out = []
+        for flags in ((), (FLAG,)):
+            self.mock.mutter = layout()
+            self.mock.overlap = FakeOverlap()
+            code, _o, err = self.run_cli(*flags, *argv)
+            self.assertEqual(code, 0, err)
+            self.assertEqual(self.ext_calls(), [])
+            out.append(err)
+        self.assertIn(expect, out[0])
+        return out
+
+    @unittest.expectedFailure
+    def test_the_flag_changes_not_one_byte_of_a_layout_gnome_accepts(self):
+        """Fix 20 (F1.6/F2.4): `overlap_route()` plans the layout to find out
+        whether Mutter would refuse it, throws the plan away and returns None,
+        and `apply()` then plans it a second time -- so every warning `plan()`
+        emits on the way is printed twice as soon as the flag is typed.
+
+        Measured at HEAD on this harness: over two_virtuals(), `--output
+        Virtual-2 --scale 7x7` prints "scale 7 is not available for Virtual-2 at
+        1920x1080; using 1" once without the flag and twice with it, on an apply
+        and on a --dryrun (two_virtuals and not three_monitors, which has no
+        Virtual-2: there the stanza is dropped by the parser and plan() never
+        runs, so both halves say "output Virtual-2 not found" and agree);
+        `--output DP-1 --mode 1920x1080` over twm.three_monitors() prints
+        "output HDMI-1 moved to +3840+0 to stay adjacent to DP-1" once and
+        twice the same way.  Nothing about the layout changed and nothing about
+        the flag applies -- the extension is not even asked -- so the flag has
+        made the tool talk differently about a run it had no part in, which is
+        the one thing `--unsafe-gnome-overlap` promises it does not do.
+
+        The fix: `overlap_route()` returns the plan it made, `apply()` and
+        `verify()` take it as `plan=`, and it is made once.
+        """
+        scale = "scale 7 is not available for Virtual-2 at 1920x1080; using 1"
+        moved = "output HDMI-1 moved to +3840+0 to stay adjacent to DP-1"
+        for layout, argv, expect in (
+                (two_virtuals, ("--output", "Virtual-2", "--scale", "7x7"), scale),
+                (two_virtuals, ("--dryrun", "--output", "Virtual-2",
+                                "--scale", "7x7"), scale),
+                (twm.three_monitors, ("--output", "DP-1",
+                                      "--mode", "1920x1080"), moved),
+                (twm.three_monitors, ("--dryrun", "--output", "DP-1",
+                                      "--mode", "1920x1080"), moved)):
+            with self.subTest(argv=argv):
+                plain, flagged = self._pair(layout, argv, expect)
+                self.assertEqual(plain, flagged)
+
+    def test_a_position_that_cannot_fit_on_a_screen_never_reaches_the_extension(self):
+        """xrandr's own screen limit is 32767x32767, and it is checked before
+        anything of this feature runs.
+
+        The three here are the ones that would wrap: 4294968256 and 4294967296
+        are 2**32 + a bit, -2147483649 is one past INT32_MIN.  A number that
+        survives to the extension is written into `MetaLogicalMonitorConfig.x`
+        as four little-endian bytes (rules.js le32), so a wrap here would place
+        a monitor somewhere nobody asked for -- inside gnome-shell, where the
+        refusals have already been passed."""
+        for pos in ("4294968256x0", "-2147483649x0", "0x4294967296"):
+            with self.subTest(pos=pos):
+                self.mock.mutter = two_virtuals()
+                self.mock.overlap = FakeOverlap()
+                code, out, err = self.run_cli(FLAG, "--output", "Virtual-2",
+                                              "--pos", pos)
+                self.assertEqual(code, 1)
+                self.assertIn("screen cannot be larger than 32767x32767", err)
+                self.assertEqual(self.ext_calls(), [])
+                self.assertEqual(self.applied(), [])
+
+    def test_a_position_that_does_fit_reaches_the_extension_unchanged(self):
+        """The control for the test above, and the pin on a claim that was made
+        and is wrong: +30000+0 is inside the 32767 screen limit, so it is an
+        ordinary far-away position, it takes the overlap route (Mutter calls the
+        gap non-adjacent) and the number the extension is handed is the number
+        that was typed.  Nothing clamps it and nothing refuses it."""
+        code, out, err = self.run_cli(FLAG, "--output", "Virtual-2", "--pos", "30000x0")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.ext_calls(), ["ApplyOverlap"])
+        _member, req = self.mock.overlap.calls[0]
+        self.assertEqual([g["x"] for g in req["want"]], [0, 30000])
+
     def test_a_session_built_without_the_flag_has_it_off(self):
         self.assertIs(cli.Session.overlap, False)
         self.assertIsNone(cli.Session.overlap_force)
@@ -758,14 +950,166 @@ class Applying(Case):
         self.assertEqual(code, 0, err)
         self.assertIn("note: libmutter has been replaced on disk", err)
 
-    def test_a_saved_file_that_moved_is_shouted_about(self):
-        self.mock.overlap.reply = {
-            "ok": True, "applied": True, "monitors": [],
-            "verify": "refused: Logical monitors not adjacent",
-            "saved_config": {"path": "/p/monitors.xml", "before": "a",
-                             "after": "b", "unchanged": False}}
+    def generation(self, g):
+        """The mock extension, dressed as one measured generation: the shell
+        version, libmutter's label, the size that build's MetaMonitorsConfig
+        really is, and the soname and Meta typelib that release carries."""
+        ov = FakeOverlap(shell="%d.0" % g["shell_major"])
+        ov.libmutter = g["libmutter"]
+        ov.instance_size = ov.declared_size = g["struct_size"]
+        ov.sonames = [g["soname"]]
+        ov.meta_typelib = g["meta_typelib"]
+        self.mock.overlap = ov
+        return ov
+
+    def test_every_measured_generation_runs_the_whole_route(self):
+        """The route end to end on each record in GENERATIONS, so a generation
+        added to the table is exercised the day it lands rather than the day
+        somebody remembers to add a test.
+
+        The numbers are the measured ones: GNOME 46.0 carries libmutter-14 with
+        a 72-byte MetaMonitorsConfig (Ubuntu 24.04, noble-gnome golden, six
+        checks green live), 50.1 carries libmutter-18 at 80 bytes (26.04), and
+        51.beta carries libmutter-51 -- still 80 bytes, and its label is the
+        text "51" rather than a number derived from the major, because mutter
+        51 set libmutter_api_version to the GNOME major and the arithmetic that
+        used to produce it is gone."""
+        for g in gnome_overlap.GENERATIONS:
+            with self.subTest(shell=g["shell_major"]):
+                self.mock.mutter = two_virtuals()
+                ov = self.generation(g)
+                code, out, err = self.run_cli(FLAG, "--output", "Virtual-2",
+                                              "--pos", "960x0")
+                self.assertEqual(code, 0, err)
+                self.assertEqual(self.ext_calls(), ["ApplyOverlap"])
+                self.assertIn("(GNOME Shell %d.0)" % g["shell_major"], err)
+                self.assertIn("move Virtual-2 from +1920+0 to +960+0", err)
+                self.assertEqual(ov.calls[0][1]["want"][1]["x"], 960)
+                # and a dryrun on the same generation names the library the
+                # checks ran against, by the table's label and not by a number
+                # worked out from the major
+                self.mock.mutter = two_virtuals()
+                ov = self.generation(g)
+                code, out, err = self.run_cli("--dryrun", FLAG, "--output",
+                                              "Virtual-2", "--pos", "960x0")
+                self.assertEqual(code, 0, err)
+                self.assertIn("overlap check shell-version: GNOME Shell %d.0, "
+                              "libmutter-%s" % (g["shell_major"], g["libmutter"]),
+                              err)
+                self.assertIn("overlap check typelib: FwOverlap%s, "
+                              "MetaMonitorsConfig %d bytes as declared"
+                              % (g["libmutter"], g["struct_size"]), err)
+
+    def test_a_layout_mode_decides_the_route_and_is_relayed_verbatim(self):
+        """A scaled neighbour, and the arithmetic that happens out here.
+
+        Virtual-S is a 1920x1080 panel at scale 2 beside Virtual-1.  In layout
+        mode 1 (logical -- GNOME's default once fractional scaling is on) it
+        occupies 960 of layout space and runs 1920..2880, so Virtual-1 moved to
+        +2880+0 is adjacent and Mutter takes it: the extension is never asked.
+        In mode 2 (physical) the same monitor occupies 1920 and runs 1920..3840,
+        so the same command overlaps and the route opens.  One command, two
+        answers, decided by a number the extension is handed rather than one it
+        works out -- and the number goes across the wire as it is."""
+        self.mock.mutter = mixed_virtuals(1)
+        code, out, err = self.run_cli(FLAG, "--output", "Virtual-1", "--pos", "2880x0")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.ext_calls(), [])
+        self.mock.mutter = mixed_virtuals(2)
+        self.mock.overlap = FakeOverlap()
+        code, out, err = self.run_cli(FLAG, "--output", "Virtual-1", "--pos", "2880x0")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.ext_calls(), ["ApplyOverlap"])
+        req = self.mock.overlap.calls[0][1]
+        self.assertEqual(req["layout_mode"], 2)
+        self.assertEqual(req["expect"],
+                         [{"connectors": ["Virtual-1"], "x": 0, "y": 0},
+                          {"connectors": ["Virtual-S"], "x": 1920, "y": 0}])
+        self.assertEqual(req["want"],
+                         [{"connectors": ["Virtual-S"], "x": 0, "y": 0},
+                          {"connectors": ["Virtual-1"], "x": 960, "y": 0}])
+
+    def test_three_heads_send_three_groups_and_the_undo_names_all_three(self):
+        """The undo line is the layout that is running now, whole: a user whose
+        session survives reads it off the terminal and types it back, and a line
+        that named only what moved would leave the other two where the failed
+        run put them."""
+        self.mock.mutter = three_virtuals()
+        code, out, err = self.run_cli(FLAG, "--output", "Virtual-3", "--pos", "2880x0")
+        self.assertEqual(code, 0, err)
+        req = self.mock.overlap.calls[0][1]
+        self.assertEqual([g["connectors"] for g in req["expect"]],
+                         [["Virtual-1"], ["Virtual-2"], ["Virtual-3"]])
+        self.assertEqual([g["x"] for g in req["want"]], [0, 1920, 2880])
+        self.assertIn("wxrandr --output Virtual-1 --pos 0x0 --output Virtual-2 "
+                      "--pos 1920x0 --output Virtual-3 --pos 3840x0", err)
+
+    def test_a_vertical_overlap_is_the_same_route(self):
+        """Mutter's rule is about edges, not about axes: stacking Virtual-2 half
+        on top of Virtual-1 is refused for exactly the reason a side-by-side
+        overlap is, and takes the same route."""
+        code, out, err = self.run_cli(FLAG, "--output", "Virtual-2", "--pos", "0x540")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.ext_calls(), ["ApplyOverlap"])
+        self.assertEqual(self.mock.overlap.calls[0][1]["want"][1],
+                         {"connectors": ["Virtual-2"], "x": 0, "y": 540})
+        self.assertIn("move Virtual-2 from +1920+0 to +0+540", err)
+
+    def test_a_saved_file_that_moved_is_the_shout_and_not_a_reason_less_refusal(self):
+        """The reply extension.js:1100-1108 actually produces: `applied: true`,
+        `ok: false`, no `check` and no `reason`, because the monitors.xml digest
+        moved across a call that had already written the words.
+
+        Until wxrandr/mutter.py:851 was `if not reply.get("ok") and not
+        reply.get("applied")`, that reply took the refusal path and printed
+        "the overlap extension refused (?): no reason given" -- about a layout
+        that is on the screen.  What has to happen instead is everything an
+        applied run does: the CHANGED shout with both digests, the post-apply
+        snapshot, and exit 1 for the `ok: false`, in that order.
+
+        Reachability, measured: on GNOME 46.0 (noble-gnome golden, package
+        route) a second apply at +1200+0 with a loop appending to
+        ~/.config/monitors.xml every 50 ms did not trigger it -- rc 0, applied,
+        digest unchanged.  So the branch is held down here rather than there.
+        """
+        self.mock.overlap.saved_config_moved = True
+        # Every snapshot, tagged with how many extension calls had happened when
+        # it was taken: a snapshot at 1 is a snapshot after the write, which is
+        # the one the old code never reached.
+        taken = []
+        real = mutter.MutterOutputs.snapshot
+
+        def spy(impl, state):
+            taken.append(len(self.mock.overlap.calls))
+            return real(impl, state)
+        mutter.MutterOutputs.snapshot = spy
+        self.addCleanup(setattr, mutter.MutterOutputs, "snapshot", real)
         code, out, err = self.run_cli(FLAG, "--output", "Virtual-2", "--pos", "960x0")
-        self.assertIn("CHANGED across this call", err)
+        self.assertEqual(self.ext_calls(), ["ApplyOverlap"])
+        self.assertIn("CHANGED across this call (%s -> %s)" % (SAVED_BEFORE, SAVED_AFTER),
+                      err)
+        self.assertIn("that should be impossible, please report it", err)
+        # the sentence the old branch printed instead, about a layout that had
+        # already been placed
+        self.assertNotIn("no reason given", err)
+        self.assertNotIn("the overlap extension refused", err)
+        # the post-apply snapshot, and the line that says which layout is up
+        self.assertIn(1, taken)
+        self.assertIn("the layout above is what is running now", err)
+        self.assertIn("wxrandr --output Virtual-1 --pos 0x0 --output Virtual-2 "
+                      "--pos 1920x0", err)
+        # the state file, which is the other half of "take the snapshot": the
+        # caller's own `sess.state.save()` (wxrandr/cli.py:1509) is three lines
+        # past the call that raises here, so on this branch alone the file is
+        # written by apply_overlap itself.  Without that save the run leaves no
+        # state file at all -- the screen has the new layout and the record of
+        # it is gone.
+        self.assertTrue(os.path.exists(self.state_path), "no state file was written")
+        with open(self.state_path, encoding="utf-8") as fh:
+            saved = json.load(fh)["overlap-test"]
+        self.assertEqual(saved["primary"], "Virtual-1")   # re-synced by snapshot()
+        # ...and only then the status
+        self.assertEqual(code, 1)
 
 
 class DryRun(Case):
@@ -895,6 +1239,95 @@ class ShippedExtension(unittest.TestCase):
         self.assertLess(body.index("refuse('pending-dialog'"),
                         body.index("this._pass('pending-dialog'"))
 
+    # ------------------------------------------------------------------
+    # T03's static half.  The node harness that runs the whole guard chain is
+    # tests/test_bridge_js.py (class OverlapGuards); what is pinned here is
+    # what can be read off the file, so that a regression in one of these is
+    # caught even where there is no node.
+
+    @unittest.expectedFailure
+    def test_a_bounded_string_read_checks_the_bytes_it_will_read(self):
+        """Fix 12 (F1.1): `Reader.string()` range-checks *one* byte and then
+        calls `lib.strn(p, MAX_CONNECTOR)`, which reads up to 64.
+
+        A connector name at the very end of a mapping -- one byte inside it,
+        63 bytes past the end -- passes the check and is read anyway.  The
+        whole design of the reader is that no address is touched before
+        /proc/self/maps says the *range* is there; a check that clears one
+        byte and a read that takes 64 is the check not doing its job.  What it
+        has to ask for is `MAX_CONNECTOR + 1` (the bound plus the NUL
+        g_strndup writes).
+
+        Wants re-measuring on a live compositor with T59 before it lands: the
+        connector strings on 46.0 and 50.1 sit inside libmutter's own
+        read-only data, and a stricter check that refuses there would refuse
+        every read rather than none."""
+        at = re.findall(r"_at\((\w+), p, ([^)]+)\)", self.js)
+        self.assertTrue(at)
+        # no call clears fewer bytes than the read that follows it
+        self.assertNotIn("1", [n.strip() for _what, n in at])
+        self.assertIn("MAX_CONNECTOR + 1", [n.strip() for _what, n in at])
+
+    @unittest.expectedFailure
+    def test_a_description_that_will_not_say_is_not_a_description_that_names_none(self):
+        """Fix 13 (F1.2): `sharedLibraries()` returns `[]` when every spelling
+        of the GIRepository call throws, and `[]` is also what a correct
+        description produces -- so "the API moved and nothing answered" and
+        "this description names no library" arrive as the same answer, and the
+        `shared-library` check passes on a namespace nobody could read.
+
+        That check exists because a description naming a library that is not
+        mapped makes gjs abort gnome-shell on the first call through it, which
+        is what a forced `--dryrun` did on Ubuntu 26.10.  A guard that cannot
+        distinguish "no" from "I could not ask" is a guard that passes on the
+        input it was built for.  `sharedLibraries()` returns `null` for "no
+        answer", and `typelib()` refuses on `null`."""
+        body = self.js[self.js.index("function sharedLibraries(repo, ns) {"):]
+        body = body[:body.index("\n}\n") + 3]
+        self.assertIn("return null", body)
+        self.assertIn("refuse('shared-library'", self.js)
+        gate = self.js[self.js.index("for (const named of sharedLibraries("):]
+        self.assertIn("=== null", gate[:600])
+
+    @unittest.expectedFailure
+    def test_a_position_no_screen_can_hold_is_refused_before_mutters_verdict(self):
+        """Fix 14 (F1.5), the range half: `_apply` asks `mutterFault(targets)`
+        first, and nothing before that looks at whether the numbers are on a
+        screen at all.
+
+        `x < 0`, `y < 0`, `x + w > 32767` or `y + h > 32767` is a request the
+        writer would put into `MetaLogicalMonitorConfig.x` as four little-endian
+        bytes regardless.  wxrandr refuses those out here (see
+        TheOrdinaryPathIsUntouched), but the extension is a D-Bus service on the
+        session bus and wxrandr is not the only thing that can call it, which is
+        the whole reason every other check is repeated inside.
+
+        Split from the naming pin below because the brief leaves the author both
+        answers and this is the one that is about a write: a fix that renames
+        the check and still writes 2**32 into a position would flip that test
+        and must not flip this one."""
+        head = self.js[:self.js.index("const fault = mutterFault(targets);")]
+        self.assertIn("32767", head)
+
+    @unittest.expectedFailure
+    def test_the_check_that_fires_when_mutter_agrees_is_named_for_that(self):
+        """Fix 14 (F1.5), the naming half: `not-an-overlap` is refused whenever
+        `mutterFault(targets)` comes back null -- which is "Mutter would take
+        this layout", not "these rectangles do not overlap".  A gap wider than
+        the screen is not an overlap either and is refused under the same name,
+        so the word is wrong in both directions.
+
+        The author's call, and either answer closes it: rename the check to
+        `not-refused-by-mutter`, or refuse the gaps too so that the name becomes
+        true.  Both are accepted here; one line in docs/Technical.md:915 goes
+        with whichever it is."""
+        renamed = "not-an-overlap" not in self.js and "not-refused-by-mutter" in self.js
+        gaps = re.search(r"refuse\(['\"]not-an-overlap['\"]", self.js) is not None \
+            and "gap" in self.js
+        self.assertTrue(renamed or gaps,
+                        "the check is still called not-an-overlap and gaps are "
+                        "still allowed through it")
+
     def test_the_write_passes_no_length_of_its_own(self):
         """The typelib declares the write's length parameter as the length of
         the byte array, so gjs takes it from there and drops a third argument
@@ -966,33 +1399,221 @@ class ShippedExtension(unittest.TestCase):
                       encoding="utf-8").read()
         self.assertNotIn("overlap", bridge.lower())
 
-    def test_the_typelibs_match_the_descriptions_beside_them(self):
+    def summary(self, directory, ns):
+        """One shipped-or-fresh typelib, read back through GIRepository."""
+        gen = load_gen_gir()
+        got, why = gen.typelib_summary(directory, ns)
+        if why == gen.NO_GIREPOSITORY:
+            self.skipTest("no GIRepository")
+        self.assertIsNotNone(got, "%s: %s" % (ns, why))
+        return got
+
+    def test_the_shipped_typelibs_mean_what_the_descriptions_beside_them_mean(self):
+        """The shipped bytes against a fresh compile of the checked-in .gir,
+        compared by meaning: namespace, no shared library, every function name
+        and C symbol, every record's size and every field's offset.
+
+        Not by bytes, which is what this test did until g-ir-compiler 1.86
+        turned it red on both Ubuntu 26.04 and nixpkgs: 1.86 writes a different
+        reserved word into each of the 17 FunctionBlobs than the compiler that
+        produced the checked-in files (0x00000001 against 0x03FF0FFD), and the
+        two 1.86 compilers agree with each other.  The descriptions themselves
+        are right: all six checks pass live on GNOME 46.0 with these exact
+        bytes (noble-gnome golden, package route, --dryrun through the shipped
+        FwOverlap14).  A hash is not a meaning, and a test that cannot tell a
+        compiler upgrade from a wrong offset is a test nobody will believe the
+        next time it goes red.
+        """
         if shutil.which("g-ir-compiler") is None:
             self.skipTest("no g-ir-compiler")
+        gen = load_gen_gir()
+        shipped_dir = os.path.join(EXT_DIR, "typelib")
+        for g in gnome_overlap.GENERATIONS:
+            ns = g["namespace"]
+            with self.subTest(ns=ns):
+                mine = self.summary(shipped_dir, ns)
+                with tempfile.TemporaryDirectory(prefix="fresh-typelib-") as fresh:
+                    subprocess.run(
+                        ["g-ir-compiler", "--includedir", "/usr/share/gir-1.0",
+                         "-o", os.path.join(fresh, "%s-1.0.typelib" % ns),
+                         os.path.join(GIR_DIR, "%s-1.0.gir" % ns)], check=True)
+                    theirs = self.summary(fresh, ns)
+                self.assertEqual(gen.compare_typelibs(mine, theirs), [])
+                # and the two properties the comparison alone would not pin,
+                # because both files could be wrong the same way
+                self.assertEqual(mine["namespace"], ns)
+                self.assertEqual(mine["shared_libraries"], [])
+                self.assertEqual(sorted(f["symbol"] for f in mine["functions"].values()),
+                                 sorted(identifiers_in_gir(ns)))
+                # the one property of the shipped bytes the strn fix changed,
+                # read out of the artifact gnome-shell loads rather than out of
+                # the .gir beside it: 2 is GI_TRANSFER_EVERYTHING, i.e. gjs
+                # frees the string g_strndup allocated.  It was 0 in the
+                # typelibs checked in before that fix, which leaked one
+                # connector name per monitor per read.
+                self.assertEqual(mine["functions"]["strn"]["transfer"], 2)
+
+    def test_the_declared_sizes_are_the_measured_ones(self):
+        """Every record in the table, not two of them by name: the sizes and
+        offsets are read out of the shipped typelib and checked against
+        GENERATIONS, so a description added for a new GNOME is measured here
+        the day it lands.
+
+        72 bytes on GNOME 46 (libmutter-14) and 80 on 50 and 51 (libmutter-18
+        and libmutter-51), `logical_monitor_configs` at offset 40 on all three
+        -- measured on live compositors and re-derived from mutter's own
+        headers by gen-gir.py --from-header (HeaderDerivation below).  The
+        four helper records are frozen shapes: GList 24, MetaLogicalMonitorConfig
+        40, MetaMonitorConfig 24, MetaMonitorSpec 32."""
+        shipped_dir = os.path.join(EXT_DIR, "typelib")
+        for g in gnome_overlap.GENERATIONS:
+            ns = g["namespace"]
+            with self.subTest(ns=ns):
+                got = self.summary(shipped_dir, ns)
+                cfg = got["records"]["ConfigN"]
+                self.assertEqual(cfg["size"], g["struct_size"])
+                self.assertEqual(cfg["fields"]["logical_monitor_configs"], 40)
+                self.assertEqual(cfg["fields"]["disabled_monitor_specs"], 48)
+                # the two words this extension writes, and nothing else
+                self.assertEqual(got["records"]["LMCN"]["fields"]["x"], 0)
+                self.assertEqual(got["records"]["LMCN"]["fields"]["y"], 4)
+                self.assertEqual([got["records"][n]["size"]
+                                  for n in ("NodeN", "LMCN", "MCN", "MSN")],
+                                 [24, 40, 24, 32])
+
+    def test_a_compiler_that_writes_other_bytes_is_a_note_and_not_a_verdict(self):
+        """The older compiler's bytes, reconstructed, put through `--check`.
+
+        g-ir-compiler 1.86 writes 0x03FF0FFD into the reserved word of each of
+        the 17 FunctionBlobs where the compiler that produced the checked-in
+        files wrote 0x00000001 -- measured here by diffing the typelibs at HEAD
+        against a fresh 1.86 compile: 69 bytes differ per file, 68 of them those
+        17 words and the last one the strn transfer bit this batch changed.
+        Rewriting the word back is therefore the historical artifact, byte for
+        byte, minus that fix; it must load, mean exactly what the shipped file
+        means, and come out of `--check` as a `note:` and rc 0.
+
+        Without this the claim in the name is not exercised at all: the shipped
+        typelibs were regenerated by this host's 1.86, so a plain `--check` here
+        finds no byte difference to be relaxed about.
+        """
+        if shutil.which("g-ir-compiler") is None:
+            self.skipTest("no g-ir-compiler")
+        gen = load_gen_gir()
+        shipped_dir = os.path.join(EXT_DIR, "typelib")
+        if gen.typelib_summary(shipped_dir,
+                               gnome_overlap.GENERATIONS[0]["namespace"])[1] \
+                == gen.NO_GIREPOSITORY:
+            self.skipTest("no GIRepository")
+        with tempfile.TemporaryDirectory(prefix="older-compiler-") as older:
+            for g in gnome_overlap.GENERATIONS:
+                name = "%s-1.0.typelib" % g["namespace"]
+                with open(os.path.join(shipped_dir, name), "rb") as fh:
+                    raw = fh.read()
+                self.assertEqual(raw.count(b"\xfd\x0f\xff\x03"), 17, name)
+                with open(os.path.join(older, name), "wb") as fh:
+                    fh.write(raw.replace(b"\xfd\x0f\xff\x03",
+                                         b"\x01\x00\x00\x00"))
+            rc = subprocess.run([sys.executable,
+                                 os.path.join(GIR_DIR, "gen-gir.py"),
+                                 "--check", older],
+                                capture_output=True, text=True)
+            notes = [ln for ln in rc.stdout.splitlines() if "differ in bytes" in ln]
+        self.assertEqual(rc.returncode, 0, rc.stdout + rc.stderr)
+        self.assertEqual(len(notes), len(gnome_overlap.GENERATIONS), rc.stdout)
+        for line in notes:
+            self.assertTrue(line.startswith("note: "), line)
+        self.assertNotIn("stale:", rc.stdout)
+        self.assertNotIn("skipped:", rc.stdout)
+
+    def test_the_tree_as_it_stands_is_compared_and_agrees(self):
+        """`gen-gir.py --check` over the checked-in files: every namespace
+        compared, nothing stale, nothing skipped, rc 0.
+
+        The summary line is asserted because rc 0 alone does not say whether
+        anything was looked at -- see the skipped test below."""
+        if shutil.which("g-ir-compiler") is None:
+            self.skipTest("no g-ir-compiler")
+        gen = load_gen_gir()
+        if gen.typelib_summary(os.path.join(EXT_DIR, "typelib"),
+                               gnome_overlap.GENERATIONS[0]["namespace"])[1] \
+                == gen.NO_GIREPOSITORY:
+            self.skipTest("no GIRepository")
         rc = subprocess.run([sys.executable, os.path.join(GIR_DIR, "gen-gir.py"),
                              "--check"], capture_output=True, text=True)
         self.assertEqual(rc.returncode, 0, rc.stdout + rc.stderr)
+        self.assertNotIn("stale:", rc.stdout)
+        self.assertNotIn("skipped:", rc.stdout)
+        self.assertIn("--check: %d compared, 0 skipped" % len(gnome_overlap.GENERATIONS),
+                      rc.stdout)
 
-    def test_the_declared_sizes_are_the_measured_ones(self):
-        try:
-            import gi
-            gi.require_version("GIRepository", "2.0")
-            from gi.repository import GIRepository as G
-        except (ImportError, ValueError):
+    def test_a_typelib_that_gives_the_string_away_is_stale_and_not_a_note(self):
+        """The comparison has to be able to see transfer-ownership, because that
+        is the whole of what the strn fix changed in the shipped bytes.
+
+        A .gir whose `strn` return says `transfer-ownership="none"` compiles to a
+        typelib with the same namespace, the same 17 symbols, the same record
+        sizes and the same field offsets as the shipped one -- and gjs then
+        never frees what g_strndup allocated, which is one connector name (up to
+        64 bytes) leaked per monitor per read.  The typelibs checked in before
+        the fix are exactly this file, so a `--check` that could not see it
+        would have called restoring them a no-op.
+        """
+        if shutil.which("g-ir-compiler") is None:
+            self.skipTest("no g-ir-compiler")
+        gen = load_gen_gir()
+        ns = gnome_overlap.GENERATIONS[0]["namespace"]
+        if gen.typelib_summary(os.path.join(EXT_DIR, "typelib"), ns)[1] \
+                == gen.NO_GIREPOSITORY:
             self.skipTest("no GIRepository")
-        repo = G.Repository.get_default()
-        repo.prepend_search_path(os.path.join(EXT_DIR, "typelib"))
-        for ns, size, list_at in (("FwOverlap14", 72, 40), ("FwOverlap18", 80, 40)):
-            repo.require(ns, "1.0", 0)
-            info = repo.find_by_name(ns, "ConfigN")
-            self.assertEqual(G.struct_info_get_size(info), size, ns)
-            fields = {G.struct_info_get_field(info, i).get_name():
-                      G.field_info_get_offset(G.struct_info_get_field(info, i))
-                      for i in range(G.struct_info_get_n_fields(info))}
-            self.assertEqual(fields["logical_monitor_configs"], list_at, ns)
-            lmc = repo.find_by_name(ns, "LMCN")
-            self.assertEqual(G.field_info_get_offset(G.struct_info_get_field(lmc, 0)), 0)
-            self.assertEqual(G.field_info_get_offset(G.struct_info_get_field(lmc, 1)), 4)
+        with open(os.path.join(GIR_DIR, "%s-1.0.gir" % ns), encoding="utf-8") as fh:
+            text = fh.read()
+        head = text[:text.index('c:identifier="g_strndup"')]
+        tail = text[text.index('c:identifier="g_strndup"'):]
+        cut = tail.index("</function>")
+        self.assertIn('transfer-ownership="full"', tail[:cut])
+        loosened = head + tail[:cut].replace('transfer-ownership="full"',
+                                             'transfer-ownership="none"', 1) + tail[cut:]
+        with tempfile.TemporaryDirectory(prefix="loose-transfer-") as d:
+            gpath = os.path.join(d, "%s-1.0.gir" % ns)
+            with open(gpath, "w", encoding="utf-8") as fh:
+                fh.write(loosened)
+            subprocess.run(["g-ir-compiler", "--includedir", "/usr/share/gir-1.0",
+                            "-o", os.path.join(d, "%s-1.0.typelib" % ns), gpath],
+                           check=True)
+            loose = self.summary(d, ns)
+        shipped = self.summary(os.path.join(EXT_DIR, "typelib"), ns)
+        self.assertEqual(loose["records"], shipped["records"])       # same layout
+        self.assertEqual(sorted(f["symbol"] for f in loose["functions"].values()),
+                         sorted(f["symbol"] for f in shipped["functions"].values()))
+        bad = gen.compare_typelibs(loose, shipped)
+        self.assertEqual(len(bad), 1, bad)
+        self.assertIn("strn returns transfer 0, not 2", bad[0])
+
+    def test_a_machine_that_cannot_read_a_typelib_does_not_pass_the_check(self):
+        """`--check` where `import gi` fails: three `skipped:` lines, a summary
+        saying nothing was compared, and rc 2 -- not rc 0.
+
+        This is the state of nearly every desktop (the typelibs are checked in
+        precisely so that nobody needs libgirepository's python bindings), so it
+        is also the state of any CI that forgot to install them: a run that
+        compared nothing must not look like a run that agreed about everything.
+        The absence is simulated with a `gi.py` on PYTHONPATH that raises
+        ImportError, which is what the reader's own `except ImportError` sees.
+        """
+        if shutil.which("g-ir-compiler") is None:
+            self.skipTest("no g-ir-compiler")
+        with tempfile.TemporaryDirectory(prefix="no-gi-") as d:
+            with open(os.path.join(d, "gi.py"), "w", encoding="utf-8") as fh:
+                fh.write('raise ImportError("no GIRepository bindings here")\n')
+            env = dict(os.environ, PYTHONPATH=d)
+            rc = subprocess.run([sys.executable, os.path.join(GIR_DIR, "gen-gir.py"),
+                                 "--check"], capture_output=True, text=True, env=env)
+        self.assertEqual(rc.returncode, 2, rc.stdout + rc.stderr)
+        self.assertEqual(rc.stdout.count("skipped:"), len(gnome_overlap.GENERATIONS))
+        self.assertIn("--check: 0 compared, %d skipped" % len(gnome_overlap.GENERATIONS),
+                      rc.stdout)
+        self.assertNotIn("stale:", rc.stdout)
 
 
 class TheLibraryIdentity(unittest.TestCase):
@@ -1043,11 +1664,7 @@ class HeaderDerivation(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        import importlib.util
-        spec = importlib.util.spec_from_file_location(
-            "gen_gir", os.path.join(GIR_DIR, "gen-gir.py"))
-        cls.gen = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(cls.gen)
+        cls.gen = load_gen_gir()
 
     def header(self, name):
         return open(os.path.join(ROOT, "tests", "fixtures", "mutter", name),

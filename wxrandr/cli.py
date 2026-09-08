@@ -515,7 +515,35 @@ def parse(argv: list) -> Opts:
             raise ArgErr("unrecognized option '%s'\n" % a)
         i += 1
     _check_force(o)
+    _check_allow(o)
     return o
+
+
+#: The same shape as _PERSIST_CONFLICT, and for the same reason: two options on
+#: one command line that cannot both mean what they say.
+_ALLOW_CLASH = (
+    "%s and a layout on one command line cannot both happen: %s runs the checks "
+    "and records an agreement, it applies nothing, and the stanzas typed beside "
+    "it (%s) were silently dropped.  Record the agreement first, then apply the "
+    "layout\n")
+
+
+def _check_allow(o):
+    """`--gnome-overlap-allow` answers for itself and returns; a `--output ...`
+    stanza typed with it is therefore a layout that never happens.
+
+    Measured at HEAD: `wxrandr --gnome-overlap-allow --output Virtual-2 --pos
+    960x0` exited 0, probed, wrote the agreement and moved nothing, with no
+    line anywhere saying the move had been dropped -- which is the command
+    somebody types once, believes, and then wonders about.  `--query` and the
+    other informational options stay allowed: they say something about a
+    session rather than ask for a change to one."""
+    if not o.overlap_allow:
+        return
+    named = [s.name for s in o.stanzas if s.name]
+    if named:
+        raise ArgErr(_ALLOW_CLASH % (gnome_overlap.ALLOW_FLAG,
+                                     gnome_overlap.ALLOW_FLAG, ", ".join(named)))
 
 
 def _check_force(o):
@@ -609,7 +637,8 @@ def canonical_backend(value):
 #: `--persistent` came back as its `unrecognized option '--persistent'` and
 #: exit 1 with the layout unapplied, where the documents say an X11 apply
 #: works and simply saves nothing (WXRANDR.md, "Keeping a layout").
-OWN_APPLY_FLAGS = ("--persistent", gnome_overlap.FLAG)
+PERSISTENT_FLAG = "--persistent"
+OWN_APPLY_FLAGS = (PERSISTENT_FLAG, gnome_overlap.FLAG)
 
 
 def _walk_argv(argv):
@@ -1015,13 +1044,19 @@ def _do_overlap_status(opts) -> int:
     return 0
 
 
-def _do_overlap_allow(sess) -> int:
+def _do_overlap_allow(sess, dryrun=False) -> int:
     """`--gnome-overlap-allow`: run every check, show what passed, and record an
     agreement against the build they passed on.
 
     The probe comes first and the record second, and never the other way round:
     an agreement is an agreement to a *measured* risk, so there must be no way
-    to record one for a compositor the checks have not just run on."""
+    to record one for a compositor the checks have not just run on.
+
+    `--dryrun` stops between the two.  Everywhere else in this program a dry run
+    changes nothing on disk, and this is the one command whose whole effect is a
+    file; measured at HEAD, `wxrandr --dryrun --gnome-overlap-allow` wrote the
+    agreement and said "recorded in ...", which is a dry run that recorded a
+    consent."""
     flag = gnome_overlap.ALLOW_FLAG
     if sess.backend != "mutter":
         raise Fatal("%s: this session is %s, which places overlapping monitors "
@@ -1040,6 +1075,10 @@ def _do_overlap_allow(sess) -> int:
                     "nothing to record an agreement against\n" % flag)
     print("")
     print(gnome_overlap.agreement_text(facts), end="")
+    if dryrun:
+        print("dryrun: nothing was recorded (%s would be written without it)"
+              % gnome_overlap.consent_path())
+        return 0
     print("recorded in %s" % gnome_overlap.save_consent(facts, "wxrandr " + flag))
     return 0
 
@@ -1588,7 +1627,7 @@ def _run_session(sess: Session, opts: Opts) -> int:
         print("Server reports RandR version 1.6")
     outputs = sess.snapshot()
     if opts.overlap_allow:
-        return _do_overlap_allow(sess)
+        return _do_overlap_allow(sess, opts.dryrun)
     if opts.mode_ops:
         _do_mode_ops(sess, opts, outputs)
         if not (opts.setit_1_2 or opts.monitor_op or opts.props):
@@ -1661,6 +1700,17 @@ def main(argv=None) -> int:
                        "is x11, which places overlapping monitors without it\n"
                        % gnome_overlap.FLAG)
             return 1
+        if handover and PERSISTENT_FLAG in mine:
+            # Dropped rather than refused: on X11 the apply itself is exactly
+            # what was asked for, and nothing is saved either way -- so the
+            # command goes through and only the option is gone.  Said out loud
+            # because "gone" is otherwise indistinguishable from "honoured", and
+            # a script that has been asking for a persistent layout on an X11
+            # box has never been getting one.
+            stdio.warn("xrandr: %s is dropped on X11: the X server keeps no "
+                       "saved layout of its own and the real xrandr has never "
+                       "had the option; the rest of the command is handed over "
+                       "unchanged\n" % PERSISTENT_FLAG)
         rc = passthrough.maybe_exec_real(
             "xrandr", args if (flag is None and not mine) else stripped,
             entry=entry, force=forced == "x11")
