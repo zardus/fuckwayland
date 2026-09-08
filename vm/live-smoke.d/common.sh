@@ -449,8 +449,11 @@ phase_nodialog() {
     local apps pat
     apps=$(guest "$calls | grep 'interface=org.freedesktop.portal.Inhibit' | sed -n 's/.*sender=\\([^ ]*\\).*/\\1/p' | sort -u" | tr -d '\r' || true)
     pat=$(printf '%s\n' "$apps" | grep . | sed 's/[.:]/\\&/g' | sed 's/^/sender=/' | paste -sd'|' || true)
+    # Request and Session are the portal's lifecycle objects (a Close on
+    # /request/<sender>/... or /session/<sender>/...), never a request for a
+    # dialog; they belong to whoever opened them, which is never one of the tools.
     other=$(guest "$calls | grep 'interface=org.freedesktop.portal\\.' \
-                 | grep -v 'interface=org.freedesktop.portal.Settings' ${pat:+| grep -vE '$pat'} | head -5" || true)
+                 | grep -vE 'interface=org.freedesktop.portal.(Settings|Request|Session)' ${pat:+| grep -vE '$pat'} | head -5" || true)
     if [ -z "$other" ]; then
         if [ "$n" = 0 ]; then pass "no portal method call at all during the whole smoke"
         else pass "no portal method call other than Settings from anything but the editor ($n portal calls; app connections: ${apps:-none})"; fi

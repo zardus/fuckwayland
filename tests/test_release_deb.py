@@ -86,6 +86,20 @@ def _deb_filter(member, dest_path):
         return member
 
 
+def _unzstd(body):
+    """`compression.zstd` is Python 3.14's (PEP 784); 24.04's 3.12 has none, so
+    there the `zstd` command does it (Ubuntu installs it with dpkg), and a host
+    with neither cannot run the three tests that need the payload."""
+    try:
+        from compression import zstd
+    except ImportError:
+        if shutil.which("zstd") is None:
+            raise unittest.SkipTest("no compression.zstd (Python < 3.14) and no zstd command")
+        return subprocess.run(["zstd", "-d", "-c"], input=body, stdout=subprocess.PIPE,
+                              check=True).stdout
+    return zstd.decompress(body)
+
+
 def unpack_deb(path, dest):
     """Extract a binary package with the standard library alone.
 
@@ -113,8 +127,7 @@ def unpack_deb(path, dest):
         if not name.startswith("data.tar"):
             continue
         if name.endswith(".zst"):
-            from compression import zstd
-            body = zstd.decompress(body)
+            body = _unzstd(body)
             mode = "r:"
         else:
             mode = "r:" + name.rsplit(".", 1)[1] if "." in name[8:] else "r:"

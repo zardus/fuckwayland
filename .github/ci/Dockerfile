@@ -15,7 +15,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         sway xwayland xterm foot xvfb xauth x11-utils x11-xserver-utils xdotool wmctrl \
         dbus dbus-bin dbus-daemon libglib2.0-bin libgirepository1.0-dev \
         dpkg-dev debhelper dh-python pybuild-plugin-pyproject python3-all python3-setuptools fakeroot \
-        ca-certificates curl xz-utils git procps sudo \
+        ca-certificates curl xz-utils zstd git procps sudo \
     && rm -rf /var/lib/apt/lists/*
 RUN curl -fsSL "https://nodejs.org/dist/${NODE}/node-${NODE}-linux-x64.tar.xz" | tar -xJ -C /opt \
     && ln -s "/opt/node-${NODE}-linux-x64/bin/node" /usr/local/bin/node && node --version

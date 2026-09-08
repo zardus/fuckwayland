@@ -261,6 +261,27 @@ class GuiSession(XvfbCase):
         x, y = self.centre(rect)
         self.xdo("mousemove", x, y, "click", button)
 
+    def click_for(self, rect, kind, pred, after, tries=3, wait=6):
+        """Click `rect` until a `kind` dump satisfying `pred` lands.  A popup
+        menu item under a bare Xvfb (no window manager) takes the first click
+        most of the time and not always: GTK pops the submenu at the pointer
+        and the item rectangle the app modelled is where it lands, but a click
+        that arrives while the menu is still mapping is swallowed.  Measured
+        on the CI containers and on this host: the same test passing twice and
+        failing three times in a row with nothing else changed.  The bound
+        keeps a real miss a failure; the retries keep a slow map from being
+        one."""
+        for attempt in range(tries):
+            time.sleep(0.3)         # let a just-popped submenu finish mapping
+            self.shot("click-%s-%d" % (kind, attempt))
+            self.click(rect)
+            try:
+                return self.wait_dump(kind, pred, timeout=wait, after=after)
+            except AssertionError:
+                if attempt == tries - 1 or self.app.poll() is not None:
+                    raise
+                time.sleep(0.5)
+
     def drag(self, rect, tx, ty):
         """Press in the middle of `rect`, move to (tx, ty) in steps, drop."""
         sx, sy = self.centre(rect)
@@ -534,8 +555,8 @@ class GuiDrive(GuiSession):
                                   and "Automatic" in d["items"], after=n)
 
         # and it drives: pick GNOME from the menu the indicator opened
-        self.click(menu["items"]["GNOME (mutter)"])
-        d2, _ = self.backend_dump(lambda d: d["forced"] == "mutter", after=n2)
+        d2, _ = self.click_for(menu["items"]["GNOME (mutter)"], "backend",
+                               lambda d: d["forced"] == "mutter", after=n2)
         self.assertEqual(d2["name"], "mutter")
         self.assertEqual(d2["indicator"], "backend: mutter (Wayland)")
 
@@ -573,8 +594,8 @@ class GuiDrive(GuiSession):
 
         # choosing one re-reads the layout *through* it and redraws
         before, mark = len(self.queries()), len(self.dumps())
-        self.click(menu["items"]["GNOME (mutter)"])
-        d, n = self.backend_dump(lambda d: d["forced"] == "mutter", after=mark)
+        d, n = self.click_for(menu["items"]["GNOME (mutter)"], "backend",
+                              lambda d: d["forced"] == "mutter", after=mark)
         self.assertEqual(d["indicator"], "backend: mutter (Wayland)")
         self.assertEqual(d["word"], "wxrandr --backend mutter")
         self.assertEqual([q["backend"] for q in self.queries()[before:]],
@@ -623,8 +644,8 @@ class GuiDrive(GuiSession):
         menu, n = self.open_backend_menu(n)
         self.assertEqual(menu["active"]["GNOME (mutter)"], True)
         mark = len(self.dumps())
-        self.click(menu["items"]["Automatic"])
-        d, n = self.backend_dump(lambda d: d["forced"] is None, after=mark)
+        d, n = self.click_for(menu["items"]["Automatic"], "backend",
+                              lambda d: d["forced"] is None, after=mark)
         self.assertEqual(d["indicator"], "backend: xrandr (X11)")
         lay, n = self.wait_dump("layout", lambda d: d["backend"] == "x11",
                                 after=mark)
@@ -644,8 +665,7 @@ class GuiDrive(GuiSession):
         self.assertEqual(d["indicator"], "backend: xrandr (X11)")
         n = max(n, len(self.dumps()))
         menu, n = self.open_backend_menu(n)
-        self.click(menu["items"]["GNOME (mutter)"])
-        d, n = self.backend_dump(lambda d: not d["ok"], after=n)
+        d, n = self.click_for(menu["items"]["GNOME (mutter)"], "backend", lambda d: not d["ok"], after=n)
         self.assertEqual(d["wanted"], "mutter")
         self.assertIn("the fake says so", d["error"])
         self.assertIsNone(d["forced"])

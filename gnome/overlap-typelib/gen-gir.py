@@ -587,15 +587,25 @@ repo.require(ns, "1.0", 0)
 
 
 def kind_of(info):
-    # 3.0 subclasses (FunctionInfo, StructInfo, FieldInfo); 2.0 hands back a
-    # plain BaseInfo for everything and answers g_base_info_get_type() with an
-    # InfoType, whose nick is the kind in lower case.  Measured on 24.04
-    # (python3-gi 3.48, girepository 1.80): every info was "BaseInfo" and the
-    # records dict came back empty, which is what KeyError: 'ConfigN' was.
+    # 3.0 subclasses (FunctionInfo, StructInfo, FieldInfo).  2.0 hands back a
+    # plain BaseInfo for everything; 26.04's 2.0 binding still answers
+    # g_base_info_get_type() with an InfoType whose nick is the kind, but
+    # 24.04's (python3-gi 3.48 over girepository 1.80) exposes neither that
+    # function nor a get_type method on the info -- measured on noble-kde: dir()
+    # is copy/equal/get_attribute/get_container/get_name and nothing more -- so
+    # there is no way to tell a struct from a function without calling a
+    # struct accessor on what might not be one, which is a C assertion.  That
+    # binding cannot read a typelib's meaning: exit 3, the "no GIRepository
+    # here" answer, which the callers report as a skip and never as a pass.
     kind = type(info).__name__
     if kind != "BaseInfo":
         return kind
-    t = G.base_info_get_type(info)
+    if hasattr(info, "get_type"):
+        t = info.get_type()
+    elif hasattr(G, "base_info_get_type"):
+        t = G.base_info_get_type(info)
+    else:
+        raise SystemExit(3)
     nick = getattr(t, "value_nick", None) or str(t).rsplit(".", 1)[-1].lower()
     return nick.replace("_", "").capitalize() + "Info"
 
@@ -650,7 +660,9 @@ print(json.dumps(out, sort_keys=True))
 
 
 #: `typelib_summary` could not read the file because this machine has no
-#: GIRepository at all -- a skip, and never a pass.
+#: GIRepository that can tell one info from another (none at all on most
+#: desktops; 24.04's 2.0 binding, which exposes no info types) -- a skip, and
+#: never a pass.
 NO_GIREPOSITORY = "no GIRepository"
 
 #: `--check`'s third exit status, and `_check_meaning`'s: nothing was compared
