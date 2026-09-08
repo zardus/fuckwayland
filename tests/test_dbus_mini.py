@@ -15,6 +15,7 @@ import os
 import select
 import shutil
 import socket
+import subprocess
 import struct
 import sys
 import tempfile
@@ -1654,6 +1655,71 @@ class RealBus(unittest.TestCase):
             rc = dbus_mini.main(["--address", REAL_BUS, "--names"])
         self.assertEqual(rc, 0)
         self.assertIn("org.freedesktop.DBus", out.getvalue().split())
+
+
+class NoBusText(unittest.TestCase):
+    """"There is no bus here" and "the bus refused us" are different
+    problems, and every backend that opens one has to say which it hit.
+
+    The first is a login-session question -- a cron job, an `ssh` with no
+    graphical session, a `sudo` that dropped DBUS_SESSION_BUS_ADDRESS -- and
+    the answer is to point at the variable. The second is a permissions one:
+    dbus-daemon under Ubuntu's session.conf answers root's EXTERNAL auth with
+    OK and then closes the socket when the policy check runs, so the failure
+    arrives as AuthFailed/Disconnected on a bus that plainly exists. Telling
+    a user to "run inside the graphical session" there is a wrong answer to a
+    question they did not ask."""
+
+    def test_the_two_failures_do_not_read_the_same(self):
+        no_server = dbus_mini.no_bus_text(
+            DBusError(ERR + "NoServer", "cannot connect to unix:path=/run/user/1000/bus: "
+                                        "[Errno 2] No such file or directory"))
+        refused = dbus_mini.no_bus_text(
+            DBusError(ERR + "AuthFailed", "bus closed the connection during auth"))
+        self.assertNotEqual(no_server, refused)
+        self.assertIn("DBUS_SESSION_BUS_ADDRESS", no_server)
+        self.assertNotIn("DBUS_SESSION_BUS_ADDRESS", refused)
+        self.assertIn("AuthFailed", refused)
+        self.assertIn("during auth", refused)
+
+    def test_a_connect_failure_names_the_address_it_tried(self):
+        """Which socket, in the exception the backends re-raise: with two
+        runtime directories in play (`sudo` keeps root's, the session's bus
+        is the user's) "no session D-Bus found" alone does not say which one
+        was looked at, and the address is the whole of the difference."""
+        addr = "unix:path=%s" % os.path.join(tempfile.gettempdir(),
+                                             "fuckwayland-no-such-bus-%d" % os.getpid())
+        with self.assertRaises(DBusError) as cm:
+            Bus(addr, timeout=2.0)
+        self.assertEqual(cm.exception.name, ERR + "NoServer")
+        self.assertIn(addr, cm.exception.message)
+
+
+@unittest.skipIf(REAL_BUS, "already running under a session bus: RealBus ran for real")
+@unittest.skipUnless(shutil.which("dbus-run-session"), "no dbus-run-session on this box")
+class RealBusUnderItsOwnDaemon(unittest.TestCase):
+    """The RealBus class above is skipped unless DBUS_SESSION_BUS_ADDRESS is
+    set, and on this box nothing sets it -- so its five tests, the only ones
+    in the suite that talk to a real dbus-daemon rather than to MockBus, had
+    not run in any ordinary `python3 tests/test_dbus_mini.py`. MockBus is
+    written from the same reading of the specification as dbus_mini itself,
+    so a shared misreading (a field alignment, an auth reply, a serial rule)
+    would pass both sides.
+
+    `dbus-run-session` starts a private daemon, exports the address into the
+    child, and takes the daemon down with it, so the five run here with no
+    session and nothing left behind. Measured on this host: 0.8 s for the
+    five, 1.0 s including the daemon."""
+
+    def test_the_real_bus_tests_pass_under_dbus_run_session(self):
+        p = subprocess.run(["dbus-run-session", "--", sys.executable, "-m",
+                            "unittest", "-v", "tests.test_dbus_mini.RealBus"],
+                           cwd=ROOT, capture_output=True, text=True, timeout=300,
+                           env=dict(os.environ, FUCKWAYLAND_PASSTHROUGH="never"))
+        self.assertEqual(p.returncode, 0, p.stderr[-3000:])
+        self.assertIn("Ran 5 tests", p.stderr)
+        self.assertNotIn("skipped", p.stderr)
+        self.assertNotIn("no DBUS_SESSION_BUS_ADDRESS", p.stderr)
 
 
 if __name__ == "__main__":

@@ -38,17 +38,26 @@ POLL_SECONDS = 1.0
 #: Longest a SIGTERM'd wl-mirror gets before SIGKILL. Kept well under the
 #: second `procs.wait_gone` gives US after a SIGTERM, so a stop
 #: normally ends with the supervisor exiting of its own accord rather than
-#: being killed halfway through ending the helper.
+#: being killed halfway through ending the helper. Normally is the word:
+#: measured against the stub on this host, a SIGTERM to the supervisor ends
+#: the helper in 2-4 ms, so this budget is not spent -- but only because
+#: `_unblock_term` keeps the spawn-time SIGTERM block out of the helper. With
+#: the mask inherited every stop spent all of it and ended in a SIGKILL.
 STOP_SECONDS = 0.5
 
 
 # -- identity -----------------------------------------------------------------
 
 #: `--list` and `--stop` find our own supervisor by name only when the
-#: record has no start time. It is a python process from a clone or a pyz,
-#: and `wmirror` from a pip console script. (procs.alive does the looking;
-#: this is the only part of it that is ours.)
-SUPERVISOR_COMM = ("python", "wmirror")
+#: record has no start time. `procs.alive` matches this against comm AND the
+#: command line, and the command line is the half that matters: the process
+#: is `python3` in every shape it ships in (a clone, a pyz, `python3 -m
+#: wmirror`), so comm says "python3" and only the argv says "wmirror".
+#: "python" used to be in this tuple, which made a `'?'` record claim every
+#: python process this user was running -- a bystander `python3 -c "import
+#: time; time.sleep(30)"` answered alive, and `--stop-all` would have
+#: SIGTERMed it.
+SUPERVISOR_COMM = ("wmirror",)
 
 
 # -- records ------------------------------------------------------------------
@@ -153,6 +162,20 @@ def _on_term(signum, frame):
     raise SystemExit(0)
 
 
+def _unblock_term():
+    """Run in the forked child, before exec: undo the supervisor's SIGTERM block.
+
+    CPython restores the PARENT's pre-fork signal mask in the child (3.14.4's fork_exec does it right before
+    exec) and execve keeps the mask, so a helper spawned inside the block above inherits it: measured here,
+    /proc/<helper>/status said `SigBlk: 0000000000004000` -- bit 14, SIGTERM -- and the same plain `Popen(["sleep"])`
+    under a blocked SIGTERM shows it too, while this preexec_fn brings it back to 0. A helper that ignores SIGTERM
+    is not academic: `_stop_child` terminates then waits STOP_SECONDS before SIGKILL, so every `wmirror --stop`
+    ended wl-mirror by SIGKILL 0.502 s later instead of by SIGTERM in 2-4 ms (both measured with the stub, this
+    host). preexec_fn is safe here because the supervisor is single-threaded -- it is the grandchild of
+    procs.spawn_detached and has started no thread."""
+    signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGTERM})
+
+
 #: `error:` lines wl-mirror prints while it is working perfectly. Measured
 #: on the rig: a mirror that ran for minutes, and was pixel-checked, printed
 #: `error: mirror-screencopy::on_dmabuf_allocated(): failed to allocate
@@ -249,20 +272,35 @@ def supervisor_main(argv: list, source: str, target: str, status_fd=None,
 
     # name ourselves before anything can fail (the protocol's rule)
     emit("pid %d %s" % (os.getpid(), proc_starttime(os.getpid()) or "?"))
-    stderr = _Stderr()
-    try:
-        proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL,
-                                stdout=subprocess.DEVNULL,
-                                stderr=stderr.wfd, env=helper_env(
-                                    wayland_socket))
-    except OSError as e:
-        emit("failed cannot run %s: %s" % (argv[0], e), close=True)
-        stderr.close()
-        return 1
-    stderr.close_write()          # only the helper holds the write end now
-    emit("helper %d %s" % (proc.pid, proc_starttime(proc.pid) or "?"))
+    # The handler goes on BEFORE the helper exists, and SIGTERM is blocked
+    # across the spawn itself. Installed after Popen (as it was) there were
+    # two windows in which `wmirror --stop` killed the supervisor outright:
+    # the default disposition meant WIFSIGNALED 15 with the finally clause
+    # never entered, and wl-mirror was left fullscreen on the target with
+    # nobody watching it. Blocking is the second half, and it is not
+    # theoretical: a signal delivered between fork/exec and the assignment
+    # unwinds out of the Popen call itself, so `proc` is never bound and the
+    # helper we just started is a pid we no longer hold. Blocked, that
+    # SIGTERM stays pending until the mask is restored one line later, by
+    # which time _stop_child has something to stop.
     signal.signal(signal.SIGTERM, _on_term)
+    stderr = _Stderr()
+    proc = None
     try:
+        blocked = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})
+        try:
+            proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL,
+                                    stdout=subprocess.DEVNULL,
+                                    stderr=stderr.wfd, env=helper_env(
+                                        wayland_socket),
+                                    preexec_fn=_unblock_term)
+        except OSError as e:
+            emit("failed cannot run %s: %s" % (argv[0], e), close=True)
+            return 1
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, blocked)
+        stderr.close_write()      # only the helper holds the write end now
+        emit("helper %d %s" % (proc.pid, proc_starttime(proc.pid) or "?"))
         deadline = time.monotonic() + STARTUP_SECONDS
         while time.monotonic() < deadline:
             if proc.poll() is not None:
@@ -291,7 +329,9 @@ def helper_env(wayland_socket):
 
 
 def _stop_child(proc):
-    if proc.poll() is not None:
+    # proc is None when the spawn itself never returned a handle -- an OSError
+    # from Popen, or a SIGTERM that unwound out of it.
+    if proc is None or proc.poll() is not None:
         return
     try:
         proc.terminate()

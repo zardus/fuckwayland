@@ -160,7 +160,19 @@ detach is a small supervisor of our own, and the record carries *two*
   restarted — the supervisor exits with it, and the next `--list`/`--stop`
   reaps the record silently.
 * A pid whose starttime no longer matches is a different process and is
-  **never signalled**, whatever the state file says.
+  **never signalled**, whatever the state file says. Nor is one that is not
+  a pid at all: the file is plain JSON and hand-editable, so a value there
+  may be `"4242"`, `1.5`, `-1` or a list, and only a positive integer names
+  a process. Such a record is reaped like any other dead one — before the
+  check, a single mistyped line made `--list`, `--stop` and `--stop-all`
+  alike exit 1 with `%d format: a real number is required`, including the
+  commands that would have cleaned it up.
+* A record written **without** a starttime (`?`, when /proc could not be read
+  at spawn time) falls back to matching the process's own **command line**,
+  which is where the word `wmirror` appears — the executable name is
+  `python3` for a clone, a pyz and `python3 -m wmirror` alike, and matching
+  that instead made such a record claim every python process the user was
+  running.
 * The helper is **told which compositor to talk to** (`WAYLAND_DISPLAY` and
   `XDG_RUNTIME_DIR` set from the socket wmirror found by scanning
   `/run/user/*`), so a mirror starts from a hotkey, from `sudo`, and from
@@ -389,3 +401,12 @@ Still not measured, and marked as such:
   review found by running it: a zombie helper, two commands at once, a
   start interrupted mid-flight, a start that cannot be written down, the
   region watch, and what a dead helper is blamed on.
+* `tests/test_wmirror_live.py` — the same tool against a **real headless
+  sway** (`swaymsg create_output` for the second head, the stub still
+  standing in for wl-mirror): `--check` reading the capture protocols and
+  both heads off the real registry, a start that is really listed, and the
+  two output changes that must end a mirror — `swaymsg output HEADLESS-2
+  disable`, and moving the target onto the source — driven through sway
+  rather than through a fake. It is the only place the supervisor's watch
+  reads real `zwlr_output_management` events; everywhere else a double
+  decides both what an event looks like and when it arrives.

@@ -17,18 +17,25 @@ different answers on `ssh root@box`, and treating them as one is the bug
 that keeps coming back.
 """
 
+import ast
 import os
 import shutil
 import stat
+import subprocess
 import sys
 import tempfile
 import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
+# and the tests directory, so `import support` resolves under every
+# invocation form -- `python3 -m unittest tests/<file>.py` puts only the
+# repository root on sys.path (SuiteGuard in tests/test_passthrough.py).
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from fwcommon import session
 from fwcommon.errors import CmdError
+import support
 from support import env
 
 # The suite never hands a tool over to the real X11 one: see
@@ -271,6 +278,152 @@ class RuntimeDir(Tree):
         with self.assertRaises(CmdError) as cm:
             session.runtime_dir()
         self.assertIn("cannot create", str(cm.exception))
+
+
+# -- what fwcommon is allowed to depend on ------------------------------------
+
+class Closure(unittest.TestCase):
+    """fwcommon is the shared floor: standard library only, and nothing from
+    the rest of this tree.
+
+    It is not a style rule. `fwcommon/passthrough.py` runs BEFORE any tool
+    decides anything -- it is what hands `xdotool` over to the real one on an
+    X11 box -- and `fwcommon/session.py` is what a root shell uses to find
+    the session at all. An import of `wdotool` or a third-party package here
+    would make those two paths fail on exactly the machine that needs them:
+    a `sudo` with no user site-packages, a cron job, a .deb whose payload is
+    one directory, the `python3 -I -S` case below. The .deb ships fwcommon/
+    as a plain directory beside the tools, and the tools import it by name."""
+
+    PACKAGE = os.path.join(ROOT, "fwcommon")
+
+    def modules(self):
+        return sorted(n for n in os.listdir(self.PACKAGE) if n.endswith(".py"))
+
+    def test_nothing_outside_the_standard_library_is_imported(self):
+        self.maxDiff = None
+        allowed = set(sys.stdlib_module_names) | {"fwcommon"}
+        outside = []
+        for name in self.modules():
+            with open(os.path.join(self.PACKAGE, name)) as f:
+                tree = ast.parse(f.read(), filename=name)
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    for alias in node.names:
+                        if alias.name.split(".")[0] not in allowed:
+                            outside.append("%s: import %s" % (name, alias.name))
+                elif isinstance(node, ast.ImportFrom):
+                    # a relative import would work here but not in the .deb's
+                    # flat payload, where fwcommon is found by name on sys.path
+                    if node.level:
+                        outside.append("%s: relative import (level %d)" % (name, node.level))
+                    elif node.module and node.module.split(".")[0] not in allowed:
+                        outside.append("%s: from %s" % (name, node.module))
+        self.assertEqual(outside, [])
+
+    def test_it_imports_with_nothing_else_on_the_box(self):
+        """`python3 -I -S` is the harshest form: no site-packages, no user
+        site, no PYTHONPATH, no cwd -- and a temporary directory holding a
+        copy of fwcommon/ and nothing else. If every module here imports
+        under that, no machine's Python configuration can take the passthrough
+        or the session scan away."""
+        tmp = tempfile.mkdtemp(prefix="fwcommon-closure-")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        shutil.copytree(self.PACKAGE, os.path.join(tmp, "fwcommon"))
+        names = ", ".join("fwcommon." + n[:-3] for n in self.modules()
+                          if n != "__init__.py")
+        code = "import sys; sys.path.insert(0, %r); import %s; print(fwcommon.session.__file__)" % (tmp, names)
+        p = subprocess.run([sys.executable, "-I", "-S", "-c", code],
+                           cwd=tmp, capture_output=True, text=True, timeout=60)
+        self.assertEqual(p.returncode, 0, p.stderr[-2000:])
+        self.assertTrue(p.stdout.strip().startswith(tmp),
+                        "it imported the repository's copy, not the isolated one: %r" % p.stdout)
+
+
+# -- the session leader whose environment is read -----------------------------
+
+class SessionLeaders(unittest.TestCase):
+    """Which of a session's processes is asked where the X plane is.
+
+    SDDM writes its cookie to /tmp/xauth_<random>, which is in nobody's
+    runtime directory and is not ~/.Xauthority, so on Plasma the environment
+    of one of the session's own processes is the only place a root shell
+    (`ssh root@box`, cron, a hotkey run under sudo) can learn the path at
+    all. `_SESSION_LEADERS` ranks the candidates; these tests are about what
+    that ranking does when the best-ranked one does not carry the variables.
+
+    The stand-ins are real processes with the real comm names
+    (support.leader_process), because that is what session.py reads."""
+
+    def setUp(self):
+        # a leader of this uid that this test did not start would outrank the
+        # stand-ins and decide the answer instead of them
+        mine = []
+        for entry in os.listdir("/proc"):
+            if not entry.isdigit():
+                continue
+            try:
+                with open("/proc/%s/comm" % entry) as f:
+                    comm = f.read().strip()
+                if comm in session._SESSION_LEADERS and \
+                        os.stat("/proc/" + entry).st_uid == os.geteuid():
+                    mine.append(comm)
+            except OSError:
+                continue
+        if mine:
+            self.skipTest("a real session leader of this uid is running: %s" % mine)
+        self.cookie = tempfile.mkstemp(prefix="xauth_")[1]
+        self.addCleanup(os.unlink, self.cookie)
+        self.uid = os.geteuid()
+
+    @unittest.expectedFailure
+    def test_the_leader_that_carries_the_variables_is_the_one_read(self):
+        """DEFERRED fix 46 (finding F5.8): `_shell_environ(uid)` returns the
+        best-ranked leader's environment whether or not it holds the keys the
+        caller came for.
+
+        On a Plasma Wayland session with Xwayland, `kwin_wayland` (rank 3) is
+        started before Xwayland exists, so its environment has no DISPLAY and
+        no XAUTHORITY; `plasmashell` (rank 4) is started after and has both.
+        Rank 3 wins, its environment is not empty, and the answer is "" for
+        each -- so find_x_display falls through to guessing at the socket
+        directory and find_xauthority to ~/.Xauthority, which SDDM never
+        wrote. The X plane silently disappears from a sudo or ssh-root run,
+        which is the case the leader scan was added for.
+
+        The fix takes the keys the caller wants: `_shell_environ(uid, keys)`
+        returns the best-ranked environment that HAS them."""
+        with support.leader_process("kwin_wayland", {"XDG_SESSION_TYPE": "wayland"}), \
+                support.leader_process("plasmashell", {"DISPLAY": ":1",
+                                                       "XAUTHORITY": self.cookie}), \
+                support.env(DISPLAY=None, XAUTHORITY=None):
+            self.assertEqual(session.find_x_display(self.uid), ":1")
+            self.assertEqual(session.find_xauthority(self.uid), self.cookie)
+
+    def test_a_better_ranked_leader_that_has_them_still_wins(self):
+        """The ranking itself is not the bug and must not be lost to the fix:
+        gnome-shell (rank 0) carrying the variables outranks plasmashell
+        (rank 4) carrying different ones. A GNOME session with a leftover
+        plasmashell is contrived; a session with two candidates that disagree
+        is not, and the order in _SESSION_LEADERS is the answer."""
+        other = tempfile.mkstemp(prefix="xauth_")[1]
+        self.addCleanup(os.unlink, other)
+        with support.leader_process("gnome-shell", {"DISPLAY": ":2",
+                                                    "XAUTHORITY": other}), \
+                support.leader_process("plasmashell", {"DISPLAY": ":1",
+                                                       "XAUTHORITY": self.cookie}), \
+                support.env(DISPLAY=None, XAUTHORITY=None):
+            self.assertEqual(session.find_x_display(self.uid), ":2")
+            self.assertEqual(session.find_xauthority(self.uid), other)
+
+    def test_a_leader_of_another_uid_is_never_read(self):
+        """The scan is uid-qualified: it trusts a process of the target user,
+        the same trust ~/.Xauthority already gets, and nothing else."""
+        with support.leader_process("gnome-shell", {"DISPLAY": ":2",
+                                                    "XAUTHORITY": self.cookie}), \
+                support.env(DISPLAY=None, XAUTHORITY=None):
+            self.assertEqual(session._shell_environ(self.uid).get("DISPLAY"), ":2")
+            self.assertEqual(session._shell_environ(self.uid + 12345), {})
 
 
 if __name__ == "__main__":

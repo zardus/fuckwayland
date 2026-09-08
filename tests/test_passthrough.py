@@ -11,13 +11,17 @@ box, on an X11 box and on a headless server. Nothing here execs; the real
 handover is `tests/test_passthrough_exec.py`.
 """
 
+import ast
+import errno
 import contextlib
 import gc
 import io
 import os
+import re
 import shutil
 import signal
 import socket
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -381,9 +385,19 @@ class RealTool(Base):
             self.assertIn("WXPROP_REAL_XPROP", str(cm.exception))
 
     def test_is_us_guards(self):
-        # 1: the same file (a hardlink under another name)
+        # 1: the same file (a hardlink under another name). A hardlink cannot cross filesystems, and
+        # the temp dir is on another one whenever /tmp is tmpfs or an overlay while the clone is not
+        # (EXDEV): the guard is about inodes, so make the link beside the fixture in that case.
         link = os.path.join(self.tmp, "xdotool")
-        os.link(SHIM, link)
+        try:
+            os.link(SHIM, link)
+        except OSError as e:
+            if e.errno != errno.EXDEV:
+                raise
+            near = tempfile.mkdtemp(prefix="fw_pt_link_", dir=os.path.dirname(SHIM))
+            self.addCleanup(shutil.rmtree, near, True)
+            link = os.path.join(near, "xdotool")
+            os.link(SHIM, link)
         with mock.patch.object(sys, "argv", [SHIM]):
             self.assertTrue(passthrough.is_us(link))
         # 2: resolves to a file named like one of our tools
@@ -568,6 +582,107 @@ class SuiteGuard(Base):
                 if 'FUCKWAYLAND_PASSTHROUGH"] = "never"' not in f.read():
                     missing.append(name)
         self.assertEqual(missing, [])
+
+    # -- how the file is run, and whether that changes what runs -------------
+    #
+    # Three invocation forms are documented (docs/Technical.md section 9):
+    # `python3 -m unittest discover -s tests`, `python3 tests/test_foo.py`,
+    # and `python3 -m unittest tests/test_foo.py`. They put DIFFERENT things
+    # on sys.path and collect DIFFERENT sets of tests, and both of those have
+    # already hidden real tests from a real run.
+
+    TESTS_DIR = os.path.join(ROOT, "tests")
+
+    #: helpers imported by their bare name, which only resolves when the
+    #: tests directory itself is on sys.path
+    BARE_HELPERS = {"support", "wl_fake", "test_dbus_mini", "test_wxrandr_mutter"}
+
+    #: what puts it there, in every file that needs it
+    BOOTSTRAP = "sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))"
+
+    def test_files(self):
+        return sorted(n for n in os.listdir(self.TESTS_DIR)
+                      if n.startswith("test_") and n.endswith(".py"))
+
+    def test_every_files_main_block_is_its_last_statement(self):
+        """`if __name__ == "__main__": unittest.main()` runs the classes
+        DEFINED SO FAR. A class written after it is invisible to
+        `python3 tests/<file>.py` and visible to `-m unittest`, so the file
+        silently tests less of the tree the way most people run it -- and the
+        two counts disagree, which is how this was found:
+        `python3 tests/test_overlap_consent.py` ran 60 tests where
+        `-m unittest` ran 66, and the six in `WarandrNeverAsks` had never
+        run at all. test_overlap_force.py hid four the same way."""
+        self.maxDiff = None
+        late = []
+        for name in self.test_files():
+            with open(os.path.join(self.TESTS_DIR, name)) as f:
+                body = ast.parse(f.read(), filename=name).body
+            guard = [i for i, node in enumerate(body)
+                     if isinstance(node, ast.If)
+                     and "__main__" in ast.dump(node.test)
+                     and "__name__" in ast.dump(node.test)]
+            if not guard:
+                late.append("%s: no __main__ block" % name)
+                continue
+            hidden = [getattr(n, "name", type(n).__name__)
+                      for n in body[guard[-1] + 1:]]
+            if hidden:
+                late.append("%s:%d hides %s"
+                            % (name, body[guard[-1]].lineno, ", ".join(hidden)))
+        self.assertEqual(late, [])
+
+    def test_every_bare_helper_import_carries_the_tests_directory_bootstrap(self):
+        """`import support` (not `tests.support`) resolves only when the
+        tests directory is on sys.path. Running a file by path puts it there
+        for free -- sys.path[0] is the script's own directory -- which is why
+        these files have got away with the repository-root bootstrap alone.
+        `python3 -m unittest tests/test_vkbd.py` puts only the working
+        directory there, and every one of these files dies on the import
+        before a single test is collected."""
+        self.maxDiff = None
+        missing = []
+        for name in sorted(os.listdir(self.TESTS_DIR)):
+            if not name.endswith(".py") or name == "conftest.py":
+                continue
+            with open(os.path.join(self.TESTS_DIR, name)) as f:
+                src = f.read()
+            tree = ast.parse(src, filename=name)
+            bare = set()
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    bare |= {a.name for a in node.names
+                             if a.name.split(".")[0] in self.BARE_HELPERS}
+                elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                    if node.module.split(".")[0] in self.BARE_HELPERS:
+                        bare.add(node.module)
+            if bare and self.BOOTSTRAP not in src:
+                missing.append("%s (imports %s)" % (name, ", ".join(sorted(bare))))
+        self.assertEqual(missing, [], "add `%s` beside the ROOT bootstrap" % self.BOOTSTRAP)
+
+    def test_the_module_path_invocation_form_imports_the_file(self):
+        """The third documented form, end to end, on the file that has the
+        most to lose from it: test_vkbd.py imports both `wl_fake` and
+        `support`. Run from the repository root, `python3 -m unittest
+        tests/test_vkbd.py` collected one test -- unittest's own
+        `_FailedTest` standing for a ModuleNotFoundError -- and reported
+        `Ran 1 test ... FAILED (errors=1)` where the file has 75.
+
+        The claim is about the IMPORT, so that is all this reads: no
+        ModuleNotFoundError, no `_FailedTest` (which is how unittest reports
+        one, and it counts as a collected test), and a run that collected
+        more than the single failure. A genuine failure inside test_vkbd
+        belongs to test_vkbd; asserting rc == 0 here would have painted it on
+        this guard instead."""
+        p = subprocess.run([sys.executable, "-m", "unittest",
+                            "tests/test_vkbd.py"],
+                           cwd=ROOT, capture_output=True, text=True, timeout=300,
+                           env=dict(os.environ, FUCKWAYLAND_PASSTHROUGH="never"))
+        self.assertNotIn("ModuleNotFoundError", p.stderr)
+        self.assertNotIn("_FailedTest", p.stderr)
+        ran = re.search(r"^Ran (\d+) tests? in ", p.stderr, re.M)
+        self.assertIsNotNone(ran, p.stderr[-2000:])
+        self.assertGreater(int(ran.group(1)), 1, p.stderr[-2000:])
 
     def test_in_process_main_never_execs(self):
         """The ~17 in-process `cli.main([...])` callers: an explicit argv
@@ -996,8 +1111,12 @@ class RootWithNoSession(unittest.TestCase):
         xd = os.path.join(d, "X11-unix")
         os.makedirs(xd)
         rd = os.path.join(d, "run-user")
-        os.makedirs(os.path.join(rd, "1000"))
-        with open(os.path.join(rd, "1000", "xauth_victim"), "wb") as f:
+        # "somebody else" has to be a uid that is not the one running the suite, or the cookie
+        # would legitimately belong to the socket's owner and the assertion below would be wrong
+        # (it was, for every runner that is uid 1000).
+        victim = "1000" if os.getuid() != 1000 else "1001"
+        os.makedirs(os.path.join(rd, victim))
+        with open(os.path.join(rd, victim, "xauth_victim"), "wb") as f:
             f.write(b"cookie")
         s = socket.socket(socket.AF_UNIX)
         self.addCleanup(s.close)
@@ -1015,11 +1134,15 @@ class RootWithNoSession(unittest.TestCase):
              passthrough._RUN_USER_DIR) = saved
         self.addCleanup(restore)
 
+        # session.find_xauthority() is the last resort and reads the real box: under xvfb-run (or on
+        # any X desktop) it finds this uid's own server cookie, which is a legitimate answer for a
+        # socket this uid owns and not what this test is about, so it is taken out of the picture.
         with mock.patch.object(passthrough.os, "getuid", lambda: 0), \
-                mock.patch.object(passthrough.os, "geteuid", lambda: 0):
+                mock.patch.object(passthrough.os, "geteuid", lambda: 0), \
+                mock.patch("fwcommon.session.find_xauthority", lambda *a, **k: None):
             env = passthrough.repair_x_env({})
         self.assertEqual(env.get("DISPLAY"), ":0")
-        # the socket is ours (uid 1000 is somebody else here), so no cookie
+        # the socket is ours (the victim uid is somebody else here), so no cookie
         # from another uid's runtime dir may be handed to it
         self.assertIsNone(env.get("XAUTHORITY"))
         self.assertEqual(passthrough._display_owner_uid(":0"), os.getuid())

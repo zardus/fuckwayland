@@ -25,6 +25,10 @@ from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
+# and the tests directory, so `import support` resolves under every
+# invocation form -- `python3 -m unittest tests/<file>.py` puts only the
+# repository root on sys.path (SuiteGuard in tests/test_passthrough.py).
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from fwcommon import passthrough
 from support import env

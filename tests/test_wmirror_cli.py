@@ -11,6 +11,7 @@ import contextlib
 import io
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -21,6 +22,7 @@ sys.path.insert(0, ROOT)
 
 from fwcommon import passthrough
 from fwcommon import session
+from fwcommon import procs
 from wmirror import cli, core
 from wmirror import supervise
 from wxrandr import core as wxcore
@@ -477,6 +479,49 @@ class Cli(Base):
         self.assertNotIn("apt install", e)
         start.assert_not_called()
 
+    @unittest.expectedFailure
+    def test_capture_is_checked_before_the_missing_binary(self):
+        """DEFERRED fix 40 (finding F5.1): `_cmd_start` decides what to say
+        about a missing wl-mirror before it has asked the compositor whether
+        wl-mirror could work here at all.
+
+        On GNOME or KDE the registry carries neither zwlr_screencopy_manager_v1
+        nor ext_image_copy_capture_manager_v1, so installing the package
+        changes nothing -- the helper would start and exit. Today the order
+        of the two checks (helper first, connection second) makes wmirror
+        answer `sudo apt install wl-mirror` on exactly the desktops where
+        that is wrong, which is the majority of them. The fix opens the
+        connection and calls `require_capture()` first, so the missing
+        protocol is the answer and the missing package is only ever named
+        where installing it would help."""
+        rc, o, e = run(["A", "--to", "B"], outputs=[out("A"), out("B", x=1920)],
+                       helper=None, capture=False, wayland=SOCKET)
+        self.assertEqual(rc, 1)
+        self.assertIn(core.SCREENCOPY, e)
+        self.assertNotIn("apt install", e)
+
+    @unittest.expectedFailure
+    def test_check_says_what_is_wrong_before_it_says_what_is_installed(self):
+        """DEFERRED fix 40 (finding F5.1), the `--check` half: the `problem:`
+        line is printed after `helper:` and `wayland:`, so the first thing an
+        X11 user reads is "helper: not installed / sudo apt install
+        wl-mirror" and the line that says there is no Wayland session here at
+        all comes third. The fix reorders 'Detection' in docs/WMIRROR.md the
+        same way."""
+        o = io.StringIO()
+        with mock.patch.object(core, "find_helper", return_value=None), \
+                mock.patch.object(core, "open_conn",
+                                  side_effect=core.Refusal(core.no_session_lines())), \
+                mock.patch.object(session, "find_wayland_socket", return_value=None), \
+                mock.patch.object(passthrough, "session_kind", return_value="x11"), \
+                contextlib.redirect_stdout(o):
+            rc = cli.main(["--check"])
+        text = o.getvalue()
+        self.assertEqual(rc, 1)
+        self.assertIn("problem:", text)
+        self.assertIn("X11 session", text)
+        self.assertLess(text.index("problem:"), text.index("helper:"))
+
     def test_a_compositor_without_capture_says_which_protocol(self):
         rc, o, e = run(["A", "--to", "B"], outputs=[out("A")], capture=False)
         self.assertEqual(rc, 1)
@@ -567,6 +612,106 @@ class Cli(Base):
                 rc = cli.main(["A", "--to", "B"])
         self.assertEqual(rc, 1)
         self.assertEqual(e.getvalue(), "wmirror: boom\n")
+
+
+class CrossUid(Base):
+    """Whose runtime directory the records live in.
+
+    wmirror is documented as working from `sudo` and from `ssh root@box`: the
+    Wayland socket is found by scanning /run/user, so the tool aims at the
+    session whatever uid it is running as. The state file does not follow --
+    `core.state_path()` is `session.runtime_dir()`, which is the CALLER's
+    XDG_RUNTIME_DIR. So root and the user who owns the session keep two
+    different files about the same compositor."""
+
+    def running_record(self, source="A", target="B"):
+        """A record that survives a reap: this process as the supervisor, a
+        real sleeping process as the helper."""
+        helper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"],
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.addCleanup(helper.wait)
+        self.addCleanup(helper.kill)
+        return {"source": source, "target": target, "scaling": "fit",
+                "region": None, "pid": os.getpid(),
+                "start": procs.proc_starttime(os.getpid()),
+                "helper_pid": helper.pid,
+                "helper_start": procs.proc_starttime(helper.pid)}
+
+    @unittest.expectedFailure
+    def test_a_mirror_the_user_started_is_the_one_root_sees(self):
+        """DEFERRED fix 45 (finding F5.0): `state_path()` follows the caller's
+        XDG_RUNTIME_DIR instead of the runtime directory that owns the
+        Wayland socket the mirror is actually on.
+
+        Both commands here aim at the same compositor -- `find_wayland_socket`
+        answers /run/user/1000/wayland-0 for the user and for root alike,
+        which is the whole point of the scan. But the user's start writes
+        /run/user/1000/wmirror-state.json and root's `--list` reads
+        /run/root/wmirror-state.json, so root is told nothing is mirroring
+        and a second start on the same target is allowed: two wl-mirrors
+        fullscreen on one output, the older one invisible behind the newer,
+        each recorded in a file the other command never opens.
+
+        The fix puts the file under the runtime directory that owns the
+        socket (or refuses a cross-uid start by name, and says so under
+        'Lifetime' in docs/WMIRROR.md). Either way this is the assertion:
+        what one caller started, the other one can see and stop."""
+        user = os.path.join(self.tmp, "user")
+        root = os.path.join(self.tmp, "root")
+        os.makedirs(user)
+        os.makedirs(root)
+        sock = os.path.join(user, "wayland-0")
+        open(sock, "w").close()
+        rec = self.running_record()
+
+        hit = (1000, "user", sock)
+        with mock.patch.object(session, "find_wayland_socket", return_value=hit), \
+                mock.patch.dict(os.environ, {"XDG_RUNTIME_DIR": user}):
+            state = core.load_state()
+            core.records(state)["B"] = rec
+            state.save()
+            self.assertTrue(os.path.exists(os.path.join(user, "wmirror-state.json")))
+
+        outputs = [out("A"), out("B", x=1920, w=1280, h=1024)]
+        with mock.patch.dict(os.environ, {"XDG_RUNTIME_DIR": root}):
+            rc, o, e = run(["--list"], wayland=sock)
+            self.assertEqual(rc, 0, e)
+            self.assertIn("B <- A", o)
+            rc, o, e = run(["A", "--to", "B"], outputs=outputs, wayland=sock)
+            self.assertEqual(rc, 1)
+            self.assertIn("already mirroring", e)
+
+
+class DocsClaims(Base):
+    """What docs/WMIRROR.md 'Lifetime' says about the state file, beside what
+    the code does with it. The file is documented as plain JSON in the
+    runtime directory, so its contents are part of the interface: a user who
+    edits it is doing something the documentation invites."""
+
+    def doc(self):
+        """WMIRROR.md with its line wrapping flattened: every claim here is a
+        sentence, and the markdown breaks them at 76 columns."""
+        with open(os.path.join(ROOT, "docs", "WMIRROR.md")) as f:
+            return " ".join(f.read().split())
+
+    def test_every_pid_form_the_docs_name_is_actually_rejected(self):
+        text = self.doc()
+        self.assertIn("only a positive integer names a process", text)
+        for shown, value in (('`"4242"`', "4242"), ("`1.5`", 1.5), ("`-1`", -1)):
+            self.assertIn(shown, text, "the docs stopped naming %r" % (value,))
+            self.assertIsNone(procs.as_pid(value), repr(value))
+        recs = {"B": {"source": "A", "pid": "4242", "helper_pid": [1]}}
+        self.assertTrue(supervise.reap(recs))
+        self.assertEqual(recs, {}, "the docs promise such a record is reaped")
+
+    def test_the_no_starttime_fallback_matches_what_the_docs_claim(self):
+        """The docs say a `?` record is matched on the COMMAND LINE, and name
+        the three shapes the command ships in. SUPERVISOR_COMM is the hint
+        that gets used, and none of it may be a bare interpreter name."""
+        text = self.doc()
+        self.assertIn("falls back to matching the process's own **command line**", text)
+        self.assertIn("`python3 -m wmirror`", text)
+        self.assertEqual(supervise.SUPERVISOR_COMM, ("wmirror",))
 
 
 class Separation(Base):
