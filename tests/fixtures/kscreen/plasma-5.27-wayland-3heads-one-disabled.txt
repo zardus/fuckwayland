@@ -1,0 +1,3 @@
+Output: 68 Virtual-1 enabled connected priority 1 Unknown Modes: 0:1920x1080@60*!  1:1280x1024@60  2:1024x768@60  Geometry: 0,0 1920x1080 Scale: 1 Rotation: 1 Overscan: 0 Vrr: incapable RgbRange: unknown
+Output: 69 Virtual-2 enabled connected priority 2 Unknown Modes: 0:1920x1080@60*!  1:1280x1024@60  2:1024x768@60  Geometry: 1920,0 1920x1080 Scale: 1 Rotation: 1 Overscan: 0 Vrr: incapable RgbRange: unknown
+Output: 70 Virtual-3 disabled connected priority 0 Unknown Modes: 0:1920x1080@60*!  1:1280x1024@60  2:1024x768@60  Geometry: 0,0 0x0 Scale: 1 Rotation: 1 Overscan: 0 Vrr: incapable RgbRange: unknown

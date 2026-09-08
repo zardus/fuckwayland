@@ -43,6 +43,13 @@ EXEMPT = {"--help"}
 #: the reason.  Checked both ways: an entry that has left the source, or that
 #: the help now prints after all, is reported.
 SILENT = {
+    "wdotool": {
+        "--version": "xdotool 3.20160805.1 and 4.20260303.1 both accept `--version` "
+                     "(and `-v`, and the `version` command) and both leave it out of "
+                     "the command list `--help` prints.  wdotool's help is that list "
+                     "byte for byte, so printing it would cost the parity "
+                     "tests/test_cli_parity.py measures",
+    },
     "wwmctl": {
         "--help": "",       # never reached: EXEMPT
         "--version": "wmctrl 1.07 special-cases exactly `wmctrl --version`, and its "
@@ -113,13 +120,27 @@ def code_only(path):
     return "\n".join(out)
 
 
+#: The four hand-written parsers are getopt-shaped: a long option is a bare
+#: name in a table of `(name, takes_an_argument)` pairs -- `("sync", False)`,
+#: `("repeat-delay", True)` -- and the `--` is put back on by the parser, so
+#: the option never appears as a `"--..."` literal anywhere in the source.
+#: Reading only the literals made 32 real options of `wdotool` invisible to
+#: this script.
+#: The lookbehind is what keeps `d.get("focused", False)` out of it: an entry
+#: in one of these tables is preceded by the `[` that opens the list or by the
+#: `,` after the previous entry, never by a function name.
+LONGOPT = re.compile(r'(?<=[\[,)])\s*\(\s*"([a-z][a-z0-9-]*)"\s*,\s*(?:True|False)\s*\)')
+
+
 def options_in_code(tool):
     """Every long option spelled in the package's own source, code only."""
     found = set()
     d = os.path.join(ROOT, tool)
     for name in sorted(os.listdir(d)) if os.path.isdir(d) else []:
         if name.endswith(".py"):
-            found |= set(OPT.findall(code_only(os.path.join(d, name))))
+            src = code_only(os.path.join(d, name))
+            found |= set(OPT.findall(src))
+            found |= {"--" + n for n in LONGOPT.findall(src)}
     return found
 
 
@@ -168,6 +189,19 @@ def options_from_parser(tool):
     return {s for a in p._actions for s in a.option_strings if s.startswith("--")}
 
 
+#: A word-boundary match, not a substring one: `--persistent` is a substring of
+#: nothing, but `--backend` is a substring of `--backends` and
+#: `--print-backend`, and `--q1` of `--q12`.  With `opt in t` an option nobody
+#: had ever documented read as documented because a longer option that shares
+#: its spelling was, and every option of this project whose name extends
+#: another's was un-checkable.  `-` counts as a word character here: these are
+#: option names, and `--backend`/`--backend-` are two different things.
+def documented_in(opt, docs):
+    """The documents that name `opt` as a whole option name, sorted."""
+    pat = re.compile(r"(?<![\w-])%s(?![\w-])" % re.escape(opt))
+    return sorted(n for n, t in docs.items() if pat.search(t))
+
+
 def documents():
     """Every markdown file in the tree, as relative name -> text."""
     out = {}
@@ -202,10 +236,15 @@ def main(argv=None):
         parsed = options_from_parser(tool)
         code = options_in_code(tool)
         # A hand-written parser has no list to ask, so what the tool accepts is
-        # what it spells plus what its help prints: those four help texts are
-        # byte parity with the original's, and every option in one is accepted.
+        # what its source spells, plus the deliberate silences.  The help text
+        # is NOT part of that: those four help texts are byte parity with the
+        # original's, so they print options this project has never implemented
+        # -- and folding them in made "accepted" mean "accepted or merely
+        # printed", which is the one thing the last loop below exists to tell
+        # apart.  A typo in a help string was invisible: it went into accepted,
+        # so `helped - accepted` was empty and nothing was reported.
         accepted_by[tool] = (parsed if parsed is not None
-                             else code | options_in_help(tool) | set(SILENT.get(tool, {})))
+                             else code | set(SILENT.get(tool, {})))
     everything_ours = set().union(*accepted_by.values())
 
     for tool in tools:
@@ -229,7 +268,7 @@ def main(argv=None):
             print("  %-34s %s" % (opt, what))
 
         for opt in sorted(accepted - EXEMPT):
-            where = [n for n, t in docs.items() if opt in t]
+            where = documented_in(opt, docs)
             if not where:
                 report(opt, "DOCUMENTED NOWHERE")
             if opt not in helped and opt not in silent:

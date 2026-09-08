@@ -1,0 +1,27 @@
+Output: 66 Virtual-1
+	enabled
+	connected
+	priority 1
+	Unknown
+	Modes:  66:1920x1080@60*!
+	Geometry: 0,0 1920x1080
+	Scale: 1
+	Rotation: 1
+Output: 67 Virtual-2
+	enabled
+	connected
+	priority 2
+	Unknown
+	Modes:  67:1920x1080@60*!
+	Geometry: 1920,0 1920x1080
+	Scale: 1
+	Rotation: 1
+Output: 69 Virtual-4
+	disabled
+	disconnected
+	priority 0
+	Unknown
+	Modes:
+	Geometry: 0,0 0x0
+	Scale: 1
+	Rotation: 1

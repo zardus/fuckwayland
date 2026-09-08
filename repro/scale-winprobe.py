@@ -12,8 +12,6 @@ Run in the guest as root, with a window already on screen.
 import importlib.util
 import json
 import os
-import re
-import subprocess
 import sys
 import time
 

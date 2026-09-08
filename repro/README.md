@@ -56,10 +56,6 @@ the real compositor: unpack a tree at `/home/test/<name>` and
 
 ## The scaling pass
 
-Which pixel space `wdotool`s pointer lives in, under fractional and HiDPI
-
-## The scaling pass
-
 Which pixel space `wdotool`'s pointer lives in, under fractional and HiDPI
 scaling, measured on `resolute-gnome-iso` (26.04 / GNOME 50),
 `noble-gnome-iso` (24.04 / GNOME 46) and `resolute-kde` (Plasma 6.6): scale 1,

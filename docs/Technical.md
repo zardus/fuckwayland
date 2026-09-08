@@ -1832,54 +1832,93 @@ themselves. They are not part of the interface.
 
 ## 9. Module → test file → fake
 
-2668 tests, run as `python3 -m unittest discover -s tests` or file by file. Two rules
+3174 tests, run as `python3 -m unittest discover -s tests` or file by file. Two rules
 hold across all of them and are enforced by tests of their own:
 
 * **every `tests/test_*.py` sets `FUCKWAYLAND_PASSTHROUGH=never`**, or the suite
   would `execve` itself away on an X11 box and the parity oracle would compare the
   real xdotool with itself and pass tautologically. `tests/test_passthrough.py` fails
-  when a test file is missing the line.
+  when a test file is missing the line. Its `SuiteGuard` holds two more rules that keep
+  the three documented ways of running a file honest: the `if __name__ == "__main__"` block
+  is the last statement in the file, because a class written after it never runs under
+  `python3 tests/<file>.py`; and a file importing `support`, `wl_fake`, `test_dbus_mini` or
+  `test_wxrandr_mutter` by its bare name also carries
+  `sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))`, without which
+  `python3 -m unittest tests/<file>.py` dies on the import.
 * **no test leaves a daemon running.** One that spawns a real daemon stops it
   through `support.stop_daemons_under()`, registered before the spawn so it runs
   however the test ends and before the runtime directory goes away;
   `tests/test_zz_daemon_leak.py` runs last and fails the suite over anything still
-  alive that was not there when it started. The suite is how the rig came to have
-  161 of them.
+  alive that was not there when it started — the input daemons, the headless compositors,
+  and this euid's processes holding a `wxrandr-gamma` memfd. The suite is how the rig came
+  to have 161 of them.
 * **shared helpers live in `tests/support.py`**, deliberately not named `test_*.py`
   so the escape-hatch guard above skips it. It holds `RecorderDev` and `abs_report`
   (the plain 3-tuple shape every uinput assertion uses), `env()`, one merged
-  `FakeEvdev`, and `HeadlessSway` for the XWayland live files.
+  `FakeEvdev`, and `HeadlessSway` for the XWayland live files. It also holds what the second
+  round of tests needed twice over: `documents()` (the markdown walk three files carried),
+  `sh_function()`/`sh_block()` (an installer's own branch, run as itself), `fake_gnome_bin()`
+  (POSIX-sh stand-ins for the GNOME command line, over one state file, so
+  `debian/enable-bridge` can be run without touching the runner's dconf), `js_harness()`
+  (node 22 with `tests/fixtures/gjs/loader.mjs`, which maps `gi://` and
+  `resource:///org/gnome/shell/` onto recording doubles so the two shipped `extension.js`
+  files execute for the first time), `FakeSway` (one sway IPC socket in six failure modes,
+  shared by wdotool and wxrandr), `leader_process()` (a real process with a session leader's
+  name and environ) and `WL_MIRROR_STUB`.
   `tests/wl_fake.py` is the other one: the Wayland marshallers and a `Server` base,
   deliberately **not** built on `wayland_mini`, so a bug in the client cannot hide
   itself in the fake.
+
+`scripts/parity-oracle.sh` is not one of those tests; it is what makes two of them mean
+something outside the development shell. It puts the pinned oracles on PATH (the flake's
+xdotool 4.20260303.1 and wmctrl 1.07 out of /nix/store, or `$FW_ORACLE_PATH`), starts an Xvfb
+if there is no usable DISPLAY, and runs `tests/test_cli_parity.py` and `tests/test_wwmctl_cli.py`
+against them — once against the nix wmctrl 1.07 and once against the distro's 1.07+git20240228.
+It exits non-zero when either oracle is missing **and** when either unittest run is red (every
+run is captured, not piped: this is `/bin/sh` with no `pipefail`), so the skip `test_cli_parity`
+takes on a foreign xdotool cannot pass for a run. On Ubuntu 26.04, whose apt xdotool is
+3.20160805.1, that file is a printed SKIP — which is what the script exists to turn back into a
+real comparison.
 
 | what it covers | test files | what stands in for the world |
 |---|---|---|
 | `cli.py`, `commands.py`, `misc_cmds.py` | `test_cli_chain`, `test_cli_misc`, `test_cli_script`, `test_cli_parity` | the real `xdotool` binary as the byte oracle (skipped outside `nix develop`) |
 | `window_cmds.py`, `desktop_cmds.py` | `test_windows_cmds`, `test_windows_sway` | `FakeBackend` in-memory; a real headless sway |
 | `input_cmds.py`, `daemon.py`, `uinput.py` | `test_input_cmds`, `test_input_daemon`, `test_input_uinput`, `test_daemon_lifetime`, `test_torture_regressions`, `test_hardening` | `FakeDaemon`, `RecorderDev`, and `WDOTOOL_FAKE_UINPUT=1` writing into a regular file |
-| `vkbd.py`, `vptr.py` | `test_vkbd`, `test_vptr` | `wl_fake.Server`: a real unix socket speaking the Wayland wire format |
+| `vkbd.py`, `vptr.py` | `test_vkbd`, `test_vptr`, `test_input_protocols_sway` | `wl_fake.Server`: a real unix socket speaking the Wayland wire format; then a real headless sway 1.11, which is the only thing that can say wlroots *accepts* those bytes — every group of requests there ends in the round trip that turns a protocol error into an exception, and one deliberately bad opcode per protocol proves the round trip really reports them |
 | `xkbmap.py`, `keymap.py`, `us_keymap.py` | `test_xkbmap`, `test_keymap`, `test_layout_flag` | `tests/fixtures/keymaps/*.xkb`, each a byte-for-byte capture of what a compositor handed a client, from GNOME, sway and KWin |
 | `layoutbox.py` | `test_scale_spaces` | a wl_output/xdg_output fake replaying one measured scaling state per test, and `FakeMutter` on the mock bus as the second source |
 | `keys_cmds.py` | `test_keys_cmds` | recorded evdev streams |
-| `backend_gnome.py` | `test_backend_gnome`, `test_wwmctl_gnome`, `test_wxprop_gnome` | `MockBridge` on `dbus_mini`'s in-process mock bus |
+| `backend_gnome.py` | `test_backend_gnome`, `test_wwmctl_gnome`, `test_wxprop_gnome` | `MockBridge` on `dbus_mini`'s in-process mock bus — and, since `tests/test_bridge_js.py`, no longer taken on trust: the extension's `METHODS` table, `org.fuckwayland.Bridge1.xml` and `MockBridge`'s own `m_<Name>` methods are checked against each other statically (names and out signatures), and ten methods are compared answer for answer with the shipped `extension.js` running under node |
+| `gnome/fuckwayland-bridge@fuckwayland/extension.js` (the shipped file, executed) | `test_bridge_js` | node 22 through `tests/fixtures/gjs/loader.mjs` (`support.js_harness`), which resolves every `gi://` namespace and every `resource:///org/gnome/shell/` import onto the recording doubles under `tests/fixtures/gjs/stubs/`; the world each case builds — `global.display`, `global.workspace_manager`, the window actors — is `test_backend_gnome.fixture_windows()` rows turned back into `Meta.Window` doubles, and the answers are compared against `MockBridge`'s for the same state |
 | `backend_kwin.py`, `kwin_js.py` | `test_backend_kwin` | a fake KWin on the same mock bus, answering `loadScript`/`run`/`unloadScript` |
 | `backend_sway.py` | `test_windows_sway`, `test_wire_hardening` | real sway; `FakeSway` for the hostile cases |
 | `backend_wlr.py` | `test_backend_wlr` | a wire-level foreign-toplevel fake |
 | `x11_mini.py` | `test_wwmctl_x11`, `test_wxprop_x11`, `test_wwmctl_hardening` | `FakeXServer`, and `HostileXServer` subclassing it |
 | `fwcommon/session.py` | `test_session`, `test_session_discovery` | a temporary `/run/user` tree |
 | `fwcommon/passthrough.py` | `test_passthrough`, `test_passthrough_exec` | a hermetic detection matrix; then a fake install tree with real processes |
-| `fwcommon/dbus_mini.py` | `test_dbus_mini` | byte-exact fixtures plus an in-process `MockBus`, and a real `dbus-daemon` when `DBUS_SESSION_BUS_ADDRESS` is set |
+| `fwcommon/dbus_mini.py` | `test_dbus_mini` | byte-exact fixtures plus an in-process `MockBus`; `RealBus` against a real `dbus-daemon`, started by the suite itself with `dbus-run-session` when `DBUS_SESSION_BUS_ADDRESS` is unset |
 | `fwcommon/wayland_mini.py` | exercised by every wire test above | `wl_fake` |
-| `wwmctl/` | `test_wwmctl_cli`, `test_wwmctl_live`, `test_wwmctl_hardening`, `test_wwmctl_gnome` | `FakeSwayBackend`, `FakeX11`; real sway with XWayland for the live file |
-| `wxprop/` | `test_wxprop_cli`, `test_wxprop_fmt`, `test_wxprop_live`, `test_wxprop_gnome`, `test_wxprop_x11` | captured real-xprop bytes; a live XWayland server as the oracle |
-| `wxrandr/` | `test_wxrandr_unit`, `test_wxrandr_backend`, `test_wxrandr_mutter`, `test_wxrandr_kwin`, `test_wxrandr_live`, `test_wxrandr_hostile`, `test_wxrandr_gamma`, `test_monitors_xml` | `FakeMutter` on the mock bus; a wire-level fake KWin; real sway with real `xrandr` through XWayland as the oracle; real `monitors.xml` files from both default installs |
-| `wxrandr/gnome_overlap.py` + `gnome/fuckwayland-overlap@fuckwayland/` | `test_gnome_overlap`, `test_overlap_consent` | the same mock bus with a mock `org.gnome.Shell` and a mock overlap extension on it, so a whole `--unsafe-gnome-overlap` run happens in-process; and plain `node` running the extension's own `rules.js` against `monitors_xml.py`. The consent file re-runs every refusal in the first with an agreement recorded, and asserts from the source that the agreement is read after the last one |
-| `warandr/` | `test_warandr_model`, `test_warandr_parse`, `test_warandr_gui`, `test_overlap_consent` | `tests/fixtures/fake_xrandr.py`, a RandR simulator (which also simulates a GNOME with the overlap extension and its agreement); Xvfb plus xdotool driving the real editor, dialog included |
-| `wmirror/` | `test_wmirror_cli`, `test_wmirror_lifetime` | a fake `wl-mirror` binary, and the detach protocol driven for real |
+| `wwmctl/` | `test_wwmctl_cli`, `test_wwmctl_live`, `test_wwmctl_hardening`, `test_wwmctl_gnome`, `test_wwmctl_kwin` | `FakeSwayBackend`, `FakeX11`; real sway with XWayland for the live file; the fake KWin of `test_backend_kwin` on the mock bus, with `_FakeX` as the Xwayland client list, for the Plasma file |
+| `wxprop/` | `test_wxprop_cli`, `test_wxprop_fmt`, `test_wxprop_live`, `test_wxprop_gnome`, `test_wxprop_x11`, `test_wxprop_kwin` | captured real-xprop bytes; a live XWayland server as the oracle; the same fake KWin, whose resident event script the test plays for `-spy`; `MockBus` (an empty session bus) in `test_wxprop_cli`, so the real `backend_detect.detect()` can be driven to its no-session error |
+| `wxrandr/` | `test_wxrandr_unit`, `test_wxrandr_backend`, `test_wxrandr_mutter`, `test_wxrandr_kwin`, `test_wxrandr_live`, `test_wxrandr_hostile`, `test_wxrandr_gamma`, `test_monitors_xml` | `FakeMutter` on the mock bus; a wire-level fake KWin; real sway with real `xrandr` through XWayland as the oracle; real `monitors.xml` files from both default installs; `FakeMutter`'s `emit_signal`/`swallow_apply`/`hangup_on_apply` and `KwinOutputServer.swallow_apply` for a compositor that half-answers |
+| `wxrandr/core.py`'s `SwayIPC` (the display half of the sway wire client) | `test_wxrandr_sway_wire` | `support.FakeSway` in its six modes — answering, gone mid-chain, badly framed JSON, wedged, refusing an `output` command in sway's words, and rows with no `rect` — driven through `cli.main --backend sway`, so what is asserted is the exit status and the one line the user gets |
+| `wxrandr/kwin.py` on a **real KWin** (Plasma 6.6, KWin 6.6.6): backend choice, the protocol and version `--print-backend --verbose` names, `--query` against `kscreen-doctor -o`, one `--right-of` apply and the restore line it prints, `--same-as` as a `replicationSource`, and F4.1's live twin (two same-title Xwayland xterms moved by X id) | `test_wxrandr_kwin_live` | nothing is faked: the QEMU rig (`vm/vmctl`, golden `resolute-kde`) with `kscreen-doctor` as the oracle. Opt-in twice — `VMCTL_LIVE=1 WXRANDR_LIVE_KWIN=1` — and skipped unless the named instance is already running, because this host runs one VM at a time |
+| `wxrandr/gnome_overlap.py` + `gnome/fuckwayland-overlap@fuckwayland/` | `test_gnome_overlap`, `test_overlap_consent`, `test_overlap_force` | the same mock bus with a mock `org.gnome.Shell` and a mock overlap extension on it, so a whole `--unsafe-gnome-overlap` run happens in-process; plain `node` running the extension's own `rules.js` against `monitors_xml.py`; and, for the shipped type descriptions, `g-ir-compiler` plus GIRepository in a subprocess per namespace — the shipped typelib and a fresh compile of the checked-in `.gir` are compared by *meaning* (namespace, no shared library, every function name and C symbol, every record's size and field offsets), because g-ir-compiler 1.86 writes 17 different reserved words per typelib than the compiler that produced the checked-in files. The consent file re-runs every refusal in the first with an agreement recorded, and asserts from the source that the agreement is read after the last one |
+| `wxrandr/gnome_overlap.py` + `gnome/fuckwayland-overlap@fuckwayland/` against a compositor that is really running | `test_gnome_overlap_live` | a private headless sway (`support.HeadlessSway`) as the negative — the flag has to be a refusal off GNOME before any bus call — and, gated on `WXRANDR_LIVE_GNOME=1` *and* an `org.gnome.Shell` that owns its name, a real gnome-shell on the rig: status, the agreement against `readelf -n` of the mapped libmutter, the apply and its printed undo, the forced-`--dryrun` refusal, and whether the moved-monitors.xml branch can be reached at all |
+| `warandr/` | `test_warandr_model`, `test_warandr_parse`, `test_warandr_gui`, `test_overlap_consent` | `tests/fixtures/fake_xrandr.py`, a RandR simulator (which also simulates a GNOME with the overlap extension and its agreement); Xvfb plus xdotool driving the real editor, dialog included; the fake's `FAKE_XRANDR_OVERLAP_WITHDRAW_ON_APPLY` replays wxrandr withdrawing an agreement under the running window, with wxrandr's own `consent_drift()` sentence |
+| `wmirror/` | `test_wmirror_cli`, `test_wmirror_lifetime`, `test_wmirror_live` | a fake `wl-mirror` (`support.WL_MIRROR_STUB`), and the detach protocol driven for real; then a real headless sway (`swaymsg create_output` for the second head) with the same stub, where the supervisor's watch reads real zwlr_output_management events for the only time in the suite |
 | `procs.py`, `stdio.py` | `test_wmirror_lifetime`, `test_stdout_gone` | real forks; `>/dev/full`, `\| head -1`, `>&-` |
 | the no-dialog guarantee | `test_no_portal` | nothing — it is a static check that no package here names PolicyKit or any portal interface but `Settings`, the one read with no consent step |
-| what actually ships | `test_release_deb` | nothing — it unpacks the .deb committed in `release/` and compares its payload with the tree, because a binary in the repository is the one thing no other test here runs. It caught the v0.3 build still committed while 0.4 was being finished |
+| what actually ships | `test_release_deb` | nothing — it unpacks the .deb committed in `release/` (with `unpack_deb()`, an `ar` + `compression.zstd` reader in the standard library, proved byte-identical to `dpkg-deb -x` wherever dpkg is installed) and compares its payload with the tree: every module, every non-Python file, both maintainer scripts, the typelib per generation in `generations.json`, the autostart symlink, and one version across `fwcommon`, pyproject, `debian/changelog`, `flake.nix` and the file name. It caught the v0.3 build still committed while 0.4 was being finished |
+| `debian/enable-bridge`, `gnome/install-bridge.sh`, `gnome/install-overlap.sh` | `test_install_scripts` | `support.fake_gnome_bin()`: POSIX-sh `gsettings`, `gnome-extensions`, `gdbus`, `sudo`, `runuser`, `id`, `getent` and `dpkg` over one state file, on a PATH of their own, in a temporary HOME. The shipped scripts are run whole where they can be and sliced function by function (`support.sh_function`/`sh_block`) where they cannot, so nothing here is a copy of what ships |
+| `debian/fuckwayland.postinst`, `debian/fuckwayland.postrm` | `test_debian_scripts` | `DPKG_ROOT` pointing into a scratch tree, sh stubs for `modprobe`/`udevadm`/`setfacl`/`chown`/`chmod` that record and do nothing, the `os.pipe()`/`os.close(r)` broken-reader double from `test_stdout_gone`; then real `dpkg -i`/`-r`/`-P` into that tree with `--force-script-chrootless` and no-op `py3compile`/`py3clean` |
+| `scripts/build-pyz.sh`, `scripts/build-deb.sh` | `test_build_scripts` | a temporary copy of the tree (never `dist/` or `release/`); `zipfile` reading the six zipapps; `fwcommon.passthrough.is_us()` run over what was built; sh stubs for `sudo`/`apt-get`/`dpkg-query`/`dpkg-buildpackage` that record and are asserted never to be reached |
+| `vm/*.sh` | `test_vm_scripts` | `bash -n`; the stage-2 pipeline of `build-iso-golden.sh` sliced with a stand-in `ssh` that fails; `selftest.sh`'s own embedded kscreen parser run over `tests/fixtures/kscreen/` (Plasma 5.27 one-line and 6.x block captures, each with a head that is not there). Anything needing the rig is `skipUnless(VMCTL_LIVE)` |
+| `scripts/check-docs.py` | `test_check_docs` | the script loaded as a module (`spec_from_file_location`) with `options_in_help`, `SILENT` and `ROOT` patched: a planted option nobody documents and a planted typo that is a prefix of a real option are the two blind spots it used to miss, and the unpatched tree is the positive control |
+| the documented numbers | `test_docs_numbers` | `unittest.defaultTestLoader.discover` in a subprocess for the test count; `wdotool.daemon`'s two constants; `_pass('…')` in the overlap extension for the check count; `wdotool.commands.REGISTRY` for the command count; the six tools run for README's "Check it worked" block |
+| cross-document links, and the rig's thirteen images | `test_docs_matrix` | GitHub's slug rules reimplemented and resolved against every heading; `vm/flavors/*.yaml` and `vm/vmctl`'s own `DESKTOPS` table as the fact behind vm/README's table and README's support matrix |
+| `tests/support.py`, `tests/fixtures/gjs/` | `test_support_helpers` | nothing — the shared doubles tested as themselves: the markdown walker against the one `scripts/check-docs.py` carries, the sliced installer functions handed to `sh -n`, the fake GNOME command line (`gsettings`, `gnome-extensions`, `gdbus`, `dpkg`, `sudo`, `id`) over one state file, the sway IPC double driven by wxrandr's own `SwayIPC`, and node 22 running both shipped `extension.js` files through `tests/fixtures/gjs/loader.mjs` |
 
 Two environments run these. **In the development shell** (`nix develop`), a container
 with no `/dev/uinput`, `WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 sway` gives a
@@ -1888,6 +1927,32 @@ real Wayland compositor for the backend and protocol tests, with `swaymsg`, `foo
 as the byte oracles. **On the rig** (`vm/vmctl`), the same tools run against real
 desktops with real input, which is where `WLR_BACKENDS=headless,libinput` matters:
 libinput has to be listed or sway does not pick up the uinput devices at all.
+
+`tests/test_backend_gnome.py::ShippedFilesTests` pins the bridge's `shell-version` list against
+the rig: every GNOME major a flavor in vm/README.md carries, and every generation the overlap
+extension is measured on, has to be in it. "51" went in after the measured run on
+`stonking-gnome` (GNOME Shell 51.beta), so the bridge and the overlap extension name the same
+three releases.
+
+**`vm/live-smoke.sh <flavor>`** is the other runner that is not a unittest, and the only one
+that needs a booted image. It replays the hand smoke of 2026-09-08 per flavor: boot, install
+(the `.deb`, or the working tree over it), bridge, windows, the maximize pair, input and live
+layout switching, display, `--persistent` and the bridge's `ConfirmDisplayChange`, the overlap
+route, `enable-bridge` under GDM, the udev rule, a root phase, the no-dialog bus recording and
+`apt-get remove`. Each step prints `PASS`/`FAIL <what>`, the exit status is the number of FAILs,
+and results plus a screenshot of every head per phase land in `vm/live-smoke.out/`. The steps
+live in `vm/live-smoke.d/<desktop>.sh` (gnome, kde, sway, xfce, kde-x11) over `common.sh`, with
+`oracle.py` answering as the desktop's own display tool.
+
+That script has a regression of its own that needs no VM. `vm/live-smoke.d/selftest-offline.sh`
+runs the `windows` and `wm` phases against `vm/live-smoke.d/fake-vmctl`, which replays
+`tests/fixtures/live/noble-gnome-46.0-windows-wm-replay.txt` (recorded off GNOME 46.0), and
+asserts that 17 assertions pass on the recording and that exactly one — b7a60f0's — fails when the
+pre-fix geometry is put back; two further passes do the same for the `busrec` phase (T65's
+session-bus recorder) against two hand-written transcripts, where it has to pass when a
+`dbus-monitor` process exists and the log grows, and fail when neither is true. Two seconds in
+all. `tests/fixtures/live/` holds the recordings, and its README says what each one is and which
+claim rests on it.
 
 ## 10. The VM rig
 
@@ -1911,8 +1976,9 @@ plugged, unplugged and resized from the host at run time, with host-side screens
 of every head. That is what makes a multi-monitor claim testable at all.
 
 **`vm/selftest.sh` proves the rig, not the tools.** It asserts that the flavor came
-up the way the flavor says it should: the right display manager, the right session
-type, autologin landed, the heads are there, the compositor is painting,
+up the way the flavor says it should: the right session type (logind's own `Type`
+and the session's `XDG_SESSION_TYPE`, which are two different answers), autologin
+landed, the heads are there, the compositor is painting,
 `vmctl user` reconstructs an environment in which the desktop's own tools work. It is
 the check you run after building an image and before believing anything measured on
 it. The tools' own behaviour per flavor is the separate table in

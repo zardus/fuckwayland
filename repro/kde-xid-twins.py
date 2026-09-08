@@ -19,7 +19,11 @@ Built on the repo's own wdotool.x11_mini connection (stdlib only, no
 python-xlib): a checkout beside this file, else the wwmctl zipapp
 `deploy-to-vm.sh` installs on a guest (zipimport reads it directly).
 """
-import argparse, os, struct, sys, time
+import argparse
+import os
+import struct
+import sys
+import time
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 for _cand in (_ROOT, "/usr/local/bin/wwmctl", "/usr/bin/wwmctl"):

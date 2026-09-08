@@ -17,12 +17,16 @@ So: the payload is compared with the tree, file by file.  It is the only test he
 can fail for something nobody typed.
 """
 
+import io
+import json
 import os
 import re
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
+import tomllib
 import unittest
 
 # The suite never hands a tool over to the real X11 one: see tests/conftest.py
@@ -32,27 +36,93 @@ os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
+# `import support` is a bare import: it resolves only with the tests directory
+# on sys.path, which `python3 tests/<file>.py` gives for free and
+# `python3 -m unittest tests/<file>.py` does not.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from fwcommon import VERSION
+from support import documents
 
 RELEASE = os.path.join(ROOT, "release")
 DIST = "usr/lib/python3/dist-packages"
 OVERLAP_UUID = "fuckwayland-overlap@fuckwayland"
 BRIDGE_UUID = "fuckwayland-bridge@fuckwayland"
+EXT = "usr/share/gnome-shell/extensions"
+
+#: Every file the package carries that is *not* a Python module, paired with
+#: the file in the tree it is a copy of.  The .py half is compared by the walk
+#: in `test_every_module_in_it_is_the_one_in_the_tree`; these are the ones no
+#: other test in this repository ever looks at, and each of them is a thing
+#: that runs on the user's machine: a udev rule, a modules-load line, the
+#: autostart script and its .desktop entry, the menu entry, the licence.
+PAIRS = {
+    "usr/lib/udev/rules.d/60-fuckwayland-uinput.rules":
+        "gnome/60-fuckwayland-uinput.rules",
+    "usr/lib/modules-load.d/fuckwayland-uinput.conf":
+        "gnome/modules-load-uinput.conf",
+    "usr/lib/fuckwayland/enable-bridge": "debian/enable-bridge",
+    "usr/lib/fuckwayland/enable-bridge.desktop": "debian/enable-bridge.desktop",
+    "usr/share/applications/warandr.desktop": "warandr.desktop",
+    "usr/share/doc/fuckwayland/copyright": "debian/copyright",
+    "usr/share/lintian/overrides/fuckwayland": "debian/fuckwayland.lintian-overrides",
+}
 
 
-def documents():
-    """Every markdown file in the repository, as path -> text."""
-    out = {}
-    for base, dirs, names in os.walk(ROOT):
-        dirs[:] = [d for d in dirs
-                   if d not in (".git", "__pycache__", "node_modules")]
-        for n in names:
-            if n.endswith(".md"):
-                path = os.path.join(base, n)
-                with open(path, encoding="utf-8", errors="replace") as f:
-                    out[os.path.relpath(path, ROOT)] = f.read()
-    return out
+def _deb_filter(member, dest_path):
+    """tarfile's `data` rules, minus the one a .deb legitimately breaks.
+
+    The autostart entry is a symlink to `/usr/lib/fuckwayland/...`, an absolute
+    path, which `data_filter` refuses on principle -- it is a link that would
+    escape the extraction root if the root were `/`.  For a package payload
+    that is the whole point of the file, and `dpkg-deb -x` writes it, so the
+    member is kept as it is.  Every other rule (no `..`, no absolute member
+    names, no devices, no setuid) still applies."""
+    try:
+        return tarfile.data_filter(member, dest_path)
+    except tarfile.AbsoluteLinkError:
+        if member.name.startswith("/") or ".." in member.name.split("/"):
+            raise
+        return member
+
+
+def unpack_deb(path, dest):
+    """Extract a binary package with the standard library alone.
+
+    `dpkg-deb` is not on a machine that is not Debian, and three tests here
+    used to skip themselves for want of it -- on exactly the payload that has
+    no other test.  A .deb is an `ar` archive of three members in a fixed
+    order, and the third is the payload tar; since 1.21 dpkg compresses it
+    with zstd by default, which Python 3.14 reads (`compression.zstd`, PEP
+    784).  Returns the sorted list of relative names extracted.
+    """
+    with open(path, "rb") as fh:
+        blob = fh.read()
+    if blob[:8] != b"!<arch>\n":
+        raise ValueError("%s is not an ar archive" % path)
+    at = 8
+    members = {}
+    while at + 60 <= len(blob):
+        header = blob[at:at + 60]
+        name = header[0:16].decode("ascii").rstrip("/ ").strip()
+        size = int(header[48:58].decode("ascii").strip())
+        body = blob[at + 60:at + 60 + size]
+        members[name] = body
+        at += 60 + size + (size & 1)        # members are padded to even
+    for name, body in members.items():
+        if not name.startswith("data.tar"):
+            continue
+        if name.endswith(".zst"):
+            from compression import zstd
+            body = zstd.decompress(body)
+            mode = "r:"
+        else:
+            mode = "r:" + name.rsplit(".", 1)[1] if "." in name[8:] else "r:"
+        with tarfile.open(fileobj=io.BytesIO(body), mode=mode) as tar:
+            tar.extractall(dest, filter=_deb_filter)
+            return sorted(m.name.lstrip("./") for m in tar.getmembers()
+                          if m.name not in ("./", "."))
+    raise ValueError("%s has no data member: %s" % (path, sorted(members)))
 
 
 class ThePackageInTheTree(unittest.TestCase):
@@ -68,23 +138,41 @@ class ThePackageInTheTree(unittest.TestCase):
         return os.path.join(RELEASE, self.debs[0])
 
     def unpacked(self):
-        """The package's payload, extracted once per test that wants it."""
-        if shutil.which("dpkg-deb") is None:
-            self.skipTest("no dpkg-deb")     # the data member is .zst here
+        """The package's payload, extracted once per test that wants it.
+
+        `unpack_deb` rather than `dpkg-deb -x`: the two are proved identical by
+        `StdlibUnpacking` below, and this way the payload tests run on a
+        machine with no dpkg -- which is where they were being skipped."""
         tmp = tempfile.mkdtemp(prefix="fw-deb-")
         self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
-        subprocess.run(["dpkg-deb", "-x", self.deb(), tmp], check=True)
+        unpack_deb(self.deb(), tmp)
         return tmp
+
+    def control(self):
+        """The control member's files, as name -> text (`dpkg-deb -e`)."""
+        if shutil.which("dpkg-deb") is None:
+            self.skipTest("no dpkg-deb")
+        tmp = tempfile.mkdtemp(prefix="fw-deb-ctl-")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        subprocess.run(["dpkg-deb", "-e", self.deb(), tmp], check=True)
+        out = {}
+        for n in sorted(os.listdir(tmp)):
+            with open(os.path.join(tmp, n), encoding="utf-8", errors="replace") as f:
+                out[n] = f.read()
+        return out
+
+    def field(self, name):
+        if shutil.which("dpkg-deb") is None:
+            self.skipTest("no dpkg-deb")
+        out = subprocess.run(["dpkg-deb", "-f", self.deb(), name],
+                             capture_output=True, text=True, check=True)
+        return out.stdout.strip()
 
     def test_exactly_one_package_named_for_this_version(self):
         self.assertEqual(self.debs, ["fuckwayland_%s_all.deb" % VERSION])
 
     def test_its_own_control_says_the_same_version(self):
-        if shutil.which("dpkg-deb") is None:
-            self.skipTest("no dpkg-deb")
-        out = subprocess.run(["dpkg-deb", "-f", self.deb(), "Version"],
-                             capture_output=True, text=True, check=True)
-        self.assertEqual(out.stdout.strip(), VERSION)
+        self.assertEqual(self.field("Version"), VERSION)
 
     def test_every_module_in_it_is_the_one_in_the_tree(self):
         """The finding itself.  A stale binary is invisible from inside the
@@ -142,6 +230,111 @@ class ThePackageInTheTree(unittest.TestCase):
                         b = f.read()
                     self.assertEqual(a, b, mine)
 
+    def test_every_non_python_file_in_it_is_the_one_in_the_tree(self):
+        """The seven files the module walk above does not reach.  Each of them
+        runs, or is read by something that runs, on the user's machine: the
+        udev rule and the modules-load line decide whether input works at all,
+        `enable-bridge` is what turns the extension on in the first session,
+        and the .desktop pair is how it is started and how warandr appears in
+        the menu.  A stale copy of any of them is invisible from the tree."""
+        tmp = self.unpacked()
+        for rel, mine in sorted(PAIRS.items()):
+            with self.subTest(rel):
+                packaged = os.path.join(tmp, rel)
+                self.assertTrue(os.path.exists(packaged), rel)
+                with open(packaged, "rb") as f:
+                    a = f.read()
+                with open(os.path.join(ROOT, mine), "rb") as f:
+                    b = f.read()
+                self.assertEqual(a, b, "%s in the package is not %s: rebuild "
+                                       "it with `sh scripts/build-deb.sh`" % (rel, mine))
+
+    def test_the_maintainer_scripts_are_the_ones_in_debian(self):
+        """postinst and postrm are compared up to debhelper's own additions:
+        dh_installdeb appends `# Automatically added by ...` blocks and
+        substitutes `#DEBHELPER#`, so the shipped file is ours plus that.  What
+        is checked is that every line we wrote is still there, in order."""
+        control = self.control()
+        for name in ("postinst", "postrm"):
+            with self.subTest(name):
+                with open(os.path.join(ROOT, "debian", "fuckwayland." + name),
+                          encoding="utf-8") as f:
+                    mine = [ln for ln in f.read().splitlines()
+                            if ln.strip() != "#DEBHELPER#"]
+                shipped = control[name].splitlines()
+                # dh_installdeb substitutes the token; a shipped script that
+                # still had it would be one debhelper never processed.
+                self.assertNotIn("#DEBHELPER#", control[name])
+                rest = iter(shipped)
+                for line in mine:
+                    for candidate in rest:
+                        if candidate == line:
+                            break
+                    else:
+                        self.fail("%s: the packaged script is missing %r" % (name, line))
+
+    def test_every_generation_in_the_table_has_its_typelib_in_the_payload(self):
+        """generations.json is the single record of which libmutter layouts the
+        overlap extension knows, and one compiled type description per row is
+        what makes each of them reachable.  The old assertion named
+        FwOverlap18 and nothing else, so a package that shipped one typelib out
+        of three passed it -- and on GNOME 46 or 51 the extension would load
+        and then fail at its first call."""
+        tmp = self.unpacked()
+        with open(os.path.join(tmp, EXT, OVERLAP_UUID, "generations.json"),
+                  encoding="utf-8") as f:
+            table = json.load(f)
+        names = [g["namespace"] for g in table["generations"]]
+        self.assertEqual(len(names), 3, names)
+        for ns in names:
+            with self.subTest(ns):
+                self.assertTrue(os.path.exists(os.path.join(
+                    tmp, EXT, OVERLAP_UUID, "typelib", "%s-1.0.typelib" % ns)), ns)
+
+    def test_the_packaged_overlap_metadata_names_the_measured_majors(self):
+        """gnome-shell refuses to load an extension whose metadata.json does
+        not name the running Shell major, so this list is the whole of what the
+        package route can reach: on GNOME 51.beta the shipped bridge was
+        OUT_OF_DATE for exactly this reason and one added line fixed it
+        (measured on stonking-gnome).  The list has to be the table's, or the
+        package silently supports a different set of desktops from the one the
+        extension has code for."""
+        tmp = self.unpacked()
+        base = os.path.join(tmp, EXT, OVERLAP_UUID)
+        with open(os.path.join(base, "generations.json"), encoding="utf-8") as f:
+            table = json.load(f)
+        with open(os.path.join(base, "metadata.json"), encoding="utf-8") as f:
+            meta = json.load(f)
+        self.assertEqual(meta["shell-version"],
+                         [str(g["shell_major"]) for g in table["generations"]],
+                         "the package route cannot force the extension on any "
+                         "other major: metadata.json is what gnome-shell reads")
+
+    def test_the_autostart_entry_is_a_symlink_to_the_one_file(self):
+        """One file, two names: /usr/lib/fuckwayland/enable-bridge.desktop is
+        the payload and /etc/xdg/autostart/ holds a link to it, so a user who
+        does not want it can mask the link in ~/.config/autostart without dpkg
+        putting it back at the next upgrade."""
+        tmp = self.unpacked()
+        link = os.path.join(tmp, "etc/xdg/autostart/fuckwayland-enable-bridge.desktop")
+        self.assertTrue(os.path.islink(link), link)
+        self.assertEqual(os.readlink(link),
+                         "/usr/lib/fuckwayland/enable-bridge.desktop")
+
+    def test_usr_bin_is_exactly_the_project_scripts_table(self):
+        """Three lists of six names that have to agree: what dpkg installs,
+        what pyproject declares, and what `scripts/build-pyz.sh` builds.  They
+        are written in three files and nothing but this test connects them."""
+        tmp = self.unpacked()
+        packaged = sorted(os.listdir(os.path.join(tmp, "usr/bin")))
+        with open(os.path.join(ROOT, "pyproject.toml"), "rb") as f:
+            declared = sorted(tomllib.load(f)["project"]["scripts"])
+        with open(os.path.join(ROOT, "scripts", "build-pyz.sh"), encoding="utf-8") as f:
+            built = sorted(re.findall(r"^build (\w+) ", f.read(), re.M))
+        self.assertEqual(packaged, declared)
+        self.assertEqual(packaged, built)
+        self.assertEqual(len(packaged), 6, packaged)
+
     def test_the_readme_installs_the_file_that_is_there(self):
         text = documents()["README.md"]
         named = set(re.findall(r"release/(fuckwayland_[0-9.]+_all\.deb)", text))
@@ -191,6 +384,45 @@ class TheDocumentsAboutIt(unittest.TestCase):
         for name, text in docs.items():
             self.assertNotIn("320mm x 200mm", text, name)
 
+    @unittest.expectedFailure
+    def test_the_uinput_opt_out_in_readme_debian_is_the_revoke_sequence(self):
+        """Fix 56 (deferred: the author's call), finding F6.1.
+        debian/README.Debian tells a reader who does not want the udev rule to
+        `rm /usr/lib/udev/rules.d/60-fuckwayland-uinput.rules`.  Three things
+        are wrong with that.  The file is dpkg's: removing it makes `dpkg -V
+        fuckwayland` report the package as modified for ever, and the next
+        upgrade puts it back.  `udevadm control --reload-rules` alone does not
+        undo anything -- udev preserves permissions and ACLs no rule asks it to
+        change, and its tags are sticky in its own database, so the node keeps
+        the uaccess ACL until the next boot.  And the ACL entry has to be
+        *removed*, not masked, because the uaccess builtin only ever adds
+        entries: a left-over one makes a later reinstall a no-op.  The right
+        opt-out is the one postrm already performs -- mask the rule with an
+        empty `/etc/udev/rules.d/60-fuckwayland-uinput.rules`, which shadows
+        the package's copy by name and survives upgrades, and then
+        `install-bridge.sh --udev --uninstall` (or a shipped revoke helper) to
+        clear what is already granted."""
+        with open(os.path.join(ROOT, "debian", "README.Debian"),
+                  encoding="utf-8") as f:
+            text = f.read()
+        para = text.split("If it is the wrong trade on this")[1].split("\n\n\n")[0]
+        self.assertNotIn("rm /usr/lib/udev/rules.d/", para)
+        self.assertTrue("install-bridge.sh --udev --uninstall" in para
+                        or "uinput-revoke" in para, para)
+        self.assertIn("/etc/udev/rules.d/60-fuckwayland-uinput.rules", para)
+
+    def test_postrm_still_does_the_revoking_this_paragraph_should_name(self):
+        """The premise of the test above, from the code: what `apt remove`
+        does to the node is exactly the sequence the opt-out paragraph ought to
+        describe, so if postrm ever stops doing it the paragraph is not the
+        thing to fix."""
+        with open(os.path.join(ROOT, "debian", "fuckwayland.postrm"),
+                  encoding="utf-8") as f:
+            sh = f.read()
+        self.assertIn("setfacl -b /dev/uinput", sh)
+        self.assertIn("/run/udev/tags/*/", sh)
+        self.assertIn("chmod 0600 /dev/uinput", sh)
+
     def test_the_overlap_installers_exit_status_is_written_down(self):
         """It exits 1 on its ordinary success path, because the extension is
         installed and gnome-shell has not loaded it yet -- the same as the
@@ -212,6 +444,164 @@ class TheDocumentsAboutIt(unittest.TestCase):
         line = [ln for ln in docs["gnome/README.md"].splitlines()
                 if ln.startswith("sh gnome/install-overlap.sh ")]
         self.assertTrue(line and "exit 1" in line[0], line)
+
+
+class OneVersionEverywhere(unittest.TestCase):
+    """Three files besides `fwcommon.VERSION` spell this release's version,
+    and nothing but this test makes them agree.
+
+    The 0.3-package-in-a-0.4-tree failure was one half of this: the file name
+    said 0.3 while `fwcommon.VERSION` said 0.4, and every test in the suite
+    read the second.  That half -- the name in `release/` and the `Version:`
+    field inside the package -- is `ThePackageInTheTree` above.  This is the
+    other: the three a release forgets, because nothing installs or runs them
+    at test time -- pyproject.toml, the changelog stanza dpkg builds the
+    package version out of, and flake.nix, which is what `nix build` and
+    `nix run github:.../fuckwayland` produce."""
+
+    def test_pyproject_says_it(self):
+        with open(os.path.join(ROOT, "pyproject.toml"), "rb") as f:
+            self.assertEqual(tomllib.load(f)["project"]["version"], VERSION)
+
+    def test_the_changelogs_top_stanza_says_it(self):
+        """dpkg builds the package version out of this line, so a changelog
+        that was not opened produces a package named for the previous
+        release -- which is how a stale .deb gets committed without anybody
+        noticing.  `scripts/build-deb.sh` refuses the build over it; this is
+        the same check from the other end."""
+        with open(os.path.join(ROOT, "debian", "changelog"), encoding="utf-8") as f:
+            top = f.readline()
+        m = re.match(r"fuckwayland \(([^)]+)\) ", top)
+        self.assertTrue(m, top)
+        self.assertEqual(m.group(1), VERSION)
+
+    def test_flake_nix_says_it(self):
+        """The third install route in the README: `nix run` builds from this
+        number, and a flake left behind produces a package whose --version
+        disagrees with its own contents."""
+        with open(os.path.join(ROOT, "flake.nix"), encoding="utf-8") as f:
+            found = set(re.findall(r'version\s*=\s*"([0-9][^"]*)"', f.read()))
+        self.assertEqual(found, {VERSION}, found)
+
+
+
+class StdlibUnpacking(unittest.TestCase):
+    """`unpack_deb()` and `dpkg-deb -x` produce the same tree.
+
+    Three tests in this file skipped themselves when dpkg-deb was missing --
+    on the one payload nothing else in the suite reads.  A .deb is an ar
+    archive of three members and a zstd tar, both of which Python 3.14 has, so
+    the skip was never necessary.  This is the proof that the replacement is
+    not merely plausible: it is run against the real thing whenever dpkg-deb
+    happens to be there."""
+
+    @classmethod
+    def setUpClass(cls):
+        debs = sorted(n for n in os.listdir(RELEASE) if n.endswith(".deb"))
+        if len(debs) != 1:
+            raise unittest.SkipTest("release/ holds %d packages" % len(debs))
+        cls.deb = os.path.join(RELEASE, debs[0])
+
+    def trees(self):
+        if shutil.which("dpkg-deb") is None:
+            self.skipTest("no dpkg-deb to compare against")
+        mine = tempfile.mkdtemp(prefix="fw-stdlib-")
+        theirs = tempfile.mkdtemp(prefix="fw-dpkgdeb-")
+        self.addCleanup(shutil.rmtree, mine, ignore_errors=True)
+        self.addCleanup(shutil.rmtree, theirs, ignore_errors=True)
+        unpack_deb(self.deb, mine)
+        subprocess.run(["dpkg-deb", "-x", self.deb, theirs], check=True)
+        return mine, theirs
+
+    @staticmethod
+    def walk(top):
+        out = {}
+        for base, _dirs, names in os.walk(top):
+            for n in names:
+                path = os.path.join(base, n)
+                rel = os.path.relpath(path, top)
+                if os.path.islink(path):
+                    out[rel] = ("link", os.readlink(path))
+                else:
+                    with open(path, "rb") as f:
+                        out[rel] = ("file", f.read())
+        return out
+
+    def test_the_same_names_come_out(self):
+        mine, theirs = self.trees()
+        self.assertEqual(sorted(self.walk(mine)), sorted(self.walk(theirs)))
+
+    def test_the_same_bytes_and_the_same_symlink_target(self):
+        mine, theirs = self.trees()
+        a, b = self.walk(mine), self.walk(theirs)
+        for rel in sorted(b):
+            with self.subTest(rel):
+                self.assertEqual(a[rel], b[rel])
+
+    def test_the_symlink_is_a_symlink_and_not_a_copy(self):
+        """The one member that is not a plain file, and the one
+        `tarfile.data_filter` would have refused: a link to an absolute path.
+        Extracting it as a copy would leave two files where the package has
+        one, and `dpkg -V` would report the difference forever."""
+        mine, _ = self.trees()
+        link = os.path.join(mine, "etc/xdg/autostart/fuckwayland-enable-bridge.desktop")
+        self.assertTrue(os.path.islink(link))
+
+
+class TheGtkDependency(unittest.TestCase):
+    """warandr is one tool of six and the only one that imports GTK."""
+
+    @classmethod
+    def setUpClass(cls):
+        debs = sorted(n for n in os.listdir(RELEASE) if n.endswith(".deb"))
+        if len(debs) != 1:
+            raise unittest.SkipTest("release/ holds %d packages" % len(debs))
+        cls.deb = os.path.join(RELEASE, debs[0])
+
+    def field(self, name):
+        if shutil.which("dpkg-deb") is None:
+            self.skipTest("no dpkg-deb")
+        out = subprocess.run(["dpkg-deb", "-f", self.deb, name],
+                             capture_output=True, text=True, check=True)
+        return out.stdout.strip()
+
+    def test_only_warandr_imports_gi(self):
+        """The premise, and the reason the dependency is arguable at all:
+        `import gi` appears in warandr/ and nowhere else, so five of the six
+        tools work on a machine with no GTK at all."""
+        # the seven directories dh_python3 installs into dist-packages, which
+        # is the whole of what the Depends line is about (gen-gir.py imports
+        # gi too, and is a build-time tool that is not in the package)
+        importers = set()
+        for pkg in ("fwcommon", "wdotool", "wwmctl", "wxprop", "wxrandr",
+                    "warandr", "wmirror"):
+            for base, dirs, names in os.walk(os.path.join(ROOT, pkg)):
+                dirs[:] = [d for d in dirs if d != "__pycache__"]
+                for n in names:
+                    if not n.endswith(".py"):
+                        continue
+                    with open(os.path.join(base, n), encoding="utf-8",
+                              errors="replace") as f:
+                        if re.search(r"^\s*import gi\b", f.read(), re.M):
+                            importers.add(pkg)
+        self.assertEqual(importers, {"warandr"}, sorted(importers))
+
+    @unittest.expectedFailure
+    def test_the_gtk_stack_is_recommended_and_not_required(self):
+        """Fix 57 (deferred: the author's call), finding F6.7.  `Depends:
+        gir1.2-gtk-3.0, python3-gi` pulls the whole GTK 3 stack onto a machine
+        that installed this for `wdotool type` on sway -- and apt will not
+        install the package at all where that stack is unavailable.  Recommends
+        is on by default in apt, so the GUI still arrives for everyone who has
+        not turned it off, and the five command-line tools no longer depend on
+        a toolkit they never import.  The alternative the author may take
+        instead is to keep Depends and pin the rationale in debian/rules,
+        which is why this is a documented gap and not a bug."""
+        depends = self.field("Depends")
+        recommends = self.field("Recommends")
+        for pkg in ("gir1.2-gtk-3.0", "python3-gi"):
+            self.assertIn(pkg, recommends)
+            self.assertNotIn(pkg, depends)
 
 
 if __name__ == "__main__":

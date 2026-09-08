@@ -145,11 +145,16 @@ install.
 
 The tools are meant to be installed **over** the originals, so on a plain X11 session
 (Xfce, i3, GNOME-on-Xorg, KDE-on-Xorg) they detect the session and hand over to the
-real `xdotool`, `wmctrl`, `xprop` or `xrandr` with `execve` and argv untouched: same
-exit status, same signals, same stdio, no extra process. One script then runs on both
-session types. Run under `sudo`, over `ssh root@box` or from cron and we find the
-session's `DISPLAY` and `XAUTHORITY` and hand those over too, so `sudo xdotool key a`
-works *through* us where `sudo /usr/bin/xdotool key a` says `Can't open display`.
+real `xdotool`, `wmctrl`, `xprop` or `xrandr` with `execve`, argv untouched but for
+wxrandr's own options — `--backend`, `--persistent` and `--unsafe-gnome-overlap`, which
+the original has never had — and the same exit status, signals and stdio, no extra
+process. `--persistent` is dropped with a line saying so; `--unsafe-gnome-overlap`
+is refused.
+
+One script then runs on both session types. Run under `sudo`, over `ssh root@box` or
+from cron and we find the session's `DISPLAY` and `XAUTHORITY` and hand those over
+too, so `sudo xdotool key a` works *through* us where `sudo /usr/bin/xdotool key a`
+says `Can't open display`.
 
 ```console
 $ FUCKWAYLAND_PASSTHROUGH=never xdotool key a   # our own code, whatever the session
@@ -412,8 +417,8 @@ On wlroots every injecting command skips that entirely through
 `zwp_virtual_keyboard_v1` and `zwlr_virtual_pointer_v1` and needs no privilege at
 all. The first invocation forks a small daemon that owns the devices, because
 creating them costs about 600ms of hotplug and you should pay it once. It goes away
-again a quarter of an hour after the last command, and at once when its socket goes,
-which is what a logout does to it. **Window
+again a quarter of an hour after the last command, and within fifteen seconds of its
+socket going, which is what a logout does to it. **Window
 management** talks to the compositor: sway and i3 IPC, GNOME Shell through the
 bundled bridge extension, KDE Plasma through KWin scripting, and the
 wlr-foreign-toplevel protocol as the generic fallback. Window ids are real, stable
@@ -1138,7 +1143,7 @@ GNOME. Running this README against that install is also what found the last of
 it, an overlap route whose every message spoke only to somebody who had a clone
 rather than the package. Both desktops report their active layout there, `wayland + kwin` on one and
 `wayland + gnome input-sources` on the other, and stderr is silent on both. The suite
-stands at **2668 tests**.
+stands at **3174 tests**.
 <!-- release-notes: 0.3 -->
 ### 0.3
 
@@ -1186,7 +1191,7 @@ Developed against real desktops, not against a model of them. `vm/` is the rig:
 `vmctl` builds and runs thirteen golden images, each with up to four virtual monitors
 that can be plugged, resized and unplugged from outside the guest, and every head
 screenshotted. `vm/README.md` documents the whole thing and `vm/SETUP.md` is how to
-set the rig up on a machine of your own. `tests/` holds the suite, 2668 tests: unit
+set the rig up on a machine of your own. `tests/` holds the suite, 3174 tests: unit
 tests, wire-level fake compositors and X servers, live-compositor integration,
 hostile-input torture, byte-parity oracles against the real xdotool, wmctrl, xprop
 and xrandr, and one static check that no package ever reaches for PolicyKit or for

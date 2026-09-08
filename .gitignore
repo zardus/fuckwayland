@@ -12,3 +12,6 @@ result-*
 # installs.  The .deb itself is NOT here: scripts/build-deb.sh writes it to
 # release/, which is committed.
 dist/
+
+# vm/live-smoke.sh writes its logs and screenshots here; a run is evidence, not source.
+vm/live-smoke.out/

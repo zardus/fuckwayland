@@ -1173,8 +1173,14 @@ is applied and gnome-shell shows its "Keep changes?" dialog — wxrandr prints a
 one-line warning; confirming it makes Mutter write `~/.config/monitors.xml` at once,
 and the layout then survives a hotplug and a reboot; otherwise the previous layout
 comes back after 20 s and nothing is written (verified on GNOME 46 and 50: nothing is
-written before the confirmation, and there is no D-Bus call to confirm from outside
-the shell). What every desktop does with an applied layout, and how to get one back
+written before the confirmation). Confirming it is a click today: the bridge
+extension does export `ConfirmDisplayChange`, and it works — `(true)` keeps the
+layout and Mutter writes `monitors.xml` at once, `(false)` reverts, and with no
+dialog on screen it answers `(false,)` and changes nothing (measured on GNOME 46,
+50 and 51.beta) — but no tool in this project calls it, so `--persistent` still
+leaves the confirmation to you even where the bridge is up.
+
+What every desktop does with an applied layout, and how to get one back
 from a key, is [Keeping a layout](#keeping-a-layout) below.
 
 That file is **all or nothing**, which is worth knowing before you keep anything in

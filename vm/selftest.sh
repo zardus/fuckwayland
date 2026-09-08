@@ -54,14 +54,16 @@ monitors() {
             --object-path /org/gnome/Mutter/DisplayConfig \
             --method org.gnome.Mutter.DisplayConfig.GetCurrentState \
             | grep -o "'Virtual-[0-9]*'" | tr -d "'" | sort -u ;;
-    kde)   # "Output: 1 Virtual-1 ..." (ANSI-coloured; disabled outputs say "disabled")
-        "$VM" user "$name" -- kscreen-doctor -o 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' \
-            | grep -E '^Output: [0-9]+ Virtual-[0-9]+' | grep -o 'Virtual-[0-9]*' | sort -u ;;
-    kde-x11)  # same tool -- but libkscreen's XRandR backend lists every CONNECTOR the
-              # X server has, disconnected ones included ("Output: 69 Virtual-4 disabled
-              # disconnected"), where KWin on Wayland exports only the plugged ones. So
-              # count the enabled+connected ones, per output BLOCK: 5.27 puts the whole
-              # state on the "Output:" line and 6.x on the indented lines under it.
+    kde|kde-x11)
+              # kscreen-doctor -o, ANSI-coloured, one BLOCK per output: 5.27 puts the
+              # whole state on the "Output:" line and 6.x on the indented lines under
+              # it, so the state has to be read per block and not per line.  On X11
+              # libkscreen's XRandR backend also lists every CONNECTOR the server has,
+              # disconnected ones included ("Output: 69 Virtual-4 disabled
+              # disconnected"), where KWin on Wayland exports only the plugged ones --
+              # hence enabled AND connected.  One parser for both: the Wayland arm used
+              # to grep the "Output:" line alone and counted a head this script had
+              # just unplugged, which is the failure the block parser exists to avoid.
         "$VM" user "$name" -- kscreen-doctor -o 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' \
             | python3 -c '
 import re, sys

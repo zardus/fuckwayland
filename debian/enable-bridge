@@ -26,7 +26,23 @@ set -eu
 UUID='fuckwayland-bridge@fuckwayland'
 STAMP_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/fuckwayland"
 STAMP="$STAMP_DIR/bridge-enabled"
-SYSTEM_STAMP='/var/lib/fuckwayland/installed'
+# The path is a variable so the tests can point it at a temporary tree; nothing
+# on a real system sets FUCKWAYLAND_SYSTEM_STAMP, and the default is the file
+# postinst writes and postrm removes.
+SYSTEM_STAMP="${FUCKWAYLAND_SYSTEM_STAMP:-/var/lib/fuckwayland/installed}"
+
+# The greeter is a GNOME Shell session too, and gdm runs it as its own user with
+# its own dconf.  Enabling the extension there sets it for gdm and for nobody
+# who will ever log in, and gdm's shell then loads a bridge that no tool of ours
+# can reach.  XDG_SESSION_CLASS is what logind sets for it; the GNOME-Greeter
+# component in XDG_CURRENT_DESKTOP is gdm's own marker, and either one alone is
+# enough to be sure.  No stamp is written: this user is not the one being set up.
+case ${XDG_SESSION_CLASS:-} in
+    greeter) exit 0 ;;
+esac
+case :${XDG_CURRENT_DESKTOP:-}: in
+    *:GNOME-Greeter:*) exit 0 ;;
+esac
 
 if [ -e "$STAMP" ] && [ ! "$SYSTEM_STAMP" -nt "$STAMP" ]; then exit 0; fi
 
@@ -47,12 +63,32 @@ case $cur in
         # and then the gsettings list is edited directly -- the same fallback
         # gnome/install-bridge.sh uses.
         if ! (have gnome-extensions && gnome-extensions enable "$UUID" >/dev/null 2>&1); then
+            # A failing `set` is the one case where leaving a stamp would be
+            # wrong: nothing was changed, so say so and let the next login try
+            # again.  A read-only or locked-down dconf does exactly this, and
+            # until now it did it in silence.
             case $cur in
-                '@as []'|'[]') gsettings set org.gnome.shell enabled-extensions "['$UUID']" ;;
-                *)             gsettings set org.gnome.shell enabled-extensions "${cur%]}, '$UUID']" ;;
+                '@as []'|'[]') gsettings set org.gnome.shell enabled-extensions "['$UUID']" \
+                                   || { echo "enable-bridge: gsettings set failed" >&2; exit 1; } ;;
+                *)             gsettings set org.gnome.shell enabled-extensions "${cur%]}, '$UUID']" \
+                                   || { echo "enable-bridge: gsettings set failed" >&2; exit 1; } ;;
             esac
         fi
         ;;
+esac
+
+# enabled-extensions is only half of it: a uuid in disabled-extensions wins, so
+# an extension in both lists never loads.  install-bridge.sh's enable_setting()
+# has cleared the second list since 0.3; this script did not, and the state that
+# leaves is the one a user reaches by disabling the extension once and then
+# reinstalling the package.  Same three sed forms as install-bridge.sh:207-214,
+# for the first, middle and only item of the list.
+cur=$(gsettings get org.gnome.shell disabled-extensions 2>/dev/null || echo '[]')
+case $cur in
+    *"'$UUID'"*)
+        new=$(printf '%s' "$cur" | sed -e "s/, *'$UUID'//" -e "s/'$UUID', *//" -e "s/'$UUID'//")
+        gsettings set org.gnome.shell disabled-extensions "$new" \
+            || { echo "enable-bridge: gsettings set failed" >&2; exit 1; } ;;
 esac
 
 mkdir -p "$STAMP_DIR"

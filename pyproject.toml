@@ -46,3 +46,6 @@ select = ["E4", "E7", "E9", "F", "W"]
 # import the packages under test, so its imports are never at the top of
 # the file. That was 97 identical  comments.
 "tests/**" = ["E402"]
+# The captured xrandr --query output in the parity fixtures ends its mode lines with the
+# trailing space real xrandr prints; byte parity keeps it.
+"tests/test_warandr_parse.py" = ["E402", "W291"]

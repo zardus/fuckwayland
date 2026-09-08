@@ -37,7 +37,13 @@ configure)
     stamp="${DPKG_ROOT:-}/var/lib/fuckwayland/installed"
     if [ ! -e "$stamp" ]; then
         mkdir -p "$(dirname "$stamp")" && : > "$stamp"
-        cat <<'EOM'
+        # `|| true`, because this whole script runs under `set -e` and dpkg is
+        # routinely run with its output down a pipe (`apt install ... | tail`,
+        # a progress filter, a log reader that has gone away).  `cat` then dies
+        # of SIGPIPE, exit 141, and dpkg reports the package's configuration as
+        # failed over a banner nobody was reading -- with the stamp already
+        # written, so a retry prints nothing and the failure looks arbitrary.
+        cat <<'EOM' || true
 
 fuckwayland: wdotool, wwmctl, wxprop, wxrandr, warandr and wmirror are on PATH.
 

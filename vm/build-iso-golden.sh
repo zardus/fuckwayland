@@ -225,7 +225,10 @@ $SCP "$B/vmctl-build.env" "$HERE/build-iso-image.sh" "test@[127.0.0.1]:/tmp/" >/
 $SSH 'sudo -S -p "" install -m 0644 /tmp/vmctl-build.env /etc/vmctl-build.env' <<<test
 set +e
 $SSH 'sudo -S -p "" bash /tmp/build-iso-image.sh' <<<test 2>&1 | tee "$B/stage2.log" | sed 's/^/    /' >&2
-rc=$?
+# PIPESTATUS[0], not $?: $? here is sed's, which is 0 whatever ssh did, so a stage 2
+# that died -- ssh dropped, sudo refused the password, the guest rebooted under it --
+# was reported as "rc 0" in the die message below and the real status was lost.
+rc=${PIPESTATUS[0]}
 set -e
 grep -q VMCTL-BUILD-OK "$B/stage2.log" || die "stage 2 did not finish (rc $rc); see $B/stage2.log"
 # The guest's ERR trap can fire inside a command substitution, where its exit only ends the
