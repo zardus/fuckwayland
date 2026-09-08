@@ -223,21 +223,22 @@ class _ScriptError(Exception):
 
 def _script_line_tokens(line: str, argv: list[str], prog: str) -> list[str]:
     """Tokenize one script line exactly like script_main in xdotool.c:
-    whitespace-separated tokens, leading '"' or '\\'' quotes a token, a line
-    whose first token starts with '#' is a comment, and a token beginning with
-    '$' is replaced wholesale by a positional parameter ($N -> argv[N+1]) or
-    an environment variable. Empty tokens are kept -- `echo A "" B` passes
-    three arguments."""
+    whitespace-separated tokens, leading '"' or '\\'' quotes a token, an
+    unquoted token that starts with '#' ends the line as a comment (xdotool
+    4.20260303.1 does this at any position; 3.2016 only honoured it first, and
+    the parity oracle is the 4.x one), and a token beginning with '$' is
+    replaced wholesale by a positional parameter ($N -> argv[N+1]) or an
+    environment variable. Empty tokens are kept -- `echo A "" B` passes three
+    arguments."""
     tokens: list[str] = []
     i, n = 0, len(line)
-    first = True
     while i < n:
         while i < n and line[i] in " \t":
             i += 1
         if i >= n:
             break
         c = line[i]
-        if c == "#" and first:
+        if c == "#":
             break
         if c in "\"'":
             i += 1
@@ -252,7 +253,6 @@ def _script_line_tokens(line: str, argv: list[str], prog: str) -> list[str]:
                 j += 1
             raw = line[i:j]
             i = j + 1
-        first = False
         if raw.startswith("$"):
             name = raw[1:]
             # `in "0123456789"` is True for the empty string, so a bare "$" became "$0" -- the script path --
@@ -502,7 +502,10 @@ def main(argv: list[str] | None = None) -> int:
         code = getattr(e, "exit_code", 1) or 1
     except Exception as e:
         # one line, never a traceback: an out-of-range `sleep`, a compositor that drops the connection
-        # mid-command, a keymap that will not parse.
+        # mid-command, a keymap that will not parse.  DEBUG set to anything (including "") is the escape hatch
+        # for a bug report: the exception propagates and Python prints the traceback it would have.
+        if os.environ.get("DEBUG") is not None:
+            raise
         stdio.warn("%s: %s\n" % (prog, e))
         # An OSError here is a write to stdout that failed (a full disk, a quota, `>/dev/full`): the flush below
         # is about to fail with the same errno, and the originals print one line, not two.

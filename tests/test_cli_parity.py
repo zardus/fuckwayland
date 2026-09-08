@@ -36,9 +36,40 @@ def skip(reason):
     raise unittest.SkipTest(reason)
 
 
+from wdotool import cli            # noqa: E402  (after the passthrough guard above)
+
 REAL = shutil.which("xdotool")
 if not REAL:
     skip("no real xdotool on PATH; run under nix develop")
+
+
+def _oracle_version(exe):
+    """The last word of `xdotool version`, or None when the binary cannot say.
+
+    Both generations print one line, `xdotool version <v>`, and both answer it
+    with no X display on this host (measured: rc 0 from Ubuntu's
+    3.20160805.1)."""
+    try:
+        p = subprocess.run([exe, "version"], capture_output=True, timeout=30)
+    except OSError:
+        return None
+    text = p.stdout.decode("utf-8", "replace").strip()
+    if p.returncode != 0 or not text.startswith("xdotool version "):
+        return None
+    return text.split()[-1]
+
+
+# Every comparison below is byte-for-byte against ONE xdotool: the version
+# string is in the help text, in `version`, and in the usage blocks. Ubuntu
+# 26.04 ships 3.20160805.1, which fails at the very first compare (`version`)
+# and takes the other ~40 with it -- a red file that says nothing about this
+# clone. The pinned oracle is the flake's 4.20260303.1; scripts/parity-oracle.sh
+# puts it on PATH and is what actually runs these.
+ORACLE_VERSION = _oracle_version(REAL)
+if ORACLE_VERSION != cli.XDO_VERSION:
+    skip("%s is xdotool %s; this clone is written against %s -- run "
+         "scripts/parity-oracle.sh (or nix develop)"
+         % (REAL, ORACLE_VERSION or "unreadable", cli.XDO_VERSION))
 
 # Shim named "xdotool" so prog-name-bearing messages compare byte-for-byte.
 SHIMDIR = tempfile.mkdtemp(prefix="wdo_parity_")

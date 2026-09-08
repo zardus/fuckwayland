@@ -86,9 +86,11 @@ def _run_all():
         os.environ.pop("WD_TEST_UNSET", None)
 
         # tokenizing: comments, blank lines, quoting, mid-token $ and # are literal.
-        # '#' comments a whole LINE (the C tool only tests it at the start of the
-        # first token), and an empty token is an argument, not something to drop:
-        # `echo A "" B` passes three arguments in xdotool.
+        # An unquoted token starting with '#' ends the line as a comment wherever it
+        # stands (measured against xdotool 4.20260303.1, the parity oracle: `echo
+        # before # trailing` prints `before`; 3.2016 only honoured the first token),
+        # while `x#notcomment`, "#quoted" and \#escaped are ordinary tokens. An empty
+        # token is an argument, not something to drop: `echo A "" B` passes three.
         p = script(
             "# full-line comment\n"
             "\n"
@@ -96,14 +98,16 @@ def _run_all():
             'rec one "two words" \'three words\' plain$HOME x#notcomment\n'
             "rec before # trailing comment\n"
             'rec "" empty-kept\n'
+            'rec quoted "#not" \'#either\' \\#nor\n'
         )
         tmpfiles.append(p)
         rc, out, err = run([p])
         assert rc == 0 and err == "", (rc, err)
         assert CALLS == [
             ("one", "two words", "three words", "plain$HOME", "x#notcomment"),
-            ("before", "#", "trailing", "comment"),
+            ("before",),
             ("", "empty-kept"),
+            ("quoted", "#not", "#either", "\\#nor"),
         ], CALLS
 
         # $N and $ENV expansion; quoted "$1" and '$2' still expand; env value with
