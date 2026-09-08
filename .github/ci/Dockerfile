@@ -22,4 +22,6 @@ RUN curl -fsSL "https://nodejs.org/dist/${NODE}/node-${NODE}-linux-x64.tar.xz" |
 # The suite is not written to run as root (the root daemon listens on /run and a few
 # tests skip themselves there). uid 1000 because the sudo fixtures name SUDO_UID=1000
 # and the handover resolves it through passwd; the checkout is chowned to it in the job.
-RUN useradd -m -u 1000 -s /bin/bash ci && install -d -m 0700 -o ci -g ci /tmp/xdg-ci
+# The 24.04+ base images ship an `ubuntu` user on uid 1000; it goes so ci can have it.
+RUN if id ubuntu >/dev/null 2>&1; then userdel -r ubuntu; fi \
+    && useradd -m -u 1000 -s /bin/bash ci && install -d -m 0700 -o ci -g ci /tmp/xdg-ci

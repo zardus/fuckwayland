@@ -440,16 +440,21 @@ phase_nodialog() {
     local calls other
     calls="grep -E '^method call ' $BUSLOG"
     n=$(guest "$calls | grep -c 'interface=org.freedesktop.portal\\.'" | tr -d ' \r\n' || true); n=${n:-0}
-    # Inhibit and Session are the editor's own (a GTK 4 app registers a session
-    # inhibit monitor through the portal: measured on GNOME 50.1 and 51.beta as
-    # Inhibit.CreateMonitor + Session.Close from gnome-text-editor, and not on
-    # 46.0); the claim here is about the six tools, which touch Settings alone.
+    # A GTK 4 app registers a session-inhibit monitor through the portal and
+    # then talks to it (measured on GNOME 50.1 and 51.beta: Inhibit.CreateMonitor,
+    # Request.Close and Session.Close from gnome-text-editor's connection, none
+    # of it on 46.0).  None of the six tools ever inhibits, so every connection
+    # that called Inhibit is an app, and its portal traffic is not ours to judge.
+    # What is left has to be Settings and nothing else.
+    local apps pat
+    apps=$(guest "$calls | grep 'interface=org.freedesktop.portal.Inhibit' | sed -n 's/.*sender=\\([^ ]*\\).*/\\1/p' | sort -u" | tr -d '\r' || true)
+    pat=$(printf '%s\n' "$apps" | grep . | sed 's/[.:]/\\&/g' | sed 's/^/sender=/' | paste -sd'|' || true)
     other=$(guest "$calls | grep 'interface=org.freedesktop.portal\\.' \
-                 | grep -vE 'interface=org.freedesktop.portal.(Settings|Inhibit|Session)' | head -5" || true)
+                 | grep -v 'interface=org.freedesktop.portal.Settings' ${pat:+| grep -vE '$pat'} | head -5" || true)
     if [ -z "$other" ]; then
         if [ "$n" = 0 ]; then pass "no portal method call at all during the whole smoke"
-        else pass "no portal method call other than Settings, Inhibit or Session ($n portal calls)"; fi
-    else fail "a portal method call that is not Settings (or the editor's Inhibit/Session): $(ev "$other")"; fi
+        else pass "no portal method call other than Settings from anything but the editor ($n portal calls; app connections: ${apps:-none})"; fi
+    else fail "a portal method call that is not Settings and not the editor's: $(ev "$other")"; fi
     other=$(guest "$calls | grep 'interface=org.freedesktop.PolicyKit1' | head -3" || true)
     if [ -z "$other" ]; then pass "no PolicyKit method call on the session bus during the whole smoke"
     else fail "a PolicyKit call: $(ev "$other")"; fi

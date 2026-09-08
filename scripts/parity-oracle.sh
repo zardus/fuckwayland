@@ -152,8 +152,14 @@ distro=$(PATH=${PATH#"$prefix":} command -v wmctrl || true)
 [ -n "$distro" ] || die "no second wmctrl outside $prefix to check the git generation against"
 dhelp=$("$distro" --help | wc -c)
 printf 'parity-oracle: %s --help is %s bytes\n' "$distro" "$dhelp"
-[ "$dhelp" = 7179 ] || die "$distro --help is $dhelp bytes, expected the 7179-byte git generation"
-out=$(PATH=${PATH#"$prefix":} WWMCTL_WMCTRL_GENERATION=git python3 tests/test_wwmctl_cli.py 2>&1) ||
+# 26.04 ships the git generation (7179 bytes); 24.04 the plain 1.07 (6801), the same
+# generation as the nix oracle, which is still a second binary worth the run.
+case $dhelp in
+    7179) gen=git ;;
+    6801) gen=1.07; printf 'parity-oracle: %s is the plain 1.07 generation (24.04 ships that one)\n' "$distro" ;;
+    *) die "$distro --help is $dhelp bytes, neither the 6801-byte 1.07 nor the 7179-byte git generation" ;;
+esac
+out=$(PATH=${PATH#"$prefix":} WWMCTL_WMCTRL_GENERATION=$gen python3 tests/test_wwmctl_cli.py 2>&1) ||
   { printf '%s\n' "$out"; die "test_wwmctl_cli failed against the distro wmctrl $distro"; }
 printf '%s\n' "$out" | tail -3
 
