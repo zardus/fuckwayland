@@ -1,0 +1,98 @@
+fuckwayland for Fedora
+======================
+
+Nothing is published anywhere yet -- COPR and Fedora proper are the owner's
+call, not a licence problem any more: the tree is BSD-2-Clause since HEAD
+375d815, which is the valid SPDX expression Fedora requires, and the spec says
+`License: BSD-2-Clause` with `%license LICENSE` in %files.  Today the route is:
+clone, build, install your own build.
+
+  sh scripts/build-rpm.sh            # -> dist/*.rpm, three noarch packages
+  sudo dnf install ./dist/*.rpm
+
+`--no-deps` fails instead of installing build tools, `--lint` runs rpmlint
+with packaging/rpm/fuckwayland.rpmlintrc, `--keep` leaves the scratch topdir
+under dist/rpmbuild, and `--help` prints the header of the script.
+
+Three packages, not one
+-----------------------
+
+  fuckwayland
+        the six commands, the udev rule, the modules-load line and the
+        warandr menu entry.
+  gnome-shell-extension-fuckwayland-bridge
+        the bridge extension, the per-user enabler and its autostart entry.
+        `Supplements: (fuckwayland and gnome-shell)`, so dnf installs it by
+        itself on a machine that has both halves and on no other -- a sway or
+        KDE box gets the tools and no extension.  The .deb cannot say that;
+        it carries the extension everywhere.
+  gnome-shell-extension-fuckwayland-overlap
+        the second, separate extension, the one behind
+        `wxrandr --unsafe-gnome-overlap`.  No Supplements, on purpose:
+        nothing installs it for you, nothing enables it, and it is the only
+        thing here that can cost you the session you are sitting in.
+
+What differs from the .deb, and why
+-----------------------------------
+
+  * Python lands in %{python3_sitelib} = /usr/lib/python3.14/site-packages,
+    which is version-bound, so the auto-generated dependency is
+    `python(abi) = 3.14`.  Fedora 43 and 44 both ship python3 3.14.7, so one
+    noarch build covers both; rawhide is 3.15 and needs its own.  (The .deb's
+    "one file for both releases" story survives here only by accident of two
+    releases sharing a python.)
+  * The helper is /usr/libexec/fuckwayland/enable-bridge.  It is the same
+    script the .deb installs -- packaging/common/enable-bridge -- and only the
+    autostart entry's Exec= line is rewritten at build time.
+  * /etc/xdg/autostart/fuckwayland-enable-bridge.desktop is a plain file, not
+    a symlink.  rpm marks nothing %config unless the spec says so, so an erase
+    takes it; debhelper would have made it a conffile that outlives the
+    package, which is the reason for the .deb's symlink.
+  * GTK is `Recommends: python3-gobject gtk3`, not a hard dependency.  Weak
+    deps are on by default in dnf, so the warandr GUI still arrives for
+    everyone who has not turned them off, and `dnf install fuckwayland` on a
+    box with no GNOME pulls in no toolkit.  Fedora has no gir1.2-* split:
+    Gtk-3.0.typelib is inside gtk3 itself.
+  * The X11 handover's install hint names four packages, not two: Fedora ships
+    one binary per package (xprop, xrandr), where Debian has x11-utils and
+    x11-xserver-utils.  The tools print the right one for the machine they are
+    on -- see fwcommon/distro.py.
+  * `acl` is not on a Fedora cloud image (measured: no setfacl, no getfacl),
+    so the removal's ACL teardown takes the python fallback
+    (`os.removexattr`).  Nothing here requires acl for it.
+
+/dev/uinput
+-----------
+
+Fedora's own 70-uaccess.rules does not mention uinput (measured on Fedora 44),
+so the node is root:root 0600 with no ACL until this package's rule tags it
+`uaccess`.  %post applies the rule to the running system, so no reboot is
+needed; %postun on the last erase puts the node back.  The reload in %post is
+ours on purpose although systemd-udev carries a file trigger on
+/usr/lib/udev/rules.d: that trigger runs at the end of the transaction, after
+this scriptlet, so without our own reload the `udevadm trigger` that follows
+would re-tag the node against the old rule set.
+
+Anyone who can open /dev/uinput can type as you.  The threat model is in
+README.md.
+
+SELinux
+-------
+
+Nothing in the payload asks for a non-default label: the commands are
+/usr/bin scripts (bin_t), the extensions are /usr/share data (usr_t), the
+helper is under /usr/libexec.  A desktop user on Fedora is unconfined, so
+opening /dev/uinput once the ACL is there needs no policy of ours.  The rig's
+fedora44-* flavors assert that `ausearch -m avc` is empty after the tools have
+run; until those goldens are built, that claim is untested rather than proven.
+
+The bridge, and the one re-login
+--------------------------------
+
+Identical to the .deb, down to the stamp: gnome-shell scans extension
+directories only at login, enabling an extension is a per-user dconf setting,
+and rpm runs as root with possibly no session on the machine.  So the
+extension is installed system-wide and enabled in each user's first GNOME
+session by the autostart entry.  Install, log out, log back in.
+
+ -- Antonio Bianchi <antonio.bianchi.333@gmail.com>

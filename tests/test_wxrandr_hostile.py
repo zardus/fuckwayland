@@ -19,6 +19,7 @@ import json
 import os
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -115,6 +116,62 @@ class ApplyIsIgnored(FakeWlr):
         start = time.monotonic()
         p = self.wxrandr("--output", "HEAD-1", "--pos", "100x0", timeout=90)
         self.assertLess(time.monotonic() - start, 40)
+        self.assertEqual(p.returncode, 1)
+        self.assertEqual(p.stderr, "xrandr: timed out waiting for the "
+                         "compositor to apply the output configuration\n")
+
+
+class HyprlandUnderTheWlrBackend(FakeWlr):
+    """U08: `--backend wlr` on a session that has a Hyprland IPC socket, and the same run without one.
+
+    Hyprland advertises `zwlr_output_manager_v1` version 4 and takes exactly ONE apply per session through it:
+    the second times out at 10 s with nothing changed and no `[COutputConfiguration] Applying configuration`
+    line in its own log, and with a second output present even the first one hangs -- identically for
+    `wlr-randr`, which has no timeout and hangs for ever [M recon2/hyprland.md §4, and the same on Hyprland
+    0.56.2 in recon2/arch.md]. The generic timeout sentence is true there and useless: the answer is a
+    different backend, and this is the clause that says which.
+
+    Detection sends a Hyprland session to `hypr`, so the only way to reach this line on Hyprland is to have
+    asked for `--backend wlr` -- which is allowed, and which the smoke's control runs do.
+
+    The fake compositor is `mute-apply`, which takes the apply and never answers: the same wire behaviour,
+    without a Hyprland."""
+
+    MODE = "mute-apply"
+
+    def hypr_socket(self, sig="dd220efe_1788885217_674420693"):
+        """`$XDG_RUNTIME_DIR/hypr/<signature>/.socket.sock`, where `session.find_hypr_socket()` looks.
+
+        The runtime dir is the test's own (`self.tmp`, which also holds the fake `wayland-fake` socket, so it
+        sorts first among the candidates), and the socket is a real listening one: the finder stats the path
+        and checks its owner, and a plain file would be found just the same -- but a socket is what a live
+        Hyprland leaves, and the clause must not depend on anything more than the path existing."""
+        d = os.path.join(self.tmp, "hypr", sig)
+        os.makedirs(d)
+        path = os.path.join(d, ".socket.sock")
+        srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.addCleanup(srv.close)
+        srv.bind(path)
+        srv.listen(1)
+        # the compositor's own lock file, which is what picks the live instance out of the stale ones
+        open(os.path.join(d, "hyprland.lock"), "w").close()
+        return path
+
+    def test_the_timeout_carries_the_hyprland_clause(self):
+        self.hypr_socket()
+        start = time.monotonic()
+        p = self.wxrandr("--output", "HEAD-1", "--pos", "100x0", timeout=90)
+        self.assertLess(time.monotonic() - start, 40)
+        self.assertEqual(p.returncode, 1)
+        self.assertEqual(p.stderr,
+                         "xrandr: timed out waiting for the compositor to apply the output configuration"
+                         " (Hyprland answers only the first output-configuration apply of a session;"
+                         " use --backend hypr)\n")
+
+    def test_without_the_instance_directory_it_is_todays_line(self):
+        """The clause is a Hyprland fact and must not appear on any other wedged wlroots compositor: the same
+        run with no `hypr/` under the runtime dir is byte-identical to what ApplyIsIgnored pins."""
+        p = self.wxrandr("--output", "HEAD-1", "--pos", "100x0", timeout=90)
         self.assertEqual(p.returncode, 1)
         self.assertEqual(p.stderr, "xrandr: timed out waiting for the "
                          "compositor to apply the output configuration\n")

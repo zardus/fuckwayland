@@ -51,7 +51,10 @@ import xml.etree.ElementTree as ET
 
 from wxrandr.core import round_half_away, warn
 
-#: what Mutter reads, and the copy we keep beside it
+#: what Mutter reads, and the copy we keep beside it.  Muffin reads
+#: `cinnamon-monitors.xml` in the same directory (the string in
+#: libmuffin.so.0.0.0 [M recon2/cinnamon.md §2.2]), which reaches every function
+#: here as the `name` argument -- wxrandr/mutter.py's Flavor carries it.
 NAME = "monitors.xml"
 BACKUP_SUFFIX = ".wxrandr-backup"
 #: a saved configuration file is a few KB; anything huge is not one, and we do not slurp it
@@ -87,9 +90,10 @@ def _owner(uid_path) -> tuple[int, int] | None:
     return st.st_uid, st.st_gid
 
 
-def default_path(env=None, uid=None) -> str:
-    """`$XDG_CONFIG_HOME/monitors.xml`, else `~/.config/monitors.xml` -- the path Mutter
-    itself builds (it never looks anywhere else in a user's home).
+def default_path(env=None, uid=None, name=NAME) -> str:
+    """`$XDG_CONFIG_HOME/<name>`, else `~/.config/<name>` -- the path Mutter
+    itself builds (it never looks anywhere else in a user's home), and the path Muffin
+    builds for `cinnamon-monitors.xml`.
 
     `uid` is the graphical session's owner (`session.session_uid()`).  When it is ours,
     or unknown, the environment is that session's own and is read as before.  When it is
@@ -100,11 +104,11 @@ def default_path(env=None, uid=None) -> str:
     if uid is not None and uid != os.geteuid():
         home = home_of(uid)
         if home:
-            return os.path.join(home, ".config", NAME)
+            return os.path.join(home, ".config", name)
     base = env.get("XDG_CONFIG_HOME") or ""
     if not base.startswith("/"):
         base = os.path.join(env.get("HOME", ""), ".config")
-    return os.path.join(base, NAME)
+    return os.path.join(base, name)
 
 
 class Region:
@@ -258,11 +262,11 @@ def problems(configs, layout_mode=None):
 
 # -- reading it, and keeping a copy ------------------------------------------
 
-def snapshot(path=None, env=None, uid=None):
+def snapshot(path=None, env=None, uid=None, name=NAME):
     """`(path, bytes)` of the saved configuration, or None when there is none to keep
     (a fresh GNOME install has no file at all).  Reads; never writes.  `uid`: whose
-    file, see `default_path()`."""
-    p = path or default_path(env, uid)
+    file, `name`: which file, see `default_path()`."""
+    p = path or default_path(env, uid, name)
     try:
         if os.path.getsize(p) > MAX_BYTES:
             return None
@@ -272,10 +276,15 @@ def snapshot(path=None, env=None, uid=None):
         return None
 
 
-def describe(snap, layout_mode=None):
+def describe(snap, layout_mode=None, desktop="GNOME", compositor="Mutter"):
     """The warnings to print before a persistent apply, given `snapshot()`'s result:
-    what Mutter has already thrown away, and what this apply is about to replace.
-    `layout_mode` is the session's own, for the entries that do not name one."""
+    what the compositor has already thrown away, and what this apply is about to replace.
+    `layout_mode` is the session's own, for the entries that do not name one; `desktop`
+    and `compositor` are who threw it away, which on a Cinnamon session is Cinnamon and
+    Muffin and not GNOME and Mutter (muffin carries Mutter's reader and Mutter's
+    all-or-nothing rule with it [M recon2/cinnamon.md §2.2]).  The second name is not
+    decoration: the whole point of the sentence is that one reader takes the file or
+    leaves it, so the sentence has to say whose reader."""
     if not snap:
         return []
     p, data = snap
@@ -285,9 +294,9 @@ def describe(snap, layout_mode=None):
         bad = ["the file is not valid XML (%s)" % e]
     if not bad:
         return []
-    return ["GNOME has already discarded %s -- %s -- so every layout saved in it is "
-            "inactive; Mutter's reader drops the whole file, not the one bad entry\n"
-            % (p, bad[0])]
+    return ["%s has already discarded %s -- %s -- so every layout saved in it is "
+            "inactive; %s's reader drops the whole file, not the one bad entry\n"
+            % (desktop, p, bad[0], compositor)]
 
 
 def keep_backup(snap):

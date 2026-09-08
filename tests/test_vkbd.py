@@ -35,7 +35,17 @@ os.environ.setdefault("WDOTOOL_LAYOUT", "us")
 
 import wl_fake
 from support import RecorderDev
+from fwcommon.wayland_mini import WlConn
 from wdotool import cli, daemon, keymap, us_keymap, vkbd, xkbmap
+
+
+def cosmic_globals(served):
+    """cosmic-comp's own recorded registry, minus what this fake serves itself.
+
+    tests/fixtures/registries/cosmic.txt is the 53 globals a COSMIC 1.7 session announced
+    [M recon2/cosmic.md §4]. `zwp_virtual_keyboard_manager_v1` is one of them, which is the whole reason
+    typing works there with no privilege at all."""
+    return [g for g in wl_fake.registry_fixture("cosmic") if g[0] not in served]
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 FIXTURES = os.path.join(HERE, "fixtures", "keymaps")
@@ -63,16 +73,20 @@ class KeyboardCompositor(wl_fake.Server):
                        KWin 6.6.6: measured, they do not implement it)
       refuse_create    answer create_virtual_keyboard with a protocol error
       refuse_keymap    answer keymap() with a protocol error
+      extra_globals    more (interface, version) rows to advertise and bind
+                       nothing for -- a recorded registry, so that "which
+                       compositor is this" is a question about real bytes
     """
 
     MANAGER = vkbd.MANAGER
     PREFIX = "wdotool-vk-"
 
     def __init__(self, manager_version=1, refuse_create=False,
-                 refuse_keymap=False, with_seat=True):
+                 refuse_keymap=False, with_seat=True, extra_globals=()):
         self.refuse_create = refuse_create
         self.refuse_keymap = refuse_keymap
         self.with_seat = with_seat
+        self.extra_globals = list(extra_globals)
         self.created = []        # vk object ids
         self.keymaps = []        # (format, bytes)
         self.keys = []           # (keycode, state)
@@ -80,7 +94,8 @@ class KeyboardCompositor(wl_fake.Server):
         super().__init__(manager_version)
 
     def advertise(self):
-        return ([("wl_seat", 7)] if self.with_seat else []) + [("wl_output", 4)]
+        return (([("wl_seat", 7)] if self.with_seat else [])
+                + [("wl_output", 4)] + self.extra_globals)
 
     def new_state(self):
         return {"seat": None, "mgr": None, "vk": None}
@@ -490,6 +505,52 @@ class ThePolicy(VkbdTest):
         d = self.daemon(uinput=True)
         d.op_type("a", 0, False)
         self.assertEqual(d.kb.events, [("KEY", 30, 1), ("KEY", 30, 0)])
+
+
+class ACosmicShapedSession(VkbdTest):
+    """The keyboard half on COSMIC, over cosmic-comp's own registry.
+
+    Measured on a live COSMIC 1.7 with no `/dev/uinput` node on the box at all: `wdotool key a`,
+    `wdotool type 'hello cosmic'` and `wdotool key Return` all exited 0 and the focused `foot` read back
+    `ahello cosmichello cosmic` [M recon2/cosmic.md §3]. Its sibling class in tests/test_vptr.py is the
+    other half of the same session, where clicking has nothing to fall back to."""
+
+    comp_kw = {"extra_globals": cosmic_globals(
+        ("wl_seat", "wl_output", vkbd.MANAGER))}
+
+    def test_the_session_these_tests_talk_to_offers_the_keyboard_and_no_pointer(self):
+        """Read off the socket the daemon uses rather than out of the fixture file: a `comp_kw` that
+        subtracted the wrong globals would leave the recording right and this session wrong, and the whole
+        point of the class is that COSMIC's two input halves come apart."""
+        conn = WlConn(self.comp.path)
+        self.addCleanup(conn.close)
+        ifaces = {iface for iface, _ver in conn.get_registry().values()}
+        self.assertIn(vkbd.MANAGER, ifaces)
+        self.assertNotIn("zwlr_virtual_pointer_manager_v1", ifaces)
+
+    def test_vkbd_on_type_types(self):
+        d = self.daemon(uinput=True)
+        d.op_type("hi", 0, False, None, None, "on")
+        self.assertEqual(self.comp.pressed(), [35, 23])
+        self.assertEqual(d.kb.events, [], "nothing may reach the kernel device")
+
+    def test_auto_types_through_the_protocol_when_there_is_no_uinput(self):
+        """Which is the COSMIC desktop as measured: no /dev/uinput node, and typing landed anyway."""
+        d = self.daemon(uinput=False)
+        warns = d.op_type("hi", 0, False)
+        self.assertEqual(self.comp.pressed(), [35, 23])
+        self.assertTrue(any("zwp_virtual_keyboard_v1" in w for w in warns), warns)
+
+    def test_the_refusal_no_longer_puts_cosmic_on_the_wrong_side(self):
+        """The sentence a session without the protocol gets. COSMIC has it, so COSMIC belongs in the second
+        half of the list; naming it in the first half would send a user looking for a bug that is not
+        there."""
+        self.comp.manager_version = None
+        d = self.daemon(uinput=True)
+        with self.assertRaises(RuntimeError) as cm:
+            d.op_type("hi", 0, False, None, None, "on")
+        said = str(cm.exception)
+        self.assertIn("(Mutter and KWin do not; sway, Hyprland, the wlroots family and COSMIC do)", said)
 
 
 class TheGnomePathIsUntouched(VkbdTest):

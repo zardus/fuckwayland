@@ -130,13 +130,24 @@ def cmd_getdisplaygeometry(ctx, args):
             shell = True
     w, h, guessed = ctx.daemon().geometry_status()
     if guessed:
-        # B5: printing a made-up 1920x1080 with rc 0 when no compositor could be reached made
-        # `getdisplaygeometry` useless as a session probe -- it was the one command that "succeeded" with no
-        # session at all.
-        raise NoSessionError(
-            "wdotool: no Wayland session found: cannot query the output "
-            "layout (no compositor reachable); not guessing a display size"
-        )
+        # The daemon's geometry is a wl_output query, so a session with a layout and no Wayland socket -- i3 --
+        # had none: this command exited 2 with "no Wayland session found" on a session whose outputs the same
+        # process was already talking to, where the backend answers `1920 1080` off GET_OUTPUTS
+        # [M recon2/i3.md §2b]. Ask the window backend before refusing.
+        try:
+            w, h = ctx.backend().display_size()
+        except (CmdError, NoSessionError, OSError):
+            # Narrow on purpose: `_unsupported()` (CmdError) is how a backend says it cannot answer and
+            # NoSessionError how detection says there is none, so those two are the refusal below. A
+            # TypeError out of a malformed GET_OUTPUTS is a bug in us and must not be reported as "no
+            # Wayland session found", which would be a lie about the session.
+            # B5: printing a made-up 1920x1080 with rc 0 when no compositor could be reached made
+            # `getdisplaygeometry` useless as a session probe -- it was the one command that "succeeded" with
+            # no session at all. That refusal stands when there is no backend either.
+            raise NoSessionError(
+                "wdotool: no Wayland session found: cannot query the output "
+                "layout (no compositor reachable); not guessing a display size"
+            ) from None
     if shell:
         sys.stdout.write("WIDTH=%d\nHEIGHT=%d\n" % (w, h))
     else:

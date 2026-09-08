@@ -1,0 +1,32 @@
+# vmctl flavor nixos-sway: NixOS 26.05 + sway 1.12 (wlroots) with Xwayland, foot, grim;
+# greetd autologin ([initial_session]) of user test (uid 1000, password test, NOPASSWD
+# sudo) into sway on vt 1.  Native display tool: swaymsg -t get_outputs, with wlr-randr
+# as the second, independent reader.
+#
+# THIS FILE IS NOT CLOUD-INIT USER-DATA, and unlike every other flavor here it is not a
+# yaml document at all -- it is the headers and the reasons, and nothing else.  A NixOS
+# image is a configuration, not a base image plus a package list: the whole flavor is
+# vm/nixos/{flake.nix,common.nix,nixos-sway.nix}, built by vm/build-nixos-golden.sh with
+# `nix build`, root key and desktop and autologin already inside it.  NixOS publishes no
+# cloud image (the 26.05 release directory carries two ISOs and nothing else) and runs no
+# cloud-init, so the seed `vmctl start` attaches is read by nobody in the guest
+# [recon2/nixos].  `vmctl build` refuses this flavor by name and points at the builder.
+#
+# What it is for: the flake's nixosModules.default, end to end, on the distribution the
+# module exists for.  Everything the .deb does -- the tools on PATH, the uinput uaccess
+# rule, the bridge, the overlap extension installed and enabled for nobody -- is one
+# option here, and this image is where that claim is measured instead of argued.
+#
+# The package list is the other thing that changes shape: vm/reference/ holds a
+# dpkg-query list for every other flavor and `nix path-info -r /run/current-system` for
+# this one.  Store path names, not package names; the file says so in its first line.
+#
+# Two specialisations are in the image (vm/nixos/common.nix): the default, and
+# `without-fuckwayland` with the module off.  `switch-to-configuration test` between them
+# is the offline, in-guest analogue of `apt-get remove` and re-install -- it reloads the
+# udev rules and swaps the system path in one step, no network and no rebuild.
+#
+# vmctl-nix: nixos-sway
+# vmctl-desktop: sway
+# vmctl-distro: nixos
+# vmctl-ci: push

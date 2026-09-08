@@ -5,11 +5,13 @@ fixes allowed, API changes need a note.
 
 These tools are drop-in replacements *installed over* the originals
 (`/usr/local/bin/xdotool` is us, `/usr/bin/xdotool` is the distribution's).
-On Wayland that is the whole point. On a plain X11 session (Xfce, i3, and
-GNOME/KDE on Xorg) it is a regression: the X server is authoritative there and
-the originals have XTEST, the real property store and real RandR, which we
-cannot beat from outside. So on X11 we get out of the way and `execve()` the
-original with the argv we were given.
+On Wayland that is the whole point. On a plain X11 session (Xfce, i3, MATE,
+Cinnamon, LXQt/Openbox, GNOME/KDE on Xorg) it is a regression: the X server is
+authoritative there and the originals have XTEST, the real property store and
+real RandR, which we cannot beat from outside. Every desktop in that list was
+measured on a live one; docs/Technical.md section 2 carries the same
+enumeration and the numbers behind it. So on X11 we get out of the way and
+`execve()` the original with the argv we were given.
 
 Three parts:
 
@@ -45,6 +47,8 @@ import os
 import signal
 import sys
 
+from fwcommon import distro
+
 # Test seams (production values). `session_kind()` looks at nothing else, so a
 # test can describe a whole session with a temporary directory.
 _X11_SOCK_DIR = "/tmp/.X11-unix"
@@ -69,6 +73,9 @@ _OVERRIDE = {
     "xprop": "WXPROP_REAL_XPROP",
     "xrandr": "WXRANDR_REAL_XRANDR",
 }
+#: the Debian names, which are `fwcommon/distro.py`'s debian column and are pinned equal to it by
+#: tests/test_distro.py. The message below asks that table, so the package named follows the box's own
+#: distribution: `dnf install xprop` on Fedora, `pacman -S xorg-xprop` on Arch, an attribute path on NixOS.
 _PACKAGE = {
     "xdotool": "xdotool",
     "wmctrl": "wmctrl",
@@ -728,13 +735,18 @@ def _is_help_request(tool, args):
 def _missing_message(tool, x11=True):
     """Exit 127's line.  `x11` is False when the session is not an X11 one and the handover was asked for
     anyway (`FUCKWAYLAND_PASSTHROUGH=always`, `wxrandr --backend x11`): the reason to install the original
-    is then the request rather than the session, and "this is an X11 session" would be untrue there."""
+    is then the request rather than the session, and "this is an X11 session" would be untrue there.
+
+    The install command comes from `fwcommon.distro`, keyed on `/etc/os-release`: this line printed
+    `apt install xdotool` on a NixOS box with no apt on it, and named packages Fedora and Arch do not have
+    [M recon2/nixos.md, fedora.md, arch.md]. Debian's bytes are unchanged, and are also what a distribution
+    we cannot identify gets."""
     why = ("this is an X11 session" if x11
            else "a handover to the real tool was asked for")
     return (
         "%s: this is fuckwayland's clone and %s, but no "
-        "real %s was found on PATH -- install it (apt install %s) or set "
-        "%s=/path/to/%s\n" % (tool, why, tool, _PACKAGE.get(tool, tool),
+        "real %s was found on PATH -- install it (%s) or set "
+        "%s=/path/to/%s\n" % (tool, why, tool, distro.hint(tool),
                               _OVERRIDE.get(tool, ""), tool)
     )
 

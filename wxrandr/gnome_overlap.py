@@ -160,6 +160,46 @@ def generation_for(version):
     return None
 
 
+#: Cinnamon's Muffin speaks the same DisplayConfig and enforces the same adjacency rule, so a Cinnamon user
+#: meets exactly the refusal this flag exists for -- and there is nothing here that could answer it.  The
+#: route reads a private `MetaMonitorsConfig` at offsets chosen from GENERATIONS, and every one of those
+#: records is keyed on a version muffin does not have: its GIR namespace is `Meta-0` and its library
+#: `libmuffin.so.0` for every release ever made, where mutter numbers both (`Meta-14`, `Meta-18`, `Meta-51`)
+#: [M recon2/cinnamon.md §2.3].  Nothing to key a description on is not a gap to be filled in later by
+#: measuring one more build; it is the reason this is a sentence and not a table row.
+CINNAMON_REASON = ("this is Cinnamon, whose Meta-0 typelib has no generation to check")
+
+#: An X11 session reaches the same flag with the opposite problem: it does not need it.  The X server places
+#: overlapping monitors natively, which is why `--unsafe-gnome-overlap` on a handed-over run is already
+#: refused in these words -- but `--gnome-overlap-status` answers before any handover, and on GNOME-on-Xorg
+#: (which owns org.gnome.Mutter.DisplayConfig too) it used to point at the extension instead
+#: [M recon2/gnome-xorg.md §4 item 7].
+#:
+#: Byte-for-byte the handover branch's own sentence (wxrandr/cli.py:1807), because that is the whole point:
+#: a user who asks the status and then types the flag on the same X11 box is told the same thing twice, in
+#: the same words, and does not have to work out whether two sentences are two facts.  The generic branch
+#: below keeps the status output's own wording ("without any of this"), where there is no flag named in the
+#: line for an "it" to refer back to.
+X11_REASON = ("this session is x11, which places overlapping monitors without it")
+
+
+def not_gnome_reason(backend, session_kind=None):
+    """Why the overlap route means nothing here, or None when this is a GNOME Wayland session it could mean
+    something on.  `backend` is the wxrandr backend token, `session_kind` the session type when it is known.
+
+    One function for the three callers that have to say it (the flag on a non-mutter backend, the status
+    query, and the apply gate) so that a Cinnamon session cannot be told "which places overlapping monitors
+    without it" -- Muffin refuses the very layout that sentence promises."""
+    if session_kind == "x11":
+        return X11_REASON
+    if backend == "cinnamon":
+        return CINNAMON_REASON
+    if backend != "mutter":
+        return ("this session is %s, which places overlapping monitors without any of this"
+                % backend)
+    return None
+
+
 def describe_table():
     """One line per shipped generation, for the refusal a maintainer reads."""
     return ["GNOME %s -> %s, %s, Meta typelib %s, MetaMonitorsConfig %s bytes"

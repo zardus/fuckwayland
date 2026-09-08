@@ -27,12 +27,28 @@ import shutil
 import subprocess
 import time
 
-from fwcommon import session
+from fwcommon import distro, session
 from fwcommon.errors import CmdError
 from wxrandr import core as wxcore
 
 HELPER = "wl-mirror"
-INSTALL_HINT = "on Ubuntu/Debian: sudo apt install wl-mirror"
+
+#: How each family's install line is introduced. The Debian row is today's bytes, which docs/WMIRROR.md and
+#: two tests pin; the other three exist because `apt install wl-mirror` was printed on Fedora, Arch and a
+#: NixOS box with no apt at all [M recon2/fedora.md, arch.md, nixos.md].
+_HINT_WHERE = {"debian": "on Ubuntu/Debian", "fedora": "on Fedora",
+               "arch": "on Arch", "nixos": "on NixOS"}
+
+
+def install_hint() -> str:
+    """`on Ubuntu/Debian: sudo apt install wl-mirror`, and the same sentence for whatever family this box is.
+
+    A function and not a constant: `fwcommon.distro` reads /etc/os-release, and a value frozen at import time
+    would be this process's first answer for the life of the interpreter -- which is exactly what the tests
+    that plant an os-release file need not to be."""
+    fam = distro.family()
+    return "%s: sudo %s" % (_HINT_WHERE.get(fam, _HINT_WHERE["debian"]),
+                            distro.hint("wl-mirror", fam))
 
 # The capture protocols wl-mirror can actually use. export-dmabuf is an optimisation on top of these (it is what
 # `auto` picks for a whole output, and it cannot serve a region at all), never a substitute: a compositor with
@@ -152,7 +168,7 @@ def helper_version(binary: str):
 
 
 def missing_helper_lines() -> list:
-    return ["wl-mirror is not installed (no `%s` on PATH)" % HELPER, INSTALL_HINT]
+    return ["wl-mirror is not installed (no `%s` on PATH)" % HELPER, install_hint()]
 
 
 # -- compositor detection -----------------------------------------------------
@@ -195,10 +211,17 @@ def capture_support(conn) -> list:
 
 
 def no_capture_lines() -> list:
+    """Why there is nothing to mirror here, in three lines.
+
+    The second one used to read `wl-mirror needs wlroots ... or a compositor with ext-image-copy-capture-v1`,
+    which put the second protocol in a footnote. It is not a footnote: `wmirror --check` passed on COSMIC on
+    `ext_image_copy_capture_manager_v1` alone, with no screencopy manager in cosmic-comp's 53 globals at all
+    [M recon2/cosmic.md §3], and labwc 0.9.3 and sway 1.12 publish both. The code path already accepted
+    extcopy on its own; only these words denied it."""
     return ["this compositor advertises neither %s nor %s, so wl-mirror "
             "cannot capture here" % (SCREENCOPY, EXTCOPY),
-            "wl-mirror needs wlroots (sway, hyprland, ...) or a compositor "
-            "with ext-image-copy-capture-v1",
+            "wl-mirror needs a compositor with %s (sway, Hyprland, labwc, "
+            "Wayfire, ...) or %s (COSMIC, labwc, sway 1.12)" % (SCREENCOPY, EXTCOPY),
             "on GNOME and KDE the only capture route is the desktop "
             "portal, which asks the user for permission once per session"]
 

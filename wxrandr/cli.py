@@ -613,7 +613,6 @@ BACKEND_ALIASES = {"gnome": "mutter", "kde": "kwin",
 #: ever there when Mutter's is not [M recon2/cinnamon.md §2.2].
 AUTO_ORDER = ("sway", "hypr", "kwin", "mutter", "cinnamon")
 AUTO_FALLBACK = "wlr"
-_SWAY_GET_VERSION = 7          # i3-ipc GET_VERSION
 _WLR_IFACE = "zwlr_output_manager_v1"
 #: COSMIC's extension to wlr-output-management. It changes no code path -- the
 #: token stays `wlr`, and rotation and 1.5x scale matched `cosmic-randr list
@@ -773,11 +772,12 @@ def _probe_sway(verbose=False):
         try:
             ipc = core.SwayIPC(sock)
             try:
-                v = ipc.msg(_SWAY_GET_VERSION)
-                if isinstance(v, dict) and v.get("human_readable"):
-                    p.compositor = "sway %s" % v["human_readable"]
+                # `i3 4.25.1 (2026-02-06)` or `sway 1.11`: the same GET_VERSION this used to read by hand,
+                # now read by the client that also decides the dialect -- on i3 this line said `sway 4.25.1`
+                # [M recon2/i3.md §2b].
+                p.compositor = ipc.compositor_label()
             finally:
-                ipc.sock.close()
+                ipc.close()
         except Exception:
             pass
     return p
@@ -1275,13 +1275,17 @@ class Session:
                 self.impl = mutter_mod.MutterOutputs(bus=probe)
             except (mutter_mod.DBusError, OSError, ValueError):
                 self._cant_open()
-        elif self.backend in ("hypr", "cinnamon"):
-            # The tables, the probes and `--backends` know these two; their output backends are wxrandr/hypr.py
-            # (HyprOutputs over `j/monitors` + `keyword monitor`) and wxrandr/mutter.py's Muffin flavour, and
-            # neither is in the tree yet. A refusal, never a fall-through to WlrOutputs: on Hyprland the wlr
-            # apply path takes the first apply of a session and then times out at 10 s with nothing changed
-            # [M recon2/hyprland.md §4], and on Muffin there is no wlr output protocol at all, so answering as
-            # `wlr` here would be a wrong answer rather than a missing one.
+        elif self.backend == "hypr":
+            from wxrandr import hypr as hypr_mod
+            # the probe's HyprIPC, so the socket path is found once per run; it holds no connection, so
+            # reusing it costs nothing and closing it twice is safe. No arm for a missing socket: HyprIPC
+            # opens nothing here and the probe has already refused a session that has none, by name.
+            self.impl = hypr_mod.HyprOutputs(ipc=reuse("hypr"))
+        elif self.backend == "cinnamon":
+            # The tables, the probes and `--backends` know this one; its output backend is wxrandr/mutter.py's
+            # Muffin flavour, which is not in the tree yet. A refusal, never a fall-through to WlrOutputs:
+            # Muffin has no wlr output protocol at all, so answering as `wlr` here would be a wrong answer
+            # rather than a missing one.
             raise Fatal("xrandr: the %s backend is named by --backend and is not built into this "
                         "install\n" % self.backend)
         else:

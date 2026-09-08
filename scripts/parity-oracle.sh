@@ -21,8 +21,15 @@
 #   $FW_ORACLE_PATH    colon-separated PATH prefix, used as given
 #   $FW_ORACLE_PATH_FILE / scripts/nixpath  a file holding one such prefix
 #   /nix/store/*-xdotool-<pinned>/bin and /nix/store/*-wmctrl-1.07/bin
-# On a host with neither, build them: `nix develop` (both on PATH) or
-# `nix build .#xdotool` / `nix build .#wmctrl`.
+# On a host with neither, build them: `nix develop` (both on PATH), or
+#   FW_ORACLE_PATH=$(nix build --no-link --print-out-paths .#xdotool .#wmctrl |
+#                    sed 's|$|/bin|' | paste -sd:)
+# `packages.xdotool` and `packages.wmctrl` are nixpkgs' own, re-exported by
+# flake.nix so that this sentence is true.  Until 0.5 they were not there and
+# this line named two attributes the flake did not have: `nix build .#xdotool`
+# answered `does not provide attribute ... Did you mean wdotool?`, while CI did
+# it the working way (`nix build --inputs-from . nixpkgs#xdotool`)
+# [recon2/pkg-nix §1 defect 2].
 #
 #   FW_PARITY_DISPLAY   display to use for the Xvfb we start (default :99)
 set -eu

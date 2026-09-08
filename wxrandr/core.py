@@ -307,10 +307,18 @@ def logical_size(px_w: int, px_h: int, sway_tf: str, scale: float) -> tuple[int,
 _MAGIC = b"i3-ipc"
 RUN_COMMAND = 0
 GET_OUTPUTS = 3
+GET_VERSION = 7
+
+#: i3 has no `output` command at all: every apply died with a 30-token parse error listing every command i3
+#: does have, and nothing about the layout changed [M recon2/i3.md §1, §2b, fixture run_output_pos.json]. The
+#: X server owns the layout on i3, which is what the handover already hands `xrandr` for.
+I3_NO_APPLY = ("this is i3, which has no output command; the X server owns the layout "
+               "here -- use xrandr (or drop --backend sway)\n")
 
 
 class SwayIPC:
     def __init__(self, sockpath: str | None = None):
+        self._version = None            # GET_VERSION reply, cached by version()
         self.sockpath = sockpath or session.find_sway_socket()
         if not self.sockpath:
             raise Fatal("cannot connect to the compositor " "(no sway/i3 IPC socket found)\n")
@@ -342,6 +350,28 @@ class SwayIPC:
             body = self._read_exact(length) if length else b"null"
             if rtype == mtype:  # skip stray event frames
                 return json.loads(body.decode("utf-8", "replace"))
+
+    def version(self) -> dict:
+        """The GET_VERSION reply, asked once per connection and cached ({} when it is not an object)."""
+        if self._version is None:
+            v = self.msg(GET_VERSION)
+            self._version = v if isinstance(v, dict) else {}
+        return self._version
+
+    def dialect(self) -> str:
+        """"i3" or "sway". sway is 1.x; i3 has been 4.x since 2011 and the live 4.25.1 answered `major` 4
+        [M recon2/i3.md §1], so `major >= 4` is the whole test."""
+        major = self.version().get("major")
+        return "i3" if isinstance(major, int) and major >= 4 else "sway"
+
+    def compositor_label(self) -> str:
+        """What `--print-backend --verbose` calls the other end: `i3 4.25.1 (2026-02-06)`, `sway 1.11`.
+
+        It printed `compositor: sway 4.25.1 (2026-02-06)` on the live i3 -- the version was right and the name
+        was not [M recon2/i3.md §2b]."""
+        human = self.version().get("human_readable")
+        name = self.dialect()
+        return "%s %s" % (name, human) if human else name
 
     def get_outputs(self) -> list:
         return self.msg(GET_OUTPUTS)
@@ -721,7 +751,8 @@ class WlrOutputs:
         except OSError:
             pass
         if not result:
-            raise Fatal("timed out waiting for the compositor to apply the " "output configuration\n")
+            raise Fatal("timed out waiting for the compositor to apply the "
+                        "output configuration%s\n" % _hypr_clause())
         if result[0] == "failed":
             raise Fatal("compositor rejected the output configuration\n")
         if result[0] == "cancelled":
@@ -764,6 +795,25 @@ class WlrOutputs:
             raise Fatal("the compositor applied the output configuration " "and then stopped responding\n")
 
 
+def _hypr_clause() -> str:
+    """The sentence the apply timeout carries on a Hyprland session, and nothing anywhere else.
+
+    Hyprland advertises zwlr_output_manager_v1 v4 and takes exactly one apply per session through it: the
+    second times out at 10 s with nothing changed and no `[COutputConfiguration] Applying configuration` in
+    its own log, and with a second output present even the first one hangs. `wlr-randr`, the reference client,
+    hangs for ever on the same request, so this is the compositor's protocol implementation and not ours
+    [M recon2/hyprland.md §4, and the same on 0.56.2 in recon2/arch.md]. The generic message is true and
+    useless there -- the fix is a different backend, and this says which. Detection sends Hyprland to `hypr`,
+    so the only way to be here on Hyprland is to have asked for `--backend wlr`."""
+    try:
+        if session.find_hypr_socket():
+            return (" (Hyprland answers only the first output-configuration apply of a session; "
+                    "use --backend hypr)")
+    except OSError:      # a runtime dir that vanished mid-scan: the plain message is still right
+        pass
+    return ""
+
+
 def wlr_snapshot_safe():
     """WlrOutputs or None; queries degrade gracefully without it."""
     try:
@@ -792,8 +842,15 @@ def snapshot_sway(ipc: SwayIPC, state: State, wlr=None) -> list:
     """OutputState list from sway GET_OUTPUTS, enriched with wlr head data
     (physical mm, preferred flags) and custom modes from the state file."""
     outs = []
+    i3 = ipc.dialect() == "i3"
     for i, o in enumerate(ipc.get_outputs()):
         name = o.get("name", "?")
+        if i3 and not o.get("active") and not o.get("current_mode"):
+            # i3 reports a pseudo-output `xroot-0` covering the whole X screen: `active: false`, no modes, no
+            # current mode, and `wxrandr --query` listed it as a connected output with no geometry beside the
+            # real one [M recon2/i3.md §1, §2b, fixture get_outputs.json]. Dropped on the i3 dialect only: on
+            # sway an inactive output is a real head that xrandr has to keep listing as disconnected.
+            continue
         head = wlr.by_name(name) if wlr else None
         st = OutputState(
             name=name,
@@ -1324,7 +1381,13 @@ class SwayBackend:
 
     def apply(self, state: State, targets: list, persistent: bool = False) -> list:
         """The two-phase RUN_COMMAND apply, and the fresh snapshot it re-reads. `persistent` is accepted for
-        contract parity and ignored: a sway layout lives in sway's own config, which is not ours to write."""
+        contract parity and ignored: a sway layout lives in sway's own config, which is not ours to write.
+
+        On i3 nothing is sent at all: there is no `output` command to send it to, so the two phases could only
+        produce i3's parse error twice over -- and the first phase would already have recorded the modes it
+        never applied."""
+        if self.ipc.dialect() == "i3":
+            raise Fatal(I3_NO_APPLY)
         return apply_sway(self.ipc, state, targets)
 
     def close(self):

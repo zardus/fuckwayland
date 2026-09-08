@@ -1,0 +1,38 @@
+# Every namcap finding this package accepts, one Python regular expression per
+# line, `#` comments and blank lines ignored.  The analogue of
+# debian/fuckwayland.lintian-overrides and packaging/rpm/fuckwayland.rpmlintrc.
+#
+# tests/test_release_pkgbuild.py runs namcap over the built package in CI and
+# fails on any line no pattern here matches; tests/test_pkgbuild.py checks
+# here, on any box, that every pattern compiles and carries a reason.  namcap
+# on the PKGBUILD itself must print nothing at all -- there is no filter for
+# that half, and the recon proved the check is live by breaking `license=()`
+# and watching "E: Missing license" appear (namcap 3.6.0-3,
+# [recon2/pkg-arch.md 3]).
+#
+# There was a fourth line here until HEAD 375d815: while the tree had no
+# LICENSE the recipe said license=('LicenseRef-none') and namcap answered
+# "Uncommon license identifiers such as 'LicenseRef-none' require license files
+# below /usr/share/licenses/fuckwayland/ ... Found 0/1" (measured verbatim).
+# BSD-2-Clause with the file installed answers it, so the pattern went rather
+# than staying on as a filter nobody needs.
+
+# warandr is the one tool of six that imports gi, and it does so inside main()
+# behind a message that names the packages to install.  namcap's rule is about
+# hard imports; making glib2 a depends would put GTK on every sway box for one
+# optional GUI, which is exactly the trade the .deb gets wrong (its GTK stack
+# is a Depends; tests/test_release_deb.py carries that as an expectedFailure).
+# So python-gobject and gtk3 stay optdepends and this finding is accepted.
+^fuckwayland E: Dependency glib2 detected and not included
+
+# packaging/common/enable-bridge is a /bin/sh script; namcap reads the
+# interpreter as a "referenced library".  bash and sh are in base.
+^fuckwayland W: Referenced library 'sh'
+
+# namcap resolves the package's OWN modules against installed packages, so
+# every module one of the six console scripts imports is reported as an
+# uninstalled dependency (~90 lines on the hand-assembled package).  Whether a
+# real makepkg build still produces them is what the first CI run answers; the
+# pattern is here so that the answer is a green job either way, and it is
+# deliberately narrow -- only our own seven top-level names match.
+^fuckwayland W: Referenced python module '(fwcommon|wdotool|wwmctl|wxprop|wxrandr|warandr|wmirror)[.']

@@ -176,12 +176,21 @@ def _read_xauth(path: str):
 
 def _session_xauthority() -> str | None:
     """The graphical session's cookie file when the environment names none: Mutter's
-    $XDG_RUNTIME_DIR/.mutter-Xwaylandauth.* (KWin's xauth_*), found by fwcommon.session even from `ssh root@`
-    with an empty environment. Mutter starts Xwayland with -auth, so the cookie is mandatory there -- the
-    cookie-less same-uid pass only works on wlroots."""
+    $XDG_RUNTIME_DIR/.mutter-Xwaylandauth.* (KWin's xauth_*, SDDM's /tmp/xauth_<random> off the session
+    leader), found by fwcommon.session even from `ssh root@` with an empty environment. Mutter starts Xwayland
+    with -auth, so the cookie is mandatory there -- the cookie-less same-uid pass only works on wlroots.
+
+    The uid is asked for explicitly and never 0: from a root ssh login `session.session_uid()` answers 0 --
+    /run/user/0 is a real runtime dir and the first candidate -- and the search then goes to root's own
+    environment and /root/.Xauthority, neither of which has anything to do with the graphical session
+    [M recon2/openbox.md §2d, on a live SDDM+LXQt VM]. `passthrough.target_uid()` skips uid 0 for the same
+    reason. When there is no other candidate this is exactly what it was: session_uid()'s answer."""
     try:
         from fwcommon import session
-        return session.find_xauthority()
+        uid = session.session_uid()
+        if uid == 0:
+            uid = next((u for u, _d in session.runtime_dir_candidates() if u), None)
+        return session.find_xauthority(uid)
     except Exception:
         return None
 

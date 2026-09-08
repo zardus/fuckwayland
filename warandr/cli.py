@@ -11,13 +11,32 @@ import stat
 import sys
 import tempfile
 
-from fwcommon import stdio
+from fwcommon import distro, stdio
 
 from . import VERSION, randr
 from .model import LayoutError
 
-GTK_HINT = ("warandr: GTK 3 for Python is not available (%s) - on Ubuntu/"
-            "Debian: sudo apt install python3-gi gir1.2-gtk-3.0\n")
+#: how each family is named in the line, and whether its installer wants sudo. nix-env is per-user and must
+#: not be run as root, so NixOS gets the bare command [M recon2/nixos.md].
+_GTK_WHERE = {"debian": ("Ubuntu/Debian", "sudo "), "fedora": ("Fedora", "sudo "),
+              "arch": ("Arch", "sudo "), "nixos": ("NixOS", "")}
+_GTK_LINE = "warandr: GTK 3 for Python is not available (%s) - on %s: %s%s\n"
+
+#: the Debian rendering of the line, which is what every box got before the family was consulted (and what an
+#: unidentifiable one still gets); a one-`%s` template, so `GTK_HINT % err` still reads the way it always did.
+GTK_HINT = _GTK_LINE % ("%s", _GTK_WHERE["debian"][0], "sudo ",
+                        distro.hint("gtk3-python", "debian"))
+
+
+def gtk_hint(err, fam=None) -> str:
+    """The "install GTK 3 for Python" line for this box's distribution.
+
+    warandr is the one tool that never hands over, so this is the only thing a user with no python3-gi has to
+    go on -- and it named a Debian package on Fedora, Arch and NixOS alike [M recon2/fedora.md, arch.md,
+    nixos.md]."""
+    fam = fam or distro.family()
+    where, sudo = _GTK_WHERE.get(fam, _GTK_WHERE["debian"])
+    return _GTK_LINE % (err, where, sudo, distro.hint("gtk3-python", fam))
 
 
 def _parser():
@@ -196,7 +215,7 @@ def _main(argv=None):
     try:
         from . import gui
     except (ImportError, ValueError, AttributeError) as e:
-        sys.stderr.write(GTK_HINT % e)
+        sys.stderr.write(gtk_hint(e))
         return 1
     return gui.run(backend, args.savedfile, args.randr_display)
 

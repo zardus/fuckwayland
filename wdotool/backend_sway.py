@@ -1,7 +1,12 @@
 """sway/i3 window backend over raw i3-ipc (no external tools).
 
 Framing: b"i3-ipc" + u32 payload length + u32 message type + JSON payload. Window ids are sway node ids;
-commands address nodes with [con_id=N]. Desktops are workspaces: xdotool desktop N == workspace number N+1."""
+commands address nodes with [con_id=N]. Desktops are workspaces: xdotool desktop N == workspace number N+1.
+
+Two dialects on one wire. i3 speaks the same protocol and this backend is what `FUCKWAYLAND_PASSTHROUGH=never`
+reaches on an i3 box, where it used to call itself sway and get four things wrong [M recon2/i3.md §2b]:
+`dialect()` asks GET_VERSION once (sway is 1.x, i3 has been 4.x since 2011) and the four differences below hang
+off it -- ids, floating, pid, visible. Everything else is one code path."""
 
 import json
 import select
@@ -20,6 +25,7 @@ GET_WORKSPACES = 1
 SUBSCRIBE = 2
 GET_OUTPUTS = 3
 GET_TREE = 4
+GET_VERSION = 7
 _EVENT_BIT = 0x80000000
 EVENT_WORKSPACE = _EVENT_BIT | 0
 EVENT_WINDOW = _EVENT_BIT | 3
@@ -34,6 +40,16 @@ IPC_TIMEOUT = 10.0
 def _lost(e) -> CmdError:
     """Any wire-level failure of the i3/sway IPC socket, as one clear line."""
     return CmdError("sway backend: lost the connection to the compositor (%s)" % e)
+
+
+def _sel(node) -> str:
+    """`[con_id=N]`, the criterion that addresses one view.
+
+    Always the node's own `id` and never `Window.id`: on i3 the two differ (Window.id is the X id there), and
+    `[con_id=<47-bit pointer>] focus` is what i3 itself wants -- measured working against the live 4.25.1
+    [M recon2/i3.md §1]. A module function rather than a method because `move_to_current_desktop` below is
+    borrowed by a double that has no other part of this class (tests/test_wwmctl_cli.py:RunCapableFake)."""
+    return "[con_id=%d]" % node["id"]
 
 
 def _wedged() -> CmdError:
@@ -58,6 +74,14 @@ class SwayBackend(WindowBackend):
         # The events socket is left blocking (_connect()'s default); select_window() and wxprop's -spy wait on
         # it for an event that may be minutes away.
         self.sock = self._connect(IPC_TIMEOUT)
+        #: "sway" / "i3", filled by dialect() on first use
+        self._dialect = None
+        #: lazy X11Conn, i3 only (see _x_plane); "unset" means never tried
+        self._x = "unset"
+        #: X id -> pid, i3 only (see _fill_pids): an X id names one window for its whole life and this
+        #: backend lives for one process, so the `_NET_WM_PID` round trip is paid once per window rather
+        #: than once per window per _nodes() -- and _nodes() runs on every command, twice in resize().
+        self._pids: dict[int, int] = {}
 
     # -- wire ---------------------------------------------------------------
 
@@ -144,11 +168,50 @@ class SwayBackend(WindowBackend):
             if not r.get("success"):
                 raise CmdError("sway: %s" % (r.get("error") or "command failed: %s" % command))
 
+    def dialect(self) -> str:
+        """"i3" or "sway", from one GET_VERSION, cached for the life of the backend.
+
+        sway is 1.x; i3 has been 4.x since 2011, and the live 4.25.1 answered `major` 4 [M recon2/i3.md §1,
+        fixture get_version.json]. So `major >= 4` is the whole test, and a reply that is not a JSON object at
+        all (an old sway, a stub) reads as sway, which is what this file did before there was a dialect.
+
+        Asked lazily rather than in the constructor: a wedged compositor accepts the connection and answers
+        nothing, and the message about that belongs to the first command the user typed, not to constructing a
+        backend (tests/test_wire_hardening.py:SwayWireGuards builds one against such a socket)."""
+        if self._dialect is None:
+            v = self._msg(GET_VERSION)
+            major = v.get("major") if isinstance(v, dict) else None
+            self._dialect = "i3" if isinstance(major, int) and major >= 4 else "sway"
+        return self._dialect
+
+    def _x_plane(self):
+        """An X11 connection for the i3 dialect, opened once and only if something needs it, or None.
+
+        i3's tree carries no `pid` at all (i3ipc-python documents the field as sway-only) and `getwindowpid`
+        failed on every window with `has no pid associated with it` [M recon2/i3.md §2b]. i3 *is* X11, so every
+        view has an X id and `_NET_WM_PID` is one property read away. Never raises: a session whose X plane
+        cannot be reached leaves the pids at 0, which is what they were before."""
+        if self._x != "unset":
+            return self._x
+        self._x = None
+        try:
+            from wdotool import x11_mini
+            self._x = x11_mini.X11Conn()
+        except Exception:                       # no X plane: pid stays 0
+            self._x = None
+        return self._x
+
     # -- tree ---------------------------------------------------------------
 
     def _nodes(self):
         """[(node, Window, floating, ws_name)] for every view in the tree."""
         # wwmctl.core.windows() unpacks this exact tuple shape; keep in sync.
+        i3 = self.dialect() == "i3"
+        # i3 nodes carry no `visible`, so `search --onlyvisible` matched nothing at all [M recon2/i3.md §2b].
+        # Derived instead: a view is visible when its workspace is one of the visible ones. GET_WORKSPACES never
+        # lists `__i3_scratch`, so "and not in the scratchpad" comes out of the same set for free.
+        visible_ws = ({ws.get("name") or "" for ws in self._msg(GET_WORKSPACES) or []
+                       if ws.get("visible")} if i3 else None)
         tree = self._msg(GET_TREE)
         out = []
 
@@ -166,10 +229,17 @@ class SwayBackend(WindowBackend):
                 wp = node.get("window_properties") or {}
                 rect = node.get("rect") or {}
                 num = ws_num if isinstance(ws_num, int) else -1
+                # i3's own `floating` field, which sway does not send: "user_on"/"auto_on" when the view is
+                # floating, "user_off"/"auto_off" when it is not [M recon2/i3.md §1].
+                floating = floating or str(node.get("floating") or "").endswith("_on")
                 out.append((
                     node,
                     Window(
-                        id=node["id"],
+                        # On i3 the X id, not the con id: i3's con ids are 47-bit pointers, and the one the
+                        # tools handed out (97479943571072) truncated to 0x5168c680 in every X-shaped
+                        # consumer -- `wxprop -id` answered BadWindow on it [M recon2/i3.md §2b]. Every i3
+                        # window has `window`; commands still address the con id, through _sel().
+                        id=(node.get("window") or node["id"]) if i3 else node["id"],
                         title=node.get("name") or "",
                         class_=node.get("app_id") or wp.get("class") or "",
                         # WM_CLASS instance of an X11 client under Xwayland; native Wayland views have none
@@ -181,19 +251,54 @@ class SwayBackend(WindowBackend):
                         w=rect.get("width", 0),
                         h=rect.get("height", 0),
                         focused=bool(node.get("focused")),
-                        visible=bool(node.get("visible")),
+                        visible=(ws_name in visible_ws) if i3 else bool(node.get("visible")),
                         desktop=num - 1 if num > 0 else -1,
                     ),
                     floating,
                     ws_name,
                 ))
             for ch in node.get("nodes") or []:
-                walk(ch, ws_num, ws_name, False)
+                # i3 wraps a floating view in a `floating_con` whose single child is the view, so the flag has
+                # to survive that one hop down -- resetting it here is what made every floating i3 window read
+                # as tiled and every `windowmove` refuse [M recon2/i3.md §2c].
+                walk(ch, ws_num, ws_name, floating and ntype == "floating_con")
             for ch in node.get("floating_nodes") or []:
                 walk(ch, ws_num, ws_name, True)
 
         walk(tree, -1, "", False)
+        if i3:
+            self._fill_pids(out)
         return out
+
+    def _fill_pids(self, rows):
+        """i3 only: fill in the pids its tree does not carry, off `_NET_WM_PID` on the X plane.
+
+        Answers are remembered in `self._pids`: without that this is one X round trip per window on every
+        `_nodes()`, and `_nodes()` is walked by every command, by every `_node(wid)` lookup and twice by
+        `resize()`."""
+        live = {node["window"] for node, _w, _f, _ws in rows if node.get("window")}
+        if self._pids:
+            # X ids are recycled: an id that has left the tree may come back on somebody else's window, so
+            # its answer leaves the cache with it rather than outliving the window it was measured on.
+            self._pids = {xid: pid for xid, pid in self._pids.items() if xid in live}
+        if not any(not win.pid and node.get("window") for node, win, _f, _ws in rows):
+            return
+        x = self._x_plane()
+        if x is None:
+            return
+        for node, win, _f, _ws in rows:
+            if win.pid or not node.get("window"):
+                continue
+            xid = node["window"]
+            if xid in self._pids:
+                win.pid = self._pids[xid]
+                continue
+            try:
+                win.pid = x.get_pid(xid)
+            except Exception:                   # one unreadable window is not a failed listing
+                continue
+            if win.pid:                         # a 0 is "not answered yet", never a cached answer
+                self._pids[xid] = win.pid
 
     def _node(self, wid: int):
         for node, win, floating, ws_name in self._nodes():
@@ -207,12 +312,12 @@ class SwayBackend(WindowBackend):
         return [win for _n, win, _f, _w in self._nodes()]
 
     def activate(self, wid: int):
-        self._node(wid)
-        self.run("[con_id=%d] focus" % wid)
+        node = self._node(wid)[0]
+        self.run("%s focus" % _sel(node))
 
     def close(self, wid: int):
-        self._node(wid)
-        self.run("[con_id=%d] kill" % wid)
+        node = self._node(wid)[0]
+        self.run("%s kill" % _sel(node))
 
     @staticmethod
     def _deco_h(node) -> int:
@@ -238,7 +343,7 @@ class SwayBackend(WindowBackend):
                 "(floating enable it first)"
             )
         self._refuse_fullscreen(node, "move")
-        self.run("[con_id=%d] move absolute position %d %d" % (wid, x, y - self._deco_h(node)))
+        self.run("%s move absolute position %d %d" % (_sel(node), x, y - self._deco_h(node)))
 
     def resize(self, wid: int, w: int, h: int):
         node, win, floating, _ws = self._node(wid)
@@ -251,24 +356,25 @@ class SwayBackend(WindowBackend):
                 "(floating enable it first)"
             )
         self._refuse_fullscreen(node, "resize")
-        self.run("[con_id=%d] resize set %d px %d px" % (wid, w, h + self._deco_h(node)))
+        self.run("%s resize set %d px %d px" % (_sel(node), w, h + self._deco_h(node)))
         # sway resizes floating windows around their center; xdotool (X11)
         # keeps the top-left corner fixed. Move it back where it was.
         node2 = self._node(wid)[0]
-        self.run("[con_id=%d] move absolute position %d %d" % (wid, win.x, win.y - self._deco_h(node2)))
+        self.run("%s move absolute position %d %d"
+                 % (_sel(node2), win.x, win.y - self._deco_h(node2)))
 
     def minimize(self, wid: int):
         self.unmap(wid)
 
     def map(self, wid: int):
-        _n, _win, _f, ws_name = self._node(wid)
+        node, _win, _f, ws_name = self._node(wid)
         if ws_name == SCRATCHPAD_WS:
-            self.run("[con_id=%d] scratchpad show" % wid)
+            self.run("%s scratchpad show" % _sel(node))
 
     def unmap(self, wid: int):
-        _n, _win, _f, ws_name = self._node(wid)
+        node, _win, _f, ws_name = self._node(wid)
         if ws_name != SCRATCHPAD_WS:
-            self.run("[con_id=%d] move scratchpad" % wid)
+            self.run("%s move scratchpad" % _sel(node))
 
     def is_mapped(self, wid: int) -> bool:
         """Mapped = not stashed in the scratchpad. A window on an unfocused workspace (or a background tab) is
@@ -276,9 +382,9 @@ class SwayBackend(WindowBackend):
         return self._node(wid)[3] != SCRATCHPAD_WS
 
     def raise_(self, wid: int):
-        _n, _win, floating, _ws = self._node(wid)
+        node, _win, floating, _ws = self._node(wid)
         if floating:
-            self.run("[con_id=%d] focus" % wid)
+            self.run("%s focus" % _sel(node))
         else:
             warn("windowraise: tiled sway windows have no stacking order; ignoring")
 
@@ -290,21 +396,21 @@ class SwayBackend(WindowBackend):
         node, _win, _f, ws_name = self._node(wid)
         word = {0: "disable", 1: "enable", 2: "toggle"}[action]
         if state == "FULLSCREEN":
-            self.run("[con_id=%d] fullscreen %s" % (wid, word))
+            self.run("%s fullscreen %s" % (_sel(node), word))
         elif state == "STICKY":
-            self.run("[con_id=%d] sticky %s" % (wid, word))
+            self.run("%s sticky %s" % (_sel(node), word))
         elif state == "DEMANDS_ATTENTION":
             if action == 2:
                 word = "disable" if node.get("urgent") else "enable"
-            self.run("[con_id=%d] urgent %s" % (wid, word))
+            self.run("%s urgent %s" % (_sel(node), word))
         elif state == "HIDDEN":
             hidden = ws_name == SCRATCHPAD_WS
             if action == 2:
                 action = 0 if hidden else 1
             if action == 1 and not hidden:
-                self.run("[con_id=%d] move scratchpad" % wid)
+                self.run("%s move scratchpad" % _sel(node))
             elif action == 0 and hidden:
-                self.run("[con_id=%d] scratchpad show" % wid)
+                self.run("%s scratchpad show" % _sel(node))
         else:
             raise CmdError("windowstate %s is not supported by the sway backend" % state)
 
@@ -312,8 +418,8 @@ class SwayBackend(WindowBackend):
         return self._node(wid)[1].desktop
 
     def set_window_desktop(self, wid: int, n: int):
-        self._node(wid)
-        self.run("[con_id=%d] move container to workspace number %d" % (wid, n + 1))
+        node = self._node(wid)[0]
+        self.run("%s move container to workspace number %d" % (_sel(node), n + 1))
 
     def workspaces(self) -> "list[Workspace]":
         """One record per workspace, ascending. sway answers GET_WORKSPACES in creation order and numbers only
@@ -338,9 +444,15 @@ class SwayBackend(WindowBackend):
         return out
 
     def move_to_current_desktop(self, wid: int) -> bool:
-        self.window_desktop(wid)  # gone -> CmdError, exit 1
-        self.run("[con_id=%d] move container to workspace current" % wid)
-        return True
+        # window_desktop() first and _nodes() after, rather than one _node(): this method is borrowed whole by
+        # the sway-shaped double in tests/test_wwmctl_cli.py, which offers exactly `_nodes`, `window_desktop`
+        # and `run` -- and the vanished-window case there is a window_desktop that raises.
+        self.window_desktop(wid)               # gone -> CmdError, exit 1
+        for node, win, _f, _ws in self._nodes():
+            if win.id == wid:
+                self.run("%s move container to workspace current" % _sel(node))
+                return True
+        raise CmdError("window %d not found" % wid)
 
     def get_desktop(self) -> int:
         for ws in self._msg(GET_WORKSPACES):
@@ -381,13 +493,29 @@ class SwayBackend(WindowBackend):
                 if not isinstance(data, dict):
                     continue
                 if t == EVENT_WINDOW:
-                    wid = (data.get("container") or {}).get("id")
+                    wid = self._event_wid(data.get("container") or {})
                     if wid is not None:
                         yield int(wid), str(data.get("change") or "")
                 elif workspaces and t == EVENT_WORKSPACE:
                     yield 0, "workspace"
         finally:
             s.close()
+
+    def _event_wid(self, con: dict):
+        """The id an event names, in the same space `list()` hands out: the con id on sway, the X id on i3.
+
+        The event payload carries the whole container node, so `window` is usually right there; a container
+        that has just been closed may not carry it any more, and the tree is asked once for that one case
+        (on the command socket -- the event socket is a separate connection)."""
+        cid = con.get("id")
+        if cid is None or self.dialect() != "i3":
+            return cid
+        if con.get("window"):
+            return con["window"]
+        for node, win, _f, _ws in self._nodes():
+            if node.get("id") == cid:
+                return win.id
+        return cid
 
     select_window_hint = "focus the target window to select it"
 

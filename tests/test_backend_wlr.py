@@ -17,19 +17,29 @@ one, and that every capability this backend does not have says so as an
 so the peer here is a real socket speaking the real bytes.
 """
 
+import io
 import os
+import shutil
 import struct
 import sys
+import tempfile
+import time
 import unittest
+from contextlib import redirect_stderr
+from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import wl_fake
+from fwcommon import session
 from fwcommon.errors import CmdError
 from support import env
+from test_wwmctl_x11 import FakeXServer
+from wdotool import backend_wlr, x11_mini
 from wdotool.backend_wlr import BASE_ID, WlrBackend
+from wxprop import core as wxcore
 
 # The suite never hands a tool over to the real X11 one: see
 # tests/conftest.py (which covers pytest) and tests/test_passthrough.py.
@@ -105,9 +115,48 @@ class ToplevelCompositor(wl_fake.Server):
         arr = struct.pack("<%dI" % len(states), *states)
         return struct.pack("<I", len(arr)) + arr + b"\0" * wl_fake.pad(len(arr))
 
+    #: request opcode -> (the capability group it belongs to, the state bit, set or clear). `close` has no
+    #: state bit -- its answer is the `closed` event -- so it is handled on its own below.
+    EFFECT = {
+        SET_MAXIMIZED: ("maximize", MAXIMIZED, True),
+        UNSET_MAXIMIZED: ("maximize", MAXIMIZED, False),
+        SET_MINIMIZED: ("minimize", MINIMIZED, True),
+        UNSET_MINIMIZED: ("minimize", MINIMIZED, False),
+        ACTIVATE: ("activate", ACTIVATED, True),
+        SET_FULLSCREEN: ("fullscreen", FULLSCREEN, True),
+        UNSET_FULLSCREEN: ("fullscreen", FULLSCREEN, False),
+    }
+
+    #: Which of those groups this compositor actually acts on. All of them by default: sway and labwc, where
+    #: `wwmctl -c xtermwin` really closes the window and `-b add,fullscreen` really fullscreens it
+    #: [M recon2/labwc.md §3]. The two subclasses below are the compositors that do less.
+    HONOURS = frozenset(("close", "activate", "maximize", "minimize", "fullscreen"))
+
     def on_request(self, conn, state, oid, opcode, body, fds):
-        if oid in self._handles:
-            self.requests.append((self._handles[oid], opcode, body))
+        if oid not in self._handles:
+            return
+        i = self._handles[oid]
+        self.requests.append((i, opcode, body))
+        self._apply(i, opcode)
+
+    def _apply(self, i, opcode):
+        """What the compositor does about the request, which is the only reply this protocol has: there is no
+        ack, no error and no return value on any handle request, so a client can only look at the state it
+        gets back afterwards."""
+        if opcode == CLOSE:
+            if "close" in self.HONOURS:
+                self.closed(i)
+            return
+        eff = self.EFFECT.get(opcode)
+        if eff is None:
+            return
+        group, bit, on = eff
+        if group not in self.HONOURS:
+            return
+        states = set(self.toplevels[i]["states"])
+        states.add(bit) if on else states.discard(bit)
+        self.toplevels[i]["states"] = tuple(sorted(states))
+        self.restate(i, *self.toplevels[i]["states"])
 
     # -- what a compositor does between two of the client's roundtrips
     def closed(self, index):
@@ -133,6 +182,45 @@ class ToplevelCompositor(wl_fake.Server):
         return [op for op, _b in self.of(index)]
 
 
+class ReadOnlyToplevels(ToplevelCompositor):
+    """river 0.4 on the wire: every handle request is accepted and nothing at all happens.
+
+    Read in river 0.4.8's `Window.zig`: the handle is created (line 437) and only ever pushed at --
+    `setTitle`/`setAppId` (438-440, 1226-1245), `setActivated` (795), `destroy` (1201) -- and no
+    `request_close`/`request_activate`/`request_maximize`/`request_minimize`/`request_fullscreen` listener
+    is registered anywhere in river/*.zig. Measured against that reading with `recon2/river/tops.py`:
+    `windowclose` twice, five seconds apart, left `foot` running and still listed; `windowactivate` left
+    ACTIVATED on the other window; `windowminimize` and `windowstate --add FULLSCREEN` left the state array
+    exactly as it was. All four returned rc 0 [M recon2/river.md §2a]."""
+
+    HONOURS = frozenset()
+
+
+class ClassicToplevels(ToplevelCompositor):
+    """river-classic 0.3.17: close and fullscreen really happen, minimize and maximize do not.
+
+    The same measurement run, same two commands: `windowclose` closed the window (`tops.py` -> `count 0`)
+    and `windowstate --add FULLSCREEN` gave `states=['ACTIVATED','FULLSCREEN']`, while `windowminimize` and
+    `windowstate --add MAXIMIZED_VERT` changed nothing -- dynamic tiling has neither [M river.md §2a]."""
+
+    HONOURS = frozenset(("close", "fullscreen"))
+
+
+class CloseByMinimizing(ToplevelCompositor):
+    """A compositor whose client answers `close` with something other than going away.
+
+    Nothing here is river: it is the case the close check has to leave alone. A window may take a moment to
+    die, or refuse outright and only change its own state, so `close` reports silence and not "the window is
+    still there" -- otherwise every unsaved-changes dialog would produce a warning that says the compositor
+    ignored the request."""
+
+    HONOURS = frozenset()
+
+    def _apply(self, i, opcode):
+        if opcode == CLOSE:
+            self.restate(i, MINIMIZED)
+
+
 class WlrTest(unittest.TestCase):
     """One compositor per test, with the environment pointed at it."""
 
@@ -141,10 +229,10 @@ class WlrTest(unittest.TestCase):
                  top("Hidden", "gamma", MINIMIZED))
     comp_kw: dict = {}
 
-    def compositor(self, **kw):
+    def compositor(self, cls=ToplevelCompositor, **kw):
         opts = dict(self.comp_kw, **kw)
         opts.setdefault("toplevels", self.TOPLEVELS)
-        comp = ToplevelCompositor(**opts)
+        comp = cls(**opts)
         self.addCleanup(comp.close)
         ctx = env(XDG_RUNTIME_DIR=comp.dir,
                   WAYLAND_DISPLAY=os.path.basename(comp.path),
@@ -153,10 +241,13 @@ class WlrTest(unittest.TestCase):
         self.addCleanup(ctx.__exit__, None, None, None)
         return comp
 
-    def backend(self, **kw):
-        comp = self.compositor(**kw)
+    def backend(self, cls=ToplevelCompositor, **kw):
+        comp = self.compositor(cls, **kw)
         b = WlrBackend()
         self.addCleanup(b.c.close)
+        # views() opens an X connection and the backend outlives one test but not the suite: an fd left to
+        # the collector prints a ResourceWarning into whatever stderr a later test is capturing.
+        self.addCleanup(lambda: b._x.close() if b._x not in (None, "unset") else None)
         return comp, b
 
 
@@ -291,9 +382,334 @@ class States(WlrTest):
                          "windowstate SHADED is not supported by the wlr backend")
 
 
-class Capabilities(WlrTest):
-    def test_there_are_no_desktops(self):
+class VerifyAfterAct(WlrTest):
+    """U09. A compositor that accepts every request and does nothing is worse than one that fails.
+
+    `zwlr_foreign_toplevel_handle_v1` has no reply for `close`, `activate`, `set_minimized` or
+    `set_fullscreen` -- no ack, no error, no return value -- so "did it happen" can only be read off the
+    state the compositor sends afterwards. river 0.4 sends nothing back and `wdotool windowclose` exited 0
+    with the window still on screen [M recon2/river.md §2a]; there is no version bit to gate on, because
+    river advertises manager v3 exactly like sway, so the check is this dynamic one."""
+
+    def acting(self, fn, *a):
+        """Run one backend call and return whatever it warned on stderr."""
+        err = io.StringIO()
+        with redirect_stderr(err):
+            fn(*a)
+        return err.getvalue()
+
+    def test_a_read_only_compositor_is_reported_and_does_not_raise(self):
+        comp, b = self.backend(cls=ReadOnlyToplevels)
+        for call, args in ((b.close, (BASE_ID,)), (b.activate, (BASE_ID + 1,)),
+                           (b.minimize, (BASE_ID + 1,))):
+            said = self.acting(call, *args)
+            self.assertIn("river 0.4", said, call.__name__)
+        # every request really went out: the backend reports the silence, it does not stop asking
+        self.assertEqual(comp.opcodes(0), [CLOSE])
+        self.assertEqual(comp.opcodes(1), [ACTIVATE, SET_MINIMIZED])
+
+    def test_the_cause_named_is_the_one_that_can_produce_this_silence(self):
+        """One sentence for every request was a false attribution in both directions: `windowminimize` on a
+        headless sway 1.11 forced to this backend waits the whole timeout and warns, correctly -- sway has no
+        minimized state (measured on this guest, 2026-09-08) -- and river's read-only handle has nothing to
+        do with it, while a fullscreen that goes nowhere has nothing to do with minimize."""
+        _comp, b = self.backend(cls=ReadOnlyToplevels)
+        mini = self.acting(b.minimize, BASE_ID + 1)
+        self.assertIn("sway and river-classic have no minimized state", mini)
+        with redirect_stderr(io.StringIO()):
+            full = b.set_state(BASE_ID, "FULLSCREEN", 1)
+        self.assertNotIn("minimiz", full, "fullscreen has no business naming minimize")
+        self.assertIn("river 0.4's wlr-foreign-toplevel is read-only", full)
+
+    def test_close_says_the_client_may_be_the_reason_and_never_blames_a_compositor_alone(self):
+        """`close` is the one request whose silence has a third cause: the client. A window that answers with
+        an unsaved-changes dialog and changes nothing on its own handle is not the compositor ignoring
+        anything, and labwc and sway were both measured closing windows [M labwc.md §3]."""
+        _comp, b = self.backend(cls=ReadOnlyToplevels)
+        said = self.acting(b.close, BASE_ID)
+        self.assertIn("the window did not close within 0.5 s", said)
+        self.assertIn("the client may be asking to save", said)
+        self.assertNotIn("accepted close", said)
+
+    def test_set_state_returns_the_reason_instead_of_warning(self):
+        """The `WindowBackend.set_state` contract: a one-line reason for "accepted and not applied", which
+        wdotool prints and succeeds on, and wwmctl answers by trying its EWMH route."""
+        comp, b = self.backend(cls=ReadOnlyToplevels)
+        err = io.StringIO()
+        with redirect_stderr(err):
+            why = b.set_state(BASE_ID, "FULLSCREEN", 1)
+        self.assertEqual(err.getvalue(), "", "set_state has somewhere to return this")
+        self.assertEqual(why, "the compositor accepted set_fullscreen and did not apply it "
+                              "(river 0.4's wlr-foreign-toplevel is read-only)")
+        self.assertEqual(comp.opcodes(0), [SET_FULLSCREEN])
+
+    def test_the_reason_names_the_request_that_was_ignored(self):
+        """One window that starts maximized and one that does not, so both directions have something to
+        verify: asking for the state a window is already in has nothing to wait for and says nothing."""
+        _comp, b = self.backend(cls=ReadOnlyToplevels,
+                                toplevels=(top("Big", "alpha", MAXIMIZED), top("Small", "beta")))
+        with redirect_stderr(io.StringIO()):
+            self.assertIn("unset_maximized", b.set_state(BASE_ID, "MAXIMIZED_VERT", 0))
+            self.assertIn("set_minimized", b.set_state(BASE_ID + 1, "HIDDEN", 1))
+            self.assertIsNone(b.set_state(BASE_ID + 1, "MAXIMIZED_VERT", 0),
+                              "already unmaximized: there is nothing for the compositor to apply")
+
+    def test_a_compositor_that_acts_says_nothing_at_all(self):
+        """The default fake is sway/labwc: `wwmctl -c xtermwin` closed the window there and
+        `-b add,fullscreen` fullscreened it [M labwc.md §3], so nothing may be printed and set_state
+        returns None."""
         _comp, b = self.backend()
+        for call, args in ((b.close, (BASE_ID + 2,)), (b.activate, (BASE_ID + 1,)),
+                           (b.minimize, (BASE_ID + 1,)), (b.map, (BASE_ID + 1,))):
+            self.assertEqual(self.acting(call, *args), "", call.__name__)
+        err = io.StringIO()
+        with redirect_stderr(err):
+            self.assertIsNone(b.set_state(BASE_ID, "FULLSCREEN", 1))
+            self.assertIsNone(b.set_state(BASE_ID, "MAXIMIZED_VERT", 1))
+            self.assertIsNone(b.set_state(BASE_ID, "HIDDEN", 1))
+        self.assertEqual(err.getvalue(), "")
+
+    def test_river_classic_is_told_apart_from_river(self):
+        """The two lines of the measured table, on one compositor: close and fullscreen are silent because
+        they happen, minimize warns because river-classic has none [M river.md §2a]."""
+        _comp, b = self.backend(cls=ClassicToplevels)
+        err = io.StringIO()
+        with redirect_stderr(err):
+            self.assertIsNone(b.set_state(BASE_ID, "FULLSCREEN", 1))
+        self.assertEqual(err.getvalue(), "")
+        self.assertIn("have no minimized state", self.acting(b.minimize, BASE_ID + 1))
+        self.assertEqual(self.acting(b.close, BASE_ID + 1), "")
+
+    def test_close_accepts_any_answer_at_all_not_just_going_away(self):
+        """A client may refuse to close and only change its own state; that is an answer, and a warning
+        there would fire on every unsaved-changes dialog."""
+        _comp, b = self.backend(cls=CloseByMinimizing)
+        self.assertEqual(self.acting(b.close, BASE_ID), "")
+
+    def test_the_wait_is_bounded_and_short(self):
+        """A silent compositor must cost VERIFY_TIMEOUT once, not a hang and not a retry loop."""
+        _comp, b = self.backend(cls=ReadOnlyToplevels)
+        start = time.monotonic()
+        with redirect_stderr(io.StringIO()):
+            b.minimize(BASE_ID)
+        spent = time.monotonic() - start
+        self.assertGreaterEqual(spent, backend_wlr.VERIFY_TIMEOUT)
+        self.assertLess(spent, backend_wlr.VERIFY_TIMEOUT * 3)
+
+
+class FakeXPlane:
+    """A FakeXServer on a private socket dir, and `session` pointed at it.
+
+    A mixin and not a TestCase, so that the classes that need an X plane can be siblings rather than
+    subclasses of each other -- inheriting a TestCase would re-run its tests. tests/test_backend_cosmic.py
+    imports this one rather than keeping a second copy of the same twenty lines; `DISPLAY_NUM` is what keeps
+    two files from racing for one display number when the suite runs them in one process."""
+
+    DISPLAY_NUM = 7
+    SOCK_PREFIX = "wlr-x11-"
+    #: (xid, instance, class, _NET_WM_NAME, pid, (x, y, w, h))
+    CLIENTS = ((0x40000C, "xterm", "XTerm", "xtermwin", 4242, (0, 0, 484, 316)),)
+
+    def x_server(self, clients=None):
+        """A FakeXServer publishing `clients` in _NET_CLIENT_LIST, and the session pointed at it."""
+        clients = self.CLIENTS if clients is None else clients
+        d = tempfile.mkdtemp(prefix=self.SOCK_PREFIX)
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        old = x11_mini._SOCK_DIR
+        x11_mini._SOCK_DIR = d
+        self.addCleanup(setattr, x11_mini, "_SOCK_DIR", old)
+        srv = FakeXServer(d, num=self.DISPLAY_NUM)
+        self.addCleanup(srv.stop)
+        srv.set_prop(FakeXServer.ROOTS[0], "_NET_CLIENT_LIST", "WINDOW", 32,
+                     struct.pack("<%dI" % len(clients), *[c[0] for c in clients]))
+        for xid, inst, cls, name, pid, geo in clients:
+            srv.set_prop(xid, "WM_CLASS", "STRING", 8,
+                         inst.encode() + b"\0" + cls.encode() + b"\0")
+            srv.set_prop(xid, "_NET_WM_NAME", "UTF8_STRING", 8, name.encode())
+            srv.set_prop(xid, "_NET_WM_PID", "CARDINAL", 32, struct.pack("<I", pid))
+            srv.geometry[xid] = (0, 0, geo[2], geo[3])
+            srv.translate[xid] = (geo[0], geo[1])
+        for name, value in (("xwayland_running", lambda uid=None: True),
+                            ("find_x_display", lambda uid=None: ":%d" % self.DISPLAY_NUM),
+                            ("find_xauthority", lambda uid=None: None)):
+            patch = mock.patch.object(session, name, value)
+            patch.start()
+            self.addCleanup(patch.stop)
+        return srv
+
+
+def net_wm_state(view) -> list:
+    """The `_NET_WM_STATE` atom names `wxprop -id <native id>` prints for this View.
+
+    The real path and not a paraphrase of it: `_node_from_view` is what wxprop builds out of a views()
+    backend's row, and `NativeViewTarget` is the target `resolve_id` hands a window with no X id
+    [wxprop/core.py:850]. Two of the flags this backend fills in are only readable here -- `visible` becomes
+    `_NET_WM_STATE_HIDDEN` inside `_props`, and nothing else in the tree reads it."""
+    node = wxcore._node_from_view(view)
+    target = wxcore.NativeViewTarget(None, wxcore.NativeAtoms(), node, view.window)
+    _type, _size, wire = target.fetch(b"_NET_WM_STATE")
+    return [target.atom_name(a) for a in struct.unpack("<%dI" % (len(wire) // 4), wire)]
+
+
+class XWaylandIds(FakeXPlane, WlrTest):
+    """U10. The XWayland windows of a wlr session, under their real X ids.
+
+    On labwc an xterm whose real X id is `0x40000c` was listed as `0x000f4240` with a *synthesized*
+    `WM_CLASS "xterm","xterm"` where `xprop` said `"xterm","XTerm"`, pid 0 and the output rectangle for
+    geometry -- and the same on Budgie, Xfce-Wayland, Wayfire and Hyprland. A same-compositor control (one
+    headless sway, native backend vs `WDOTOOL_BACKEND=wlr`) turned pid 85920 into 0 and id 5 into 1000000,
+    which is what proves it is this backend and not the compositor [M recon2/labwc.md §4].
+
+    The peer is the real fake X server the wwmctl tests use, over a real socket."""
+
+    XTERM = 0x40000C
+    TOPLEVELS = (top("xtermwin", "xterm"), top("footwin", "foot"))
+
+    def test_an_xwayland_window_carries_its_real_id_class_pid_and_geometry(self):
+        self.x_server()
+        _comp, b = self.backend()
+        views = b.views()
+        self.assertIsNotNone(views, "an X plane is up: views() must fold it in")
+        xt, ft = views
+        self.assertEqual(xt.xid, self.XTERM)
+        self.assertEqual((xt.instance, xt.cls), ("xterm", "XTerm"))
+        self.assertEqual(xt.client_type, "x11")
+        self.assertEqual(xt.window.pid, 4242)
+        self.assertEqual((xt.window.x, xt.window.y, xt.window.w, xt.window.h),
+                         (0, 0, 484, 316))
+        # the native toplevel is untouched: no X client agrees with `foot`, so it keeps the floor
+        self.assertEqual((ft.xid, ft.app_id, ft.window.pid), (0, "foot", 0))
+        self.assertEqual((ft.window.w, ft.window.h), (1920, 1080))
+
+    def test_the_ids_are_the_ones_the_x_tools_print(self):
+        """The point of the whole exercise: `wwmctl -l` on labwc printed 0x000f4240 for a window `xprop`
+        knows as 0x40000c, so the window id a script carries between the two tools was wrong."""
+        self.x_server()
+        _comp, b = self.backend()
+        self.assertEqual([v.xid for v in b.views()], [self.XTERM, 0])
+        self.assertNotIn(BASE_ID, [v.xid for v in b.views()])
+
+    def test_two_windows_that_cannot_be_told_apart_keep_xid_zero(self):
+        """The KWin rule, with two of its four keys missing: no pid on a toplevel and no geometry, so two
+        xterms with the same title tie and a coin flip would hand one of them the other's id."""
+        self.x_server(clients=((0x40000C, "xterm", "XTerm", "same", 11, (0, 0, 100, 100)),
+                               (0x40000D, "xterm", "XTerm", "same", 12, (0, 0, 100, 100))))
+        _comp, b = self.backend(toplevels=(top("same", "xterm"), top("same", "xterm")))
+        err = io.StringIO()
+        with redirect_stderr(err):
+            views = b.views()
+        self.assertEqual([v.xid for v in views], [0, 0])
+        self.assertIn("could not be told apart", err.getvalue())
+
+    def test_nothing_is_opened_when_no_xwayland_is_running(self):
+        """Connecting to an X display is what *starts* Xwayland on sway and Wayfire, so views() has to ask
+        the process table first and answer None rather than spawn a server."""
+        self.x_server()
+        patch = mock.patch.object(session, "xwayland_running", lambda uid=None: False)
+        patch.start()
+        self.addCleanup(patch.stop)
+        _comp, b = self.backend()
+        self.assertIsNone(b.views())
+        self.assertEqual(b._x, None)
+
+    def test_an_x_plane_that_fails_mid_read_is_closed_and_not_just_dropped(self):
+        """views() falls back to the floor listing on any X failure, and the connection it gives up on has to
+        go with it: wdotool's daemon and a wwmctl loop both outlive one call, and a dropped reference is a
+        leaked fd until the collector gets to it."""
+        self.x_server()
+        _comp, b = self.backend()
+        self.assertIsNotNone(b.views())
+        x = b._x
+        with mock.patch.object(type(b), "_x_clients", staticmethod(lambda _x: 1 / 0)):
+            self.assertIsNone(b.views())
+        self.assertIsNone(b._x)
+        self.assertIsNone(x._sock, "the X connection was closed, not merely forgotten")
+
+    def test_a_class_that_does_not_agree_is_never_paired(self):
+        """`match_xids`'s "a pair must agree on something" rule: an X client whose WM_CLASS matches no
+        app_id gets nobody's id, and a native toplevel never claims to be an X11 client."""
+        self.x_server(clients=((0x40000C, "gedit", "Gedit", "xtermwin", 9, (0, 0, 10, 10)),))
+        _comp, b = self.backend()
+        self.assertEqual([(v.xid, v.client_type) for v in b.views()],
+                         [(0, "wayland"), (0, "wayland")])
+
+
+class ViewFlags(FakeXPlane, WlrTest):
+    """The state bits the join must not drop.
+
+    `views()` replaces the listing wxprop used to read, and wxprop's fallback for a backend without one was
+    `{"visible": w.visible}` -- so a minimized native window on labwc printed `_NET_WM_STATE_HIDDEN` before
+    this backend had a views() at all. The protocol carries four state bits and the View has a field for
+    each; a row handed over with them at their defaults is a regression, not a floor."""
+
+    XTERM = 0x40000C
+    TOPLEVELS = (top("xtermwin", "xterm", MINIMIZED),
+                 top("footwin", "foot", FULLSCREEN),
+                 top("bigwin", "bar", MAXIMIZED))
+
+    def views(self):
+        self.x_server()
+        _comp, b = self.backend()
+        return {v.window.title: v for v in b.views()}
+
+    def test_a_minimized_toplevel_comes_back_minimized(self):
+        v = self.views()["xtermwin"]
+        self.assertEqual(v.xid, self.XTERM, "and this one is the XWayland row, which had the same defaults")
+        self.assertTrue(v.minimized)
+        self.assertFalse(v.window.visible)
+
+    def test_a_fullscreen_toplevel_comes_back_fullscreen(self):
+        v = self.views()["footwin"]
+        self.assertEqual((v.fullscreen, v.minimized), (True, False))
+
+    def test_a_maximized_toplevel_carries_both_axes(self):
+        """The protocol has one all-or-nothing maximize and EWMH has two axes, which is the same mapping
+        `set_state` makes in the other direction."""
+        v = self.views()["bigwin"]
+        self.assertEqual((v.maximized_h, v.maximized_v), (True, True))
+
+    def test_wxprop_prints_the_hidden_and_fullscreen_states(self):
+        """The contract that made this a bug: `_node_from_view` reads `minimized`/`hidden` for `visible` and
+        `fullscreen` for `fullscreen_mode`, and `_NET_WM_STATE_HIDDEN` comes off that node
+        [wxprop/core.py:171-176, 545]."""
+        views = self.views()
+        self.assertIn("_NET_WM_STATE_HIDDEN", net_wm_state(views["xtermwin"]))
+        self.assertEqual(net_wm_state(views["footwin"]), ["_NET_WM_STATE_FULLSCREEN"])
+        self.assertEqual(net_wm_state(views["bigwin"]),
+                         ["_NET_WM_STATE_MAXIMIZED_HORZ", "_NET_WM_STATE_MAXIMIZED_VERT"])
+
+    def test_a_window_with_nothing_set_prints_no_states(self):
+        """The other direction: the flags are read off the compositor's state array and not invented."""
+        self.x_server()
+        _comp, b = self.backend(toplevels=(top("xtermwin", "xterm"),))
+        self.assertEqual(net_wm_state(b.views()[0]), [])
+
+
+class Capabilities(WlrTest):
+    def test_the_refusals_name_the_protocol_that_has_no_request(self):
+        """README note (c) explains these four as a tiling compositor's prerogative. labwc is a *stacking*
+        compositor and still cannot move a window, because `zwlr_foreign_toplevel_handle_v1` has
+        `set_rectangle` -- a minimise-animation hint -- and nothing else [M recon2/labwc.md §6c]. So the
+        reason names the protocol."""
+        _comp, b = self.backend()
+        for call, args, op in ((b.move_window, (BASE_ID, 1, 2), "windowmove"),
+                               (b.resize, (BASE_ID, 3, 4), "windowsize"),
+                               (b.raise_, (BASE_ID,), "windowraise"),
+                               (b.lower, (BASE_ID,), "windowlower")):
+            with self.assertRaises(CmdError) as cm:
+                call(*args)
+            self.assertTrue(getattr(cm.exception, "unsupported", False), op)
+            self.assertEqual(str(cm.exception),
+                             "%s is not supported by the wlr backend: "
+                             "zwlr_foreign_toplevel_management_v1 carries no geometry and no stacking" % op)
+
+    def test_there_are_no_desktops(self):
+        """This compositor advertises no `ext_workspace_manager_v1`, which is sway 1.11's and Wayfire
+        0.10's shape [M recon2/labwc.md §2, wayfire.md §1.1] -- there the refusal stands unchanged.
+        tests/test_backend_wlr_workspaces.py is the other half, where the global is there."""
+        _comp, b = self.backend()
+        self.assertIsNone(b.ws)
+        self.assertIsNone(b.workspaces())
         for call in (b.get_desktop, b.num_desktops):
             with self.assertRaises(CmdError) as cm:
                 call()

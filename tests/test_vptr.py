@@ -38,7 +38,18 @@ os.environ.setdefault("WDOTOOL_LAYOUT", "us")
 
 import wl_fake
 from support import RecorderDev, abs_report
+from fwcommon.wayland_mini import WlConn
 from wdotool import daemon, uinput, vptr
+
+
+def cosmic_globals(served):
+    """cosmic-comp's own recorded registry, minus what this fake serves itself.
+
+    tests/fixtures/registries/cosmic.txt is the 53 globals a COSMIC 1.7 session announced
+    [M recon2/cosmic.md §4, globals.txt]. Replaying it rather than hand-writing a pair is what makes a test
+    named "on COSMIC" mean anything: if cosmic-comp ever grows a virtual pointer, the fixture changes and
+    these tests go red, which is the correct outcome."""
+    return [g for g in wl_fake.registry_fixture("cosmic") if g[0] not in served]
 
 # What a daemon that could not open /dev/uinput says today, and must keep
 # saying when there is no protocol to fall back to either.
@@ -76,6 +87,9 @@ class PointerCompositor(wl_fake.Server):
                        allow-null in this protocol)
       with_xdg_output  advertise zxdg_output_manager_v1 (without it the
                        geometry falls back to wl_output, whose scale lies)
+      extra_globals    more (interface, version) rows to advertise and bind
+                       nothing for -- a recorded registry, so that "which
+                       compositor is this" is a question about real bytes
     """
 
     MANAGER = vptr.MANAGER
@@ -83,10 +97,11 @@ class PointerCompositor(wl_fake.Server):
     BACKLOG = 8
 
     def __init__(self, manager_version=2, refuse_create=False, with_seat=True,
-                 with_xdg_output=True):
+                 with_xdg_output=True, extra_globals=()):
         self.refuse_create = refuse_create
         self.with_seat = with_seat
         self.with_xdg_output = with_xdg_output
+        self.extra_globals = list(extra_globals)
         self.created = []        # (seat_id, pointer object id)
         self.with_output = []    # create_virtual_pointer_with_output (never)
         super().__init__(manager_version)
@@ -96,7 +111,7 @@ class PointerCompositor(wl_fake.Server):
         out += [("wl_output", 4)] * len(HEADS)
         if self.with_xdg_output:
             out.append(("zxdg_output_manager_v1", 3))
-        return out
+        return out + self.extra_globals
 
     def new_state(self):
         return {"seat": None, "mgr": None, "vp": None,
@@ -666,6 +681,65 @@ class Scroll(VptrTest):
 
 # ---------------------------------------------------------------------------
 # the policy
+
+
+class ACosmicShapedSession(VptrTest):
+    """The pointer half on COSMIC, over cosmic-comp's own registry.
+
+    Measured on a live COSMIC 1.7: `wdotool type 'hello cosmic'` landed byte-exact through
+    `zwp_virtual_keyboard_v1` on a box with no `/dev/uinput` node at all, and `wdotool mousemove 400 300`
+    answered `cannot create uinput devices` because there is no `zwlr_virtual_pointer_manager_v1` to fall
+    back to [M recon2/cosmic.md §3]. So COSMIC is the one session where the two halves come apart entirely,
+    and this class is that session."""
+
+    manager_version = None      # cosmic-comp advertises no virtual pointer
+    comp_kw = {"extra_globals": cosmic_globals(
+        ("wl_seat", "wl_output", "zxdg_output_manager_v1", vptr.MANAGER))}
+
+    def test_the_session_these_tests_talk_to_offers_no_virtual_pointer(self):
+        """Read off the socket every other test in this class uses, not out of the fixture file: what has to
+        be true is what the daemon meets -- the recording minus the four globals this fake serves itself --
+        and a `comp_kw` that subtracted the wrong ones would leave the file right and the session wrong. If
+        cosmic-comp ever grows a virtual pointer the fixture changes and this goes red, which is correct."""
+        conn = WlConn(self.comp.path)
+        self.addCleanup(conn.close)
+        ifaces = {iface for iface, _ver in conn.get_registry().values()}
+        self.assertNotIn(vptr.MANAGER, ifaces)
+        self.assertIn("zwp_virtual_keyboard_manager_v1", ifaces,
+                      "the keyboard half is exactly what does work there")
+        self.assertNotIn("zwlr_foreign_toplevel_manager_v1", ifaces)
+
+    def test_vkbd_on_click_names_cosmic(self):
+        """The refusal used to read `(Mutter and KWin do not; sway/wlroots does)`, which told a COSMIC user
+        to look for a compositor bug that is not there."""
+        d = self.daemon(uinput=True)
+        with self.assertRaises(RuntimeError) as cm:
+            d.handle({"op": "click", "btn": 1, "repeat": 1, "delay_ms": 0,
+                      "vkbd_mode": "on"})
+        said = str(cm.exception)
+        self.assertIn("--vkbd on", said)
+        self.assertIn(vptr.MANAGER, said)
+        self.assertIn("Mutter, KWin and COSMIC do not", said)
+        self.assertIn("sway, Hyprland and the wlroots family do", said)
+        self.assertIn("--vkbd on type types there", said,
+                      "and it points at the half that does work")
+        self.assertEqual(d.mouse.events, [], "it must not silently use uinput")
+
+    def test_vkbd_auto_click_falls_back_to_uinput(self):
+        """`auto` is the kernel devices unless they cannot be used at all, and on COSMIC there is nothing
+        else -- so a session with /dev/uinput clicks through it and never opens a pointer."""
+        d = self.daemon(uinput=True)
+        d.op_button(1, True)
+        self.assertEqual(d.mouse.events, [("KEY", uinput.BTN_LEFT, 1)])
+        self.assertEqual(self.comp.created, [])
+
+    def test_without_uinput_a_click_is_the_uinput_error_and_nothing_else(self):
+        """The measured line, byte for byte: `wdotool mousemove 400 300` -> `cannot create uinput devices`,
+        rc 1, on the box with no /dev/uinput node [M cosmic.md §3]."""
+        d = self.daemon(uinput=False)
+        with self.assertRaises(RuntimeError) as cm:
+            d.handle({"op": "mousemove_abs", "x": 400, "y": 300})
+        self.assertEqual(str(cm.exception), UINPUT_ERROR)
 
 
 class ThePolicy(VptrTest):

@@ -23,9 +23,16 @@ execute_after_dh_install:
 # under /etc as a conffile, and a conffile survives `apt remove` -- an entry
 # left behind pointing at a helper that removal has just deleted.  A symlink is
 # not a conffile, so it goes when the package goes.
+#
+# The enabler and its .desktop come from packaging/common/, not from here: a
+# per-user gsettings enable and an XDG autostart entry are needed identically
+# by the .deb, the rpm and the PKGBUILD, and an Arch recipe reaching into a
+# directory named for dpkg was the thing that said they were in the wrong
+# place.  Same bytes, one copy; the rpm rewrites only the .desktop's Exec=,
+# because /usr/libexec is where Fedora puts the helper.
 	install -D -m 644 gnome/modules-load-uinput.conf \
 	    debian/fuckwayland/usr/lib/modules-load.d/fuckwayland-uinput.conf
-	install -D -m 755 debian/enable-bridge \
+	install -D -m 755 packaging/common/enable-bridge \
 	    debian/fuckwayland/usr/lib/fuckwayland/enable-bridge
-	install -D -m 644 debian/enable-bridge.desktop \
+	install -D -m 644 packaging/common/enable-bridge.desktop \
 	    debian/fuckwayland/usr/lib/fuckwayland/enable-bridge.desktop

@@ -595,7 +595,8 @@ class SuiteGuard(Base):
 
     #: helpers imported by their bare name, which only resolves when the
     #: tests directory itself is on sys.path
-    BARE_HELPERS = {"support", "wl_fake", "test_dbus_mini", "test_wxrandr_mutter"}
+    BARE_HELPERS = {"support", "wl_fake", "test_dbus_mini", "test_wxrandr_mutter",
+                    "test_wwmctl_x11", "test_wxprop_x11", "test_backend_wlr"}
 
     #: what puts it there, in every file that needs it
     BOOTSTRAP = "sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))"
@@ -1147,6 +1148,307 @@ class RootWithNoSession(unittest.TestCase):
         self.assertIsNone(env.get("XAUTHORITY"))
         self.assertEqual(passthrough._display_owner_uid(":0"), os.getuid())
         self.assertIsNone(passthrough._display_owner_uid("host:0"))
+
+class MeasuredSessions(Base):
+    """U33: the five session shapes recon2 measured, each answered through the seam directories alone.
+
+    `session_kind()` is the decision the whole product hangs off: it runs before backend detection, so it is
+    what keeps a desktop that owns a promising bus name -- or a promising IPC socket -- from being handled by
+    a Wayland backend on a session where the X server is authoritative.  Every case below is a shape somebody
+    booted: Cinnamon on X11 [M recon2/cinnamon.md §3.1], i3 with `$I3SOCK` in the environment [M
+    recon2/i3.md §2a], Xfce on Wayland [M recon2/xfce-wayland.md], LXQt/Openbox under SDDM [M
+    recon2/openbox.md §2], and GDM's Wayland greeter in front of an Xorg session [M recon2/gnome-xorg.md
+    §3]."""
+
+    GREETER_UID = 125            # gdm on the measured Ubuntu box
+
+    def x11_session(self):
+        """The seam directories of a plain X11 session: an X socket, and logind saying so."""
+        self.xsock(0)
+        self.logind_file("1", TYPE="x11", DISPLAY=":0")
+        self.runtime_dir()       # the user has a runtime dir, with no wayland socket in it
+
+    def test_a_cinnamon_x11_session_is_x11_although_the_bus_says_cinnamon(self):
+        """An X11 Cinnamon session owns `org.Cinnamon` *and* `org.cinnamon.Muffin.DisplayConfig` -- the two
+        names that select the Cinnamon window backend and the Muffin display backend.  Both are on the bus
+        here, and the answer is still x11, because the bus is not consulted at all."""
+        from test_dbus_mini import MockBus
+        from fwcommon.dbus_mini import Bus
+        from wdotool import backend_detect
+        self.x11_session()
+        mock_bus = MockBus()
+        self.addCleanup(mock_bus.srv.close)
+        holders = []
+        for name in ("org.Cinnamon", "org.cinnamon.Muffin.DisplayConfig"):
+            conn = Bus(mock_bus.address)
+            self.addCleanup(conn.close)
+            self.assertEqual(conn.request_name(name), 1)
+            holders.append(conn)
+        env = dict(DISPLAY=":0", XDG_SESSION_TYPE="x11", XDG_CURRENT_DESKTOP="X-Cinnamon",
+                   DBUS_SESSION_BUS_ADDRESS=mock_bus.address)
+        self.assertEqual(self.kind(**env), "x11")
+        # ...and the bus really would have offered the backend, so the line above is not passing by accident
+        with mock.patch.dict(os.environ, env, clear=False):
+            backend_detect.reset()
+            self.addCleanup(backend_detect.reset)
+            self.assertIn("org.Cinnamon", backend_detect.session_names() or [])
+
+    def test_i3sock_does_not_defeat_the_handover(self):
+        """`$I3SOCK` (and `WDOTOOL_BACKEND=sway` with it) names a compositor we can drive; on i3 that
+        compositor is running under an X server that owns the layout, the input and the property store, and
+        the handover is settled before any of it is asked [M recon2/i3.md §2a: `WDOTOOL_BACKEND=sway
+        getactivewindow` printed the X id, i.e. the real xdotool answered]."""
+        from fwcommon import session as wsession
+        self.x11_session()
+        sockpath = os.path.join(self.runtime_dir(), "ipc-socket.4242")
+        srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        srv.bind(sockpath)
+        srv.listen(1)
+        self.addCleanup(srv.close)
+        env = {"PATH": "", "WDOTOOL_REAL_XDOTOOL": FAKE, "DISPLAY": ":0",
+               "I3SOCK": sockpath, "WDOTOOL_BACKEND": "sway",
+               "XDG_RUNTIME_DIR": self.runtime_dir()}
+        # the socket is findable: there really is a backend here to be defeated
+        with mock.patch.dict(os.environ, env, clear=True):
+            self.assertEqual(wsession.find_sway_socket(), sockpath)
+        self.assertEqual(self.kind(**env), "x11")
+        self.stub_execve()
+        with mock.patch.dict(os.environ, env, clear=True), \
+                mock.patch.object(sys, "argv", ["xdotool", "getactivewindow"]):
+            passthrough.reset_cache()
+            with self.assertRaises(ExecCalled) as cm:
+                wdotool_cli.main()
+        self.assertEqual(cm.exception.argv, ["xdotool", "getactivewindow"])
+
+    def test_xfce_on_wayland_is_wayland(self):
+        """`startxfce4` on labwc exports `XDG_SESSION_TYPE=wayland` and `XDG_CURRENT_DESKTOP=XFCE` with both
+        a live Wayland socket and a live `$DISPLAY` (Xwayland).  Reading the desktop name -- or the DISPLAY --
+        as evidence of X11 would hand Xfce-on-Wayland to the real xdotool, which is the regression this pins
+        [M recon2/xfce-wayland.md]."""
+        rd = self.runtime_dir()
+        self.wsock()
+        self.xsock(0)
+        self.assertEqual(self.kind(XDG_RUNTIME_DIR=rd, WAYLAND_DISPLAY="wayland-0",
+                                   XDG_SESSION_TYPE="wayland", XDG_CURRENT_DESKTOP="XFCE",
+                                   DESKTOP_SESSION="xfce", DISPLAY=":0"),
+                         "wayland")
+
+    def test_lxqt_under_sddm_is_x11_from_an_empty_environment(self):
+        """Lubuntu 26.04 is LXQt 2.3 on Openbox under SDDM.  `ssh root@box` there has no DISPLAY, no
+        XAUTHORITY and no XDG_SESSION_TYPE at all; logind's record of the user's session is the only truth,
+        and all four tools have to reach the original through it [M recon2/openbox.md §2]."""
+        self.x11_session()
+        self.assertEqual(self.kind(), "x11")
+        self.assertEqual(self.kind(XDG_SESSION_TYPE="tty",
+                                   XDG_RUNTIME_DIR=os.path.join(self.runuser, "0")),
+                         "x11")
+
+    def greeter_socket(self):
+        """GDM's own `wayland-0` under uid 125, and the ownership the real one has.
+
+        The seam directories are made by this test as its own user, so the owner is patched: without it the
+        greeter's socket looks like a real user's and the scan below would take it, which is exactly the bug
+        the ownership rule exists to prevent."""
+        greeter = self.touch(os.path.join(self.mkdir("run-user", str(self.GREETER_UID)), "wayland-0"))
+        real_owner = passthrough._owner
+        p = mock.patch.object(passthrough, "_owner",
+                              lambda path: self.GREETER_UID if path == greeter else real_owner(path))
+        p.start()
+        self.addCleanup(p.stop)
+        return greeter
+
+    def test_a_wayland_greeter_in_front_of_xorg_is_x11_four_ways(self):
+        """GDM's default on 24.04 when the user picks "Ubuntu on Xorg": `/run/user/125/wayland-0` is the
+        *greeter's*, and the user's session is X11.  Measured through these seams in all four ways a tool is
+        invoked [M recon2/gnome-xorg.md §3]."""
+        self.x11_session()
+        self.greeter_socket()
+        # in-session
+        self.assertEqual(self.kind(DISPLAY=":0", XDG_SESSION_TYPE="x11",
+                                   XDG_RUNTIME_DIR=self.runtime_dir()), "x11")
+        # sudo from the session: root's own XDG_SESSION_TYPE is the tty it came in on
+        self.assertEqual(self.kind(XDG_SESSION_TYPE="tty", SUDO_UID=str(self.uid)), "x11")
+        with mock.patch.object(passthrough.os, "getuid", lambda: 0):
+            # root over ssh, empty environment: no target uid at all, logind readable
+            self.assertEqual(self.kind(), "x11")
+            # ...and with logind unreadable, the socket scan alone -- where the greeter's socket is the only
+            # Wayland socket on the box and must still lose to the X one
+            shutil.rmtree(self.logind)
+            os.makedirs(self.logind)
+            self.assertEqual(self.kind(), "x11")
+
+    def test_a_real_users_socket_in_the_same_tree_wins(self):
+        """The control for the arm above: the scan does find a Wayland session when there is one, so the four
+        answers are about whose socket it is and not about the scan finding nothing."""
+        self.x11_session()
+        self.greeter_socket()
+        shutil.rmtree(self.logind)
+        os.makedirs(self.logind)
+        self.wsock()                     # the user's own, in the user's own runtime dir
+        with mock.patch.object(passthrough.os, "getuid", lambda: 0):
+            self.assertEqual(self.kind(), "wayland")
+
+
+class MissingOriginalPerDistro(Base):
+    """U14: exit 127's line, byte for byte, per `/etc/os-release` family.
+
+    Every "install the original" message this project prints named a Debian package and `apt`, on every
+    distribution: `apt install xdotool` printed on a NixOS box with no apt [M recon2/nixos.md], `x11-utils`
+    named on Fedora where the package is called `xprop` and `x11-utils` does not exist [M recon2/fedora.md],
+    and `x11-xserver-utils` on Arch where it is `xorg-xrandr` [M recon2/arch.md].
+
+    The family comes from `fwcommon.distro`, whose seam is a module constant rather than an environment
+    variable, so these plant os-release files and point the constant at them.  The subprocess half of the
+    handover (a real exit 127 through a real PATH) is tests/test_passthrough_exec.py:NoOriginal, which runs
+    on whatever family the box really is."""
+
+    #: os-release bodies, as the four distributions write them [M the four recon reports]
+    RELEASES = {
+        "debian": 'ID=debian\nID_LIKE=""\n',
+        "ubuntu": 'ID=ubuntu\nID_LIKE=debian\n',
+        "fedora": "ID=fedora\nVERSION_ID=44\n",
+        "arch": "ID=arch\n",
+        "nixos": 'ID=nixos\nVERSION="26.05"\n',
+    }
+    #: family -> tool -> the whole parenthesis
+    WANT = {
+        "debian": {"xdotool": "apt install xdotool", "wmctrl": "apt install wmctrl",
+                   "xprop": "apt install x11-utils", "xrandr": "apt install x11-xserver-utils"},
+        "ubuntu": {"xdotool": "apt install xdotool", "wmctrl": "apt install wmctrl",
+                   "xprop": "apt install x11-utils", "xrandr": "apt install x11-xserver-utils"},
+        "fedora": {"xdotool": "dnf install xdotool", "wmctrl": "dnf install wmctrl",
+                   "xprop": "dnf install xprop", "xrandr": "dnf install xrandr"},
+        "arch": {"xdotool": "pacman -S xdotool", "wmctrl": "pacman -S wmctrl",
+                 "xprop": "pacman -S xorg-xprop", "xrandr": "pacman -S xorg-xrandr"},
+        "nixos": {"xdotool": "nix-env -iA nixpkgs.xdotool",
+                  "wmctrl": "nix-env -iA nixpkgs.wmctrl",
+                  "xprop": "nix-env -iA nixpkgs.xorg.xprop",
+                  "xrandr": "nix-env -iA nixpkgs.xorg.xrandr"},
+    }
+
+    @contextlib.contextmanager
+    def plant(self, body, name="os-release"):
+        """Point `distro.OS_RELEASE` at a file holding `body` for the duration of the `with`; None means the
+        file is not there at all.
+
+        A context manager rather than an addCleanup: the table below plants twenty times inside one test, and
+        the obvious way to undo a plant mid-test -- `self.doCleanups()` -- also runs setUp's cleanups, which
+        deletes `self.tmp` (the next `touch()` silently recreates it and nothing removes it again: one
+        /tmp/fw_pt_* per run, 16 of them on this box) and drops the `_X11_SOCK_DIR`/`_LOGIND_DIR` patches for
+        every remaining subTest."""
+        from fwcommon import distro
+        path = os.path.join(self.tmp, name)
+        if body is None:
+            path = os.path.join(self.tmp, "no-such-os-release")
+        else:
+            self.touch(path, body)
+        with contextlib.ExitStack() as stack:
+            for attr, value in (("OS_RELEASE", path),
+                                ("NIXOS_MARKER", os.path.join(self.tmp, "no-such-NIXOS"))):
+                stack.enter_context(mock.patch.object(distro, attr, value))
+            yield path
+
+    def test_every_family_names_its_own_package_for_all_four_tools(self):
+        self.maxDiff = None
+        for family, body in self.RELEASES.items():
+            for tool in ("xdotool", "wmctrl", "xprop", "xrandr"):
+                with self.subTest(family=family, tool=tool):
+                    with self.plant(body, name="os-release." + family):
+                        self.assertEqual(
+                            passthrough._missing_message(tool),
+                            "%s: this is fuckwayland's clone and this is an X11 session, but no real %s was "
+                            "found on PATH -- install it (%s) or set %s=/path/to/%s\n"
+                            % (tool, tool, self.WANT[family][tool],
+                               passthrough._OVERRIDE[tool], tool))
+
+    def test_no_os_release_at_all_keeps_the_debian_bytes(self):
+        """A distribution we cannot identify gets what every box got before this table existed, which is why
+        no older test of this line moved."""
+        with self.plant(None):
+            self.assertIn("(apt install x11-utils)", passthrough._missing_message("xprop"))
+
+    def test_the_other_half_of_the_line_is_untouched(self):
+        """The only thing keyed on the family is the parenthesis: the reason, the tool name and the override
+        variable are the same sentence they always were, including on a forced handover."""
+        with self.plant(self.RELEASES["arch"]):
+            msg = passthrough._missing_message("xrandr", x11=False)
+        self.assertIn("a handover to the real tool was asked for", msg)
+        self.assertNotIn("this is an X11 session", msg)
+        self.assertIn("(pacman -S xorg-xrandr)", msg)
+        self.assertTrue(msg.endswith("set WXRANDR_REAL_XRANDR=/path/to/xrandr\n"), msg)
+
+
+class WarandrGtkHintPerDistro(Base):
+    """U14's fourth consumer: warandr's "install GTK 3 for Python" line, per family.
+
+    warandr is the one tool in the set that never hands over -- there is nothing to hand over to, arandr is
+    not installed beside it -- so this line is all a user with no python3-gi has, and it named
+    `sudo apt install python3-gi gir1.2-gtk-3.0` on Fedora, Arch and NixOS alike.  The packages are
+    `python3-gobject gtk3` [M recon2/fedora.md], `python-gobject gtk3` [M recon2/arch.md] and
+    `nixpkgs.python3Packages.pygobject3 nixpkgs.gtk3` [M recon2/nixos.md] -- and nix-env is per-user, so
+    NixOS is the one family whose line carries no `sudo`.
+
+    Kept beside the exit-127 table above because it is the same table (`fwcommon.distro`) and the same claim;
+    the `GTK_HINT` constant tests/test_warandr_model.py pins is the Debian rendering and does not move."""
+
+    #: family -> the whole line, with the error text already in it
+    WANT = {
+        "debian": "warandr: GTK 3 for Python is not available (no module named gi) - on Ubuntu/Debian: "
+                  "sudo apt install python3-gi gir1.2-gtk-3.0\n",
+        "fedora": "warandr: GTK 3 for Python is not available (no module named gi) - on Fedora: "
+                  "sudo dnf install python3-gobject gtk3\n",
+        "arch": "warandr: GTK 3 for Python is not available (no module named gi) - on Arch: "
+                "sudo pacman -S python-gobject gtk3\n",
+        "nixos": "warandr: GTK 3 for Python is not available (no module named gi) - on NixOS: "
+                 "nix-env -iA nixpkgs.python3Packages.pygobject3 nixpkgs.gtk3\n",
+    }
+    ERR = "no module named gi"
+
+    def test_every_family_gets_its_own_installer_and_packages(self):
+        from warandr import cli as warandr_cli
+        self.maxDiff = None
+        for family, want in self.WANT.items():
+            with self.subTest(family=family):
+                self.assertEqual(warandr_cli.gtk_hint(self.ERR, family), want)
+
+    def test_only_nixos_is_printed_without_sudo(self):
+        """`nix-env -iA` run as root installs into root's profile and not the user's, which is why the sudo
+        is per family and not a constant in the sentence."""
+        from warandr import cli as warandr_cli
+        for family in ("debian", "fedora", "arch"):
+            self.assertIn(": sudo ", warandr_cli.gtk_hint(self.ERR, family), family)
+        self.assertNotIn("sudo", warandr_cli.gtk_hint(self.ERR, "nixos"))
+
+    def test_a_box_we_cannot_identify_still_gets_the_debian_bytes(self):
+        """No family argument and no readable os-release: the answer is the constant every existing test of
+        this line pins, so an unknown distribution keeps today's behaviour rather than a worse guess."""
+        from warandr import cli as warandr_cli
+        with self.plant_release(None):
+            self.assertEqual(warandr_cli.gtk_hint(self.ERR), warandr_cli.GTK_HINT % self.ERR)
+            self.assertEqual(warandr_cli.gtk_hint(self.ERR), self.WANT["debian"])
+
+    def test_the_family_comes_off_os_release_when_none_is_passed(self):
+        """The production call site passes no family: `/etc/os-release` is what picks the line, which is the
+        whole point of the change (an Arch box printed the Debian one)."""
+        from warandr import cli as warandr_cli
+        with self.plant_release("ID=arch\n"):
+            self.assertEqual(warandr_cli.gtk_hint(self.ERR), self.WANT["arch"])
+
+    @contextlib.contextmanager
+    def plant_release(self, body):
+        """`distro.OS_RELEASE` pointed at a planted file, or at nothing when `body` is None."""
+        from fwcommon import distro
+        path = os.path.join(self.tmp, "os-release")
+        if body is None:
+            path = os.path.join(self.tmp, "no-such-os-release")
+        else:
+            self.touch(path, body)
+        with contextlib.ExitStack() as stack:
+            for attr, value in (("OS_RELEASE", path),
+                                ("NIXOS_MARKER", os.path.join(self.tmp, "no-such-NIXOS"))):
+                stack.enter_context(mock.patch.object(distro, attr, value))
+            yield
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

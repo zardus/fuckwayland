@@ -1,0 +1,131 @@
+# Maintainer: Antonio Bianchi <antonio.bianchi.333@gmail.com>
+#
+# The Arch counterpart of debian/ and packaging/rpm/.  Assembled, installed
+# with `pacman -U` and removed again for real in an Arch bootstrap root on the
+# Ubuntu 26.04 guest, 2026-09-08: 238 files, 7.1 MB, the six tools ran, and
+# `pacman -R` took everything including /var/lib/fuckwayland with it
+# [recon2/pkg-arch.md 2].  makepkg itself needs /proc (bash process
+# substitution: `/dev/fd/63: No such file or directory`, then fakeroot "nested
+# operation not yet supported"), which that sandbox has not got, so the recipe
+# was executed step by step there and the first real makepkg run is the CI
+# `pkgbuild` job in archlinux:base-devel.
+#
+# scripts/build-pkgbuild.sh is what CI runs.  It writes PKGBUILD.local into
+# dist/pkgbuild/ -- never beside this file, so a build leaves `git status`
+# nothing to explain -- with a local `git archive` tarball and its real sha256,
+# so nothing in what CI builds is SKIP.
+pkgname=fuckwayland
+pkgver=0.4.0
+pkgrel=1
+pkgdesc="The X11 power tools (xdotool, wmctrl, xprop, xrandr, arandr) as drop-in clones for Wayland, plus wmirror"
+
+# 'any' is honest only because build() regenerates the three type descriptions
+# the overlap extension ships.  The checked-in ones are LP64 blobs -- every
+# pointer in them is declared guint64 and the record layouts are hard-coded
+# x86_64 offsets (docs/Technical.md section 6) -- so shipping them as-is under
+# arch=('any') would be a lie on a 32-bit or ILP32 machine.  Regenerating costs
+# two makedepends and was measured to work on Arch's own toolchain:
+# `gen-gir.py --check` printed "3 compared, 0 skipped" with
+# gobject-introspection 1.86.0-2 and python-gobject 3.56.3-1
+# [recon2/pkg-arch.md 5].  The other honest option was arch=('x86_64').
+arch=('any')
+url="https://github.com/antoniobianchi333/fuckwayland"
+
+# BSD-2-Clause, copied from the SPDX-License-Identifier header on line 1 of the
+# LICENSE the owner added in HEAD 375d815; pyproject.toml and debian/copyright
+# say the same.  It is a common identifier, so namcap's "Uncommon license
+# identifiers such as 'LicenseRef-none' require license files below
+# /usr/share/licenses/fuckwayland/ ... Found 0/1" (measured, namcap 3.6.0-3,
+# while the placeholder stood) is gone and packaging/arch/namcap.expected no
+# longer carries it.  package() installs the file anyway, which is what Arch
+# expects of every package whose licence is not one of /usr/share/licenses/
+# common/; scripts/build-pkgbuild.sh refuses the build if this array and
+# LICENSE's first line disagree.
+license=('BSD-2-Clause')
+
+# Pure standard library: python and nothing else.  Everything the six tools
+# reach for at run time is optional and named below, one clause each.
+depends=('python')
+makedepends=('python-build' 'python-installer' 'python-wheel' 'python-setuptools'
+             'gobject-introspection' 'python-gobject')
+optdepends=('python-gobject: the warandr GUI'
+            'gtk3: the warandr GUI'
+            'wl-mirror: wmirror, region and odd-shape mirroring on wlroots'
+            'gnome-shell: the bridge extension, needed by the window commands on GNOME'
+            'xdotool: the real tool wdotool hands over to on an X11 session'
+            'wmctrl: the real tool wwmctl hands over to on an X11 session'
+            'xorg-xprop: the real tool wxprop hands over to on an X11 session'
+            'xorg-xrandr: the real tool wxrandr hands over to on an X11 session')
+install="$pkgname.install"
+
+# Upstream's tags are two-component -- v0.4 and v0.3 -- while pyproject.toml
+# says 0.4.0, and the release tarball archive/refs/tags/v0.4.tar.gz (3,952,338
+# bytes, sha256 7ad4827d...) unpacks to fuckwayland-0.4/ (measured).  Hence
+# _tag and _srcdir rather than a plain "v$pkgver".  The day upstream tags the
+# three-component string these two lines become `_tag="v$pkgver"` and
+# `_srcdir="$pkgname-$pkgver"` and nothing else moves.
+#
+# This source line describes the NEXT tag, not v0.4: the v0.4 tree has neither
+# packaging/common/ (the enabler was still debian/enable-bridge) nor a LICENSE
+# (added in 375d815), and package() reaches for both.  Nothing in CI builds
+# from it -- scripts/build-pkgbuild.sh rewrites source, sha256sums and _srcdir
+# to a local `git archive` of the commit under test -- so the first thing to do
+# on the day this goes to the AUR is to tag, re-measure the sha256 and build it
+# once from the tarball.
+_tag="v${pkgver%.0}"
+_srcdir="$pkgname-${_tag#v}"
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/$_tag.tar.gz")
+sha256sums=('7ad4827d67904589402d5f5f1371b1d8791be2e397fd3d3095320b29b7d4c7a3')
+
+build() {
+  cd "$_srcdir"
+  # The typelibs first: see arch=('any') above.  gen-gir.py writes the .gir and
+  # the .typelib for every record in generations.json, out of the checked-in
+  # .gir sources, and refuses a layout it has not measured.
+  python gnome/overlap-typelib/gen-gir.py
+  python -m build --wheel --no-isolation
+}
+
+package() {
+  cd "$_srcdir"
+  # python -m installer also writes the __pycache__ trees (134 .pyc files,
+  # measured), so no scriptlet has to compile anything.
+  python -m installer --destdir="$pkgdir" dist/*.whl
+
+  local ext="usr/share/gnome-shell/extensions"
+  install -Dm644 gnome/fuckwayland-bridge@fuckwayland/extension.js \
+                 gnome/fuckwayland-bridge@fuckwayland/metadata.json \
+                 gnome/fuckwayland-bridge@fuckwayland/org.fuckwayland.Bridge1.xml \
+                 -t "$pkgdir/$ext/fuckwayland-bridge@fuckwayland/"
+  install -Dm644 gnome/fuckwayland-overlap@fuckwayland/extension.js \
+                 gnome/fuckwayland-overlap@fuckwayland/metadata.json \
+                 gnome/fuckwayland-overlap@fuckwayland/rules.js \
+                 gnome/fuckwayland-overlap@fuckwayland/org.fuckwayland.Overlap1.xml \
+                 gnome/fuckwayland-overlap@fuckwayland/generations.json \
+                 -t "$pkgdir/$ext/fuckwayland-overlap@fuckwayland/"
+  install -Dm644 gnome/fuckwayland-overlap@fuckwayland/typelib/*.typelib \
+                 -t "$pkgdir/$ext/fuckwayland-overlap@fuckwayland/typelib/"
+
+  install -Dm644 gnome/60-fuckwayland-uinput.rules \
+                 "$pkgdir/usr/lib/udev/rules.d/60-fuckwayland-uinput.rules"
+  install -Dm644 gnome/modules-load-uinput.conf \
+                 "$pkgdir/usr/lib/modules-load.d/fuckwayland-uinput.conf"
+
+  # From packaging/common/, not from debian/: the enabler is a per-user
+  # gsettings enable and an XDG autostart entry, which every packaging needs
+  # identically.  The .desktop goes straight into /etc/xdg/autostart -- pacman
+  # has no conffiles, only backup=() entries are preserved, and this file is
+  # measured going in and coming out again with the package.
+  install -Dm755 packaging/common/enable-bridge "$pkgdir/usr/lib/$pkgname/enable-bridge"
+  install -Dm644 packaging/common/enable-bridge.desktop \
+                 "$pkgdir/etc/xdg/autostart/fuckwayland-enable-bridge.desktop"
+
+  install -Dm644 warandr.desktop -t "$pkgdir/usr/share/applications/"
+  install -Dm644 README.md CHANGELOG.md packaging/arch/README.Arch \
+                 -t "$pkgdir/usr/share/doc/$pkgname/"
+  install -Dm644 docs/*.md -t "$pkgdir/usr/share/doc/$pkgname/"
+
+  # Unconditional: BSD-2-Clause is not in /usr/share/licenses/common/, so the
+  # package has to carry the text itself or namcap says "Found 0/1".
+  install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname/"
+}

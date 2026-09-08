@@ -27,7 +27,9 @@ sys.path.insert(0, ROOT)
 
 from fwcommon.errors import CmdError
 from wdotool.backend import Window
+from wdotool.backend_cosmic import CosmicBackend
 from wdotool.backend_sway import SwayBackend
+from wdotool.backend_wlr import WlrBackend
 from wwmctl import cli, core
 from wwmctl.cli import WMCTRL_VERSION
 
@@ -500,7 +502,37 @@ class DesktopTest(unittest.TestCase):
         self.assertEqual((rc, b.calls), (0, [("set_desktop", 0)]))
 
 
+class WlrFloorBackend(FakeSwayBackend):
+    """A listing backend wearing the wlr floor's identity.
+
+    `name` and `wm_name` are read off the product class, not spelled again here, so this says something
+    about `WlrBackend` rather than about itself."""
+
+    name = WlrBackend.name
+    wm_name = WlrBackend.wm_name
+
+
+class CosmicFloorBackend(FakeSwayBackend):
+    name = CosmicBackend.name
+    wm_name = CosmicBackend.wm_name
+
+
 class WmInfoTest(unittest.TestCase):
+    def test_m_on_the_wlr_backend_names_the_window_manager(self):
+        """U31. With no X plane -- a root shell, or a session with no Xwayland -- `wm_info` falls back to
+        the backend, and the wlr floor used to answer with its own token, `Name: wlr`. Every wlroots xwm
+        publishes `wlroots wm` on its check window, byte-identical on labwc, Wayfire, river and sway
+        [M recon2/labwc.md §3], so the in-session and out-of-session answers now agree."""
+        rc, out, _e, _b = run(["-m"], backend=WlrFloorBackend([dict(s) for s in SPECS]))
+        self.assertEqual(rc, 0)
+        self.assertEqual(out.splitlines()[0], "Name: wlroots wm")
+
+    def test_m_on_the_cosmic_backend_names_smithays_xwm(self):
+        """`wwmctl -m` with cosmic-comp's Xwayland reachable printed `Name: Smithay X WM` off the check
+        window [M recon2/cosmic.md §3]; the no-X-plane answer is now the same string."""
+        rc, out, _e, _b = run(["-m"], backend=CosmicFloorBackend([dict(s) for s in SPECS]))
+        self.assertEqual((rc, out.splitlines()[0]), (0, "Name: Smithay X WM"))
+
     def test_m_with_x_plane(self):
         rc, out, _e, _b = run(["-m"], x11=FakeX11())
         self.assertEqual(out, "Name: wlroots wm\n"

@@ -160,9 +160,13 @@ class VirtualPointer:
         try:
             found = conn.find_global(MANAGER)
             if found is None:
+                # COSMIC joins Mutter and KWin here and nowhere else: cosmic-comp's 53 globals carry
+                # zwp_virtual_keyboard_manager_v1 and no zwlr_virtual_pointer_manager_v1, so on COSMIC
+                # typing needs no privilege and clicking needs /dev/uinput [M recon2/cosmic.md §3].
                 raise VptrError(
                     f"this compositor does not implement {MANAGER} "
-                    "(Mutter and KWin do not; sway/wlroots does)")
+                    "(Mutter, KWin and COSMIC do not; sway, Hyprland and the wlroots family do). "
+                    "COSMIC's keyboard half works: --vkbd on type types there with no privilege")
             version = min(found[1], MAX_VERSION)
             # The seat argument is allow-null in this protocol and a NULL was accepted and moved the cursor when
             # it was tried, but a seat that exists is the more precise statement -- and the seat's pointer

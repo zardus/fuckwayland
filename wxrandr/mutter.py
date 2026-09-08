@@ -59,6 +59,7 @@ Mapping to the wxrandr model (core.OutputState / core.Target):
                          mode with the same size (and rate) -> `cannot find mode`
 """
 
+import collections
 import struct
 
 from fwcommon import session as wsession
@@ -66,16 +67,62 @@ from fwcommon.dbus_mini import Bus, DBusError, Variant
 from wxrandr import core, gnome_overlap, monitors_xml
 from wxrandr.core import Fatal, Mode, OutputState, round_half_away, warn  # noqa: F401
 
-DEST = "org.gnome.Mutter.DisplayConfig"
-PATH = "/org/gnome/Mutter/DisplayConfig"
-IFACE = "org.gnome.Mutter.DisplayConfig"
+class Flavor(collections.namedtuple(
+        "Flavor", "name dest path iface desktop compositor config_name keep_dialog")):
+    """One compositor speaking this D-Bus interface: the three names it answers on, and the four words the
+    messages need. Muffin is Mutter's fork under Cinnamon's own bus name -- `GetCurrentState` and
+    `ApplyMonitorsConfig` are byte-for-byte the signatures below, and a real mode change applied and read
+    back with only the three names swapped [M recon2/cinnamon.md §2.2, §4; displayconfig-introspect.txt] --
+    so it is a flavour of this backend and not a backend of its own.
+
+    Every string that names GNOME or Mutter to a user is a field here, because a Cinnamon user reading
+    "GNOME's Mutter refused this layout" about their own session has been told something false about which
+    program said no."""
+
+    __slots__ = ()
+
+    @property
+    def match(self) -> str:
+        return "type='signal',interface='%s',member='MonitorsChanged'" % self.iface
+
+    @property
+    def persist_warning(self) -> str:
+        """The confirmation dialog, by the words it puts on the screen. Cinnamon's is its own string --
+        `usr/share/cinnamon/js/ui/windowManager.js:77 _("Keep these display settings?")`, with `Keep changes`
+        on the button at :90 -- and the same 20-second `complete_display_change(false)` shape as GNOME's
+        [M recon2/cinnamon.md §2.2]."""
+        return ('%s will ask "%s" for 20 s; confirm the dialog or the layout reverts\n'
+                % (self.desktop, self.keep_dialog))
+
+
+MUTTER = Flavor(name="mutter", dest="org.gnome.Mutter.DisplayConfig",
+                path="/org/gnome/Mutter/DisplayConfig",
+                iface="org.gnome.Mutter.DisplayConfig",
+                desktop="GNOME", compositor="Mutter",
+                config_name=monitors_xml.NAME, keep_dialog="Keep changes?")
+#: Cinnamon's copy. The saved file is `~/.config/cinnamon-monitors.xml` (the string in
+#: libmuffin.so.0.0.0), and the validator, error strings and all, is Mutter's own: `Logical monitors not
+#: adjacent`, `Logical monitors overlap`, `Logical monitor scales must be identical`, `Config contains
+#: multiple primary logical monitors` [M recon2/cinnamon.md §2.2].
+MUFFIN = Flavor(name="cinnamon", dest="org.cinnamon.Muffin.DisplayConfig",
+                path="/org/cinnamon/Muffin/DisplayConfig",
+                iface="org.cinnamon.Muffin.DisplayConfig",
+                desktop="Cinnamon", compositor="Muffin",
+                config_name="cinnamon-monitors.xml",
+                keep_dialog="Keep these display settings?")
+
+#: the default flavour's names, kept as module constants because wxrandr/cli.py's
+#: `_probe_mutter()` and the tests read them
+DEST = MUTTER.dest
+PATH = MUTTER.path
+IFACE = MUTTER.iface
 APPLY_SIG = "uua(iiduba(ssa{sv}))a{sv}"
 VERIFY, TEMPORARY, PERSISTENT = 0, 1, 2
 LAYOUT_LOGICAL, LAYOUT_PHYSICAL = 1, 2
 MONITORS_CHANGED_TIMEOUT = 5.0
 CANCELLED = ("output configuration cancelled by a concurrent change; " "try again\n")
-_MATCH = "type='signal',interface='%s',member='MonitorsChanged'" % IFACE
-PERSIST_WARNING = ('GNOME will ask "Keep changes?" for 20 s; confirm the ' "dialog or the layout reverts\n")
+_MATCH = MUTTER.match
+PERSIST_WARNING = MUTTER.persist_warning
 BACKUP_NOTE = "the saved display configuration as it was is kept in %s\n"
 # Measured on 24.04/GNOME 46: with Fractional Scaling off the session is in physical
 # layout mode, Mutter writes the file with no <layoutmode> at all, and the positions in
@@ -90,7 +137,7 @@ NOTHING_TO_DO = ("--unsafe-gnome-overlap: the monitors are already where this as
 LAYOUT_MODE_WARNING = (
     "saved as physical-pixel positions (this session has Fractional Scaling off): if "
     "it is ever turned on, a scaled output changes width, this layout stops being "
-    "adjacent and GNOME then refuses the whole saved file, every other layout in it "
+    "adjacent and %s then refuses the whole saved file, every other layout in it "
     "too\n")
 
 
@@ -165,19 +212,23 @@ def _not_ok_why(reply) -> str:
     return (" (%s)" % (check or reason)) if (check or reason) else ""
 
 
-def _refused(e: DBusError) -> str:
-    """A rejected ApplyMonitorsConfig, in Mutter's name.  We pass every layout on unchanged -- overlaps
-    included, which X11, KWin and wlroots all take -- so when one comes back refused the limit is GNOME's, and
-    the line has to say so before quoting Mutter's own words (a two-monitor overlap gets "Logical monitors not
-    adjacent", the same sentence a gap gets).
+def _refused(e: DBusError, flavor: Flavor = MUTTER) -> str:
+    """A rejected ApplyMonitorsConfig, in the compositor's name.  We pass every layout on unchanged --
+    overlaps included, which X11, KWin and wlroots all take -- so when one comes back refused the limit is the
+    compositor's, and the line has to say so before quoting its own words (a two-monitor overlap gets "Logical
+    monitors not adjacent", the same sentence a gap gets).
 
     Mutter's own sentence does not say what to do about it, and the usual cause -- `--output MIDDLE --off`,
-    which leaves the row with a hole -- has one obvious answer, so adjacency refusals carry it."""
-    line = "GNOME's Mutter refused this layout: " + _text(e)
+    which leaves the row with a hole -- has one obvious answer, so adjacency refusals carry it.
+
+    Muffin is where the name matters: it carries Mutter's validator with Mutter's strings, word for word
+    [M recon2/cinnamon.md §2.2], so the only thing that tells a Cinnamon user which program refused them is
+    this prefix."""
+    line = "%s's %s refused this layout: " % (flavor.desktop, flavor.compositor) + _text(e)
     if "adjacent" in (e.message or "") or "overlap" in (e.message or ""):
         line = line.rstrip("\n") + (
-            " (GNOME allows neither a gap nor an overlap between outputs; "
-            "re-place the neighbours in the same command)\n")
+            " (%s allows neither a gap nor an overlap between outputs; "
+            "re-place the neighbours in the same command)\n" % flavor.desktop)
     return line
 
 
@@ -250,8 +301,8 @@ def keep_adjacent(targets: list, dims: dict, pos: dict) -> list:
 
 # -- detection ----------------------------------------------------------------
 
-def probe(addr: str | None = None):
-    """A Bus on the graphical session's D-Bus if Mutter's DisplayConfig is
+def probe(addr: str | None = None, flavor: Flavor = MUTTER):
+    """A Bus on the graphical session's D-Bus if this flavour's DisplayConfig is
     there, else None. Never raises (backend auto-detection)."""
     try:
         if addr is None:
@@ -263,7 +314,7 @@ def probe(addr: str | None = None):
     except (DBusError, OSError, ValueError):
         return None
     try:
-        if bus.name_has_owner(DEST):
+        if bus.name_has_owner(flavor.dest):
             return bus
     except DBusError:
         pass
@@ -323,14 +374,24 @@ def wl_output_info(sock_path: str | None = None) -> dict:
 # -- the backend --------------------------------------------------------------
 
 class MutterOutputs:
-    """Snapshot + one-call atomic apply over org.gnome.Mutter.DisplayConfig."""
+    """Snapshot + one-call atomic apply over org.gnome.Mutter.DisplayConfig, or Muffin's copy of it.
+
+    `flavor` is the whole difference between GNOME and Cinnamon here: the three names, the file the confirmed
+    `--persistent` writes, and the words the messages use. Measured against a nested muffin 6.4.1 with only
+    the names swapped -- `--query`, `--listmonitors`, and an `--output LVDS1 --mode 1024x768` that really
+    changed the mode and read back changed [M recon2/cinnamon.md §4]."""
 
     name = "mutter"
 
-    def __init__(self, bus: Bus | None = None, addr: str | None = None, wl_socket=None):
+    def __init__(self, bus: Bus | None = None, addr: str | None = None, wl_socket=None,
+                 flavor: Flavor = MUTTER):
         """`wl_socket`: Wayland socket path for the wl_output enrichment
         (None = the session's, False = none)."""
         self.wl_socket = wl_socket
+        self.flavor = flavor
+        # shadows the class attribute: `--listproviders` prints it as the compositor's
+        # name, and on Cinnamon that is the backend token the user typed, not "mutter"
+        self.name = flavor.name
         if bus is None:
             if addr is None:
                 hit = wsession.find_session_bus()
@@ -340,13 +401,14 @@ class MutterOutputs:
             bus = Bus(addr)
         self.bus = bus
         try:
-            owned = self.bus.name_has_owner(DEST)
+            owned = self.bus.name_has_owner(flavor.dest)
         except DBusError:
             self.bus.close()
             raise
         if not owned:
             self.bus.close()
-            raise Fatal("%s is not on the session bus (not a GNOME " "session?)\n" % DEST)
+            raise Fatal("%s is not on the session bus (not a %s session?)\n"
+                        % (flavor.dest, flavor.desktop))
         self.serial = 0
         self.fingerprint = None      # monitors + layout the serial stood for
         self.props = {}
@@ -366,7 +428,8 @@ class MutterOutputs:
 
     def get_current_state(self):
         try:
-            return self.bus.call(DEST, PATH, IFACE, "GetCurrentState")
+            return self.bus.call(self.flavor.dest, self.flavor.path, self.flavor.iface,
+                                 "GetCurrentState")
         except DBusError as e:
             raise Fatal(_text(e))
 
@@ -464,7 +527,8 @@ class MutterOutputs:
         if len(flagged) <= 1:
             return flagged[0] if flagged else None
         try:
-            _serial, _crtcs, outputs, _modes, _mw, _mh = self.bus.call(DEST, PATH, IFACE, "GetResources")
+            _serial, _crtcs, outputs, _modes, _mw, _mh = self.bus.call(
+                self.flavor.dest, self.flavor.path, self.flavor.iface, "GetResources")
             for out in outputs:
                 if out[7].get("primary") and out[4] in lm_of:
                     return lm_of[out[4]]
@@ -598,7 +662,8 @@ class MutterOutputs:
 
     def _call_apply(self, method: int, plan: list):
         self.last_method = method
-        self.bus.call(DEST, PATH, IFACE, "ApplyMonitorsConfig", APPLY_SIG,
+        self.bus.call(self.flavor.dest, self.flavor.path, self.flavor.iface,
+                      "ApplyMonitorsConfig", APPLY_SIG,
                       (self.serial, method, self.to_wire(plan), {}))
 
     def _send(self, method: int, plan: list):
@@ -610,7 +675,7 @@ class MutterOutputs:
             self._call_apply(method, plan)
         except DBusError as e:
             if not _is_stale(e):
-                raise Fatal(_refused(e))
+                raise Fatal(_refused(e, self.flavor))
             serial, monitors, logical, _props = self.get_current_state()
             if self._fingerprint(monitors, logical) != self.fingerprint:
                 raise Fatal(CANCELLED)
@@ -620,7 +685,7 @@ class MutterOutputs:
             except DBusError as e2:
                 if _is_stale(e2):
                     raise Fatal(CANCELLED)
-                raise Fatal(_refused(e2))
+                raise Fatal(_refused(e2, self.flavor))
 
     def verify(self, state: core.State, targets: list):
         """--dryrun: method 0 — Mutter validates, nothing changes."""
@@ -707,6 +772,13 @@ class MutterOutputs:
         check's failure path, and it writes nothing: `_unmeasured_facts()` below
         asks the extension to refuse in its own words so that the message can
         carry the numbers a maintainer needs."""
+        not_gnome = gnome_overlap.not_gnome_reason(self.flavor.name)
+        if not_gnome is not None:
+            # The flavour, not the session: Muffin enforces Mutter's adjacency rule with Mutter's own strings
+            # [M recon2/cinnamon.md §2.2], so a Cinnamon user meets this refusal for real -- and the route
+            # behind the flag has nothing to offer them (gnome_overlap.CINNAMON_REASON).
+            raise Fatal("%s only means anything on GNOME; %s\n"
+                        % (gnome_overlap.FLAG, not_gnome))
         ov = gnome_overlap.Overlap(self.bus)
         version = ov.shell_version()
         no_force = gnome_overlap.force_reason(force, version) if force else None
@@ -757,9 +829,27 @@ class MutterOutputs:
         cheaply: the Shell's own public version property, our allowlist, and
         whether the extension owns its bus name.  Nothing is read out of
         gnome-shell -- this answers "would it work?", which is a question a GUI
-        asks at startup and which must not cost a walk of Mutter's heap."""
+        asks at startup and which must not cost a walk of Mutter's heap.
+
+        Two answers come before the allowlist, and both are about which session this is rather than which
+        build.  A Muffin flavour has no generation to look up at all.  And an X11 session owning
+        org.gnome.Mutter.DisplayConfig -- GNOME-on-Xorg, which owns it exactly as GNOME-on-Wayland does
+        [M recon2/gnome-xorg.md §4] -- reaches this because detection picks `mutter` off the bus name, and
+        the true answer there is not "install the extension": the X server has been placing overlapping
+        monitors all along.  Measured: `--gnome-overlap-status` on a GNOME-on-Xorg session answered
+        `unavailable / shell: 46.0 / reason: the overlap extension is not running...`, pointing at an install
+        that would change nothing [M recon2/gnome-xorg.md §4 item 7].  The session kind is asked the way
+        every other caller asks it, so `FUCKWAYLAND_PASSTHROUGH` still means what it means everywhere else.
+
+        The apply path is deliberately NOT given the x11 answer: `--unsafe-gnome-overlap` on an X11 session
+        is refused before the handover, in these same words, by fwcommon/passthrough.py's caller in cli.py."""
+        from fwcommon import passthrough
         ov = gnome_overlap.Overlap(self.bus)
-        version = ov.shell_version()
+        version = ov.shell_version() if self.flavor is MUTTER else None
+        why = gnome_overlap.not_gnome_reason(
+            self.flavor.name, passthrough.session_kind("xrandr"))
+        if why is not None:
+            return version, why
         why = gnome_overlap.unsupported_reason(version)
         if why is None and not ov.running():
             why = gnome_overlap.INSTALL_HINT
@@ -923,17 +1013,20 @@ class MutterOutputs:
         core.record_lastmodes(state, targets)
         saved = None
         if method == PERSISTENT:
-            warn(PERSIST_WARNING)
+            warn(self.flavor.persist_warning)
             # Only this branch ever opens monitors.xml: a temporary apply, which is
             # what nearly every run does, does not go near the file.
-            saved = monitors_xml.snapshot(uid=wsession.session_uid())
-            for line in monitors_xml.describe(saved, self._file_layout_mode()):
+            saved = monitors_xml.snapshot(uid=wsession.session_uid(),
+                                          name=self.flavor.config_name)
+            for line in monitors_xml.describe(saved, self._file_layout_mode(),
+                                              desktop=self.flavor.desktop,
+                                              compositor=self.flavor.compositor):
                 warn(line)
             if self._rots_with_the_layout_mode(plan, targets, state):
-                warn(LAYOUT_MODE_WARNING)
+                warn(LAYOUT_MODE_WARNING % self.flavor.desktop)
         if not self._matched:
             try:
-                self.bus.add_match(_MATCH)
+                self.bus.add_match(self.flavor.match)
             except DBusError:
                 pass
             self._matched = True
@@ -947,7 +1040,7 @@ class MutterOutputs:
             if backup:
                 warn(BACKUP_NOTE % backup)
         try:
-            self.bus.wait_signal(IFACE, "MonitorsChanged", MONITORS_CHANGED_TIMEOUT)
+            self.bus.wait_signal(self.flavor.iface, "MonitorsChanged", MONITORS_CHANGED_TIMEOUT)
         except DBusError:
             pass
         return self.snapshot(state)

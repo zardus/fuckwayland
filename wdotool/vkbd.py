@@ -177,9 +177,13 @@ class VirtualKeyboard:
         try:
             found = conn.find_global(MANAGER)
             if found is None:
+                # Not the same list as vptr.py's, and the difference is measured: cosmic-comp advertises
+                # zwp_virtual_keyboard_manager_v1 (v1) and no virtual pointer at all, so this sentence is one
+                # COSMIC never sees while the pointer's is the one it always sees [M recon2/cosmic.md §3:
+                # `wdotool type 'hello cosmic'` landed byte-exact with no /dev/uinput node on the box].
                 raise VkbdError(
                     f"this compositor does not implement {MANAGER} "
-                    "(Mutter and KWin do not; sway/wlroots does)")
+                    "(Mutter and KWin do not; sway, Hyprland, the wlroots family and COSMIC do)")
             version = min(found[1], MAX_VERSION)
             seat = conn.find_global("wl_seat")
             if seat is None:

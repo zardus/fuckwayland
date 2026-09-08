@@ -1,0 +1,522 @@
+"""COSMIC window backend: `ext_foreign_toplevel_list_v1` + the two `zcosmic_toplevel_*` protocols.
+
+cosmic-comp publishes no `zwlr_foreign_toplevel_manager_v1` at all, which is why every window command --
+all of wwmctl, wxprop's native plane, every `wdotool window*` -- answered `no Wayland session found` on a
+COSMIC session, with a sentence naming a protocol COSMIC is never going to have [M recon2/cosmic.md §2, §3].
+The display half (`wxrandr`, `warandr`) already worked over `zwlr_output_manager_v1` v4, typing already
+worked over `zwp_virtual_keyboard_v1`, and the screen-mirroring tool's `--check` already passed on
+`ext_image_copy_capture_manager_v1`; this file is the window half and nothing else.
+
+Everything here was driven by hand against a live cosmic-comp before it was written
+(`recon2/cosmic/cosmic_probe.py`, `cosmic_act.py`): `set_maximized` came back as `state [0]`,
+`unset_maximized` as `[]`, `activate` as `[2]`, the manager announced `capabilities [1,2,3,4,6]`, and the two
+workspaces were named `1` and `2` with `coordinates` `[1]` and `[2]` [M cosmic.md §4]. Opcodes are read off
+the XML saved at `recon2/cosmic/cosmic-toplevel-{info,management}-unstable-v1.xml`.
+
+What the protocol does not carry, and what this backend therefore says instead of guessing:
+
+* **No pid.** Neither `ext_foreign_toplevel_handle_v1` nor `zcosmic_toplevel_handle_v1` has one, so `pid` is
+  0 and `kill` refuses with the default `no pid for window N`.
+* **No move, resize, raise or lower.** `zcosmic_toplevel_manager_v1` has `set_rectangle` (a minimise-animation
+  hint) and nothing else, so those four refuse per command and name the protocol.
+* **No numeric id.** `identifier` is 32 base62 characters, so ids are minted from it
+  (`backend.mint_id`): 30 bits of blake2b under 0x40000000, stable across processes for the life of the
+  window and out of Xwayland's id range, unlike the wlr floor's arrival order.
+* **Geometry, sometimes.** The `geometry` event never arrived in the nested rig -- not in 4 s and not after a
+  maximize -- because cosmic-comp sends it only alongside `output_enter` or on a change [M cosmic.md §4,
+  R `toplevel_info.rs`: `(outputs_changed || geometry_changed)`]. Without it the listing falls back to the
+  output rectangle, the way the wlr floor does, and sets `geometry_is_floor` rather than printing anything:
+  `list()` runs on every window command, so a warning there is a warning on all of them."""
+
+import struct
+
+from fwcommon import session
+from fwcommon.errors import CmdError
+from fwcommon.wayland_mini import WlConn
+from wdotool import ext_workspace
+from wdotool.backend import Window, WindowBackend, mint_map
+from wdotool.backend_wlr import XPlaneViews
+
+EXT_LIST = "ext_foreign_toplevel_list_v1"
+INFO = "zcosmic_toplevel_info_v1"
+MANAGER = "zcosmic_toplevel_manager_v1"
+
+INFO_MAX = 3
+MANAGER_MAX = 4
+
+#: zcosmic_toplevel_handle_v1.state -- an array of these, not a bitfield
+ST_MAXIMIZED, ST_MINIMIZED, ST_ACTIVATED, ST_FULLSCREEN, ST_STICKY = 0, 1, 2, 3, 4
+
+#: zcosmic_toplelevel_management_capabilities_v1 (the XML's own spelling)
+CAP_CLOSE, CAP_ACTIVATE, CAP_MAXIMIZE, CAP_MINIMIZE = 1, 2, 3, 4
+CAP_FULLSCREEN, CAP_MOVE_TO_WORKSPACE, CAP_STICKY, CAP_MOVE_TO_EXT_WORKSPACE = 5, 6, 7, 8
+
+#: what each capability is called in the refusal
+CAP_NAMES = {
+    CAP_CLOSE: "close", CAP_ACTIVATE: "activate", CAP_MAXIMIZE: "maximize",
+    CAP_MINIMIZE: "minimize", CAP_FULLSCREEN: "fullscreen",
+    CAP_MOVE_TO_WORKSPACE: "move_to_workspace", CAP_STICKY: "sticky",
+    CAP_MOVE_TO_EXT_WORKSPACE: "move_to_ext_workspace",
+}
+
+# ext_foreign_toplevel_list_v1 / _handle_v1
+_LIST_EV_TOPLEVEL = 0
+_EXT_EV_CLOSED, _EXT_EV_DONE, _EXT_EV_TITLE, _EXT_EV_APP_ID, _EXT_EV_IDENTIFIER = 0, 1, 2, 3, 4
+
+# zcosmic_toplevel_info_v1
+_INFO_REQ_GET = 1
+# zcosmic_toplevel_handle_v1 events
+_CH_EV_CLOSED, _CH_EV_DONE = 0, 1
+_CH_EV_OUTPUT_ENTER, _CH_EV_WORKSPACE_ENTER = 4, 6
+_CH_EV_STATE, _CH_EV_GEOMETRY = 8, 9
+_CH_EV_EXT_WORKSPACE_ENTER, _CH_EV_EXT_WORKSPACE_LEAVE = 10, 11
+_CH_EV_WORKSPACE_LEAVE = 7
+
+# zcosmic_toplevel_manager_v1 requests
+_MGR_CLOSE, _MGR_ACTIVATE = 1, 2
+_MGR_SET_MAXIMIZED, _MGR_UNSET_MAXIMIZED = 3, 4
+_MGR_SET_MINIMIZED, _MGR_UNSET_MINIMIZED = 5, 6
+_MGR_SET_FULLSCREEN, _MGR_UNSET_FULLSCREEN = 7, 8
+_MGR_SET_STICKY, _MGR_UNSET_STICKY = 11, 12
+_MGR_MOVE_TO_EXT_WORKSPACE = 13
+_MGR_EV_CAPABILITIES = 0
+
+#: The refusal for the four commands with no request behind them.
+NO_GEOMETRY = "the COSMIC toplevel protocol has no move, resize, raise or lower"
+
+
+class _Top:
+    __slots__ = ("ext", "cosmic", "identifier", "title", "app_id", "states",
+                 "geometry", "workspace", "closed")
+
+    def __init__(self, ext):
+        self.ext = ext
+        self.cosmic = None
+        self.identifier = ""
+        self.title = ""
+        self.app_id = ""
+        self.states: set[int] = set()
+        self.geometry = None        # (x, y, w, h) once a geometry event arrives
+        self.workspace = None       # workspace handle oid from workspace_enter
+        self.closed = False
+
+
+class CosmicBackend(XPlaneViews, WindowBackend):
+    name = "cosmic"
+    #: What cosmic-comp's own X window manager puts on the `_NET_SUPPORTING_WM_CHECK` window -- read off the
+    #: live session's Xwayland, where `wwmctl -m` already printed it [M cosmic.md §3 wwmctl]. So a run with
+    #: no X plane says the same thing as a run with one.
+    wm_name = "Smithay X WM"
+
+    def __init__(self, conn=None):
+        """`conn` is detection's live `WlConn` when it has one; without it this opens and owns its own."""
+        self._own_conn = conn is None
+        self.uid = None
+        if conn is None:
+            hit = session.find_wayland_socket()
+            if not hit:
+                raise CmdError("cosmic backend: no Wayland socket found")
+            self.uid, _rd, sockpath = hit
+            try:
+                self.c = WlConn(sockpath)
+            except OSError as e:
+                raise CmdError("cosmic backend: cannot connect to %s: %s" % (sockpath, e)) from None
+        else:
+            self.c = conn
+        try:
+            reg = self.c.get_registry()
+            glist = self.c.find_global(EXT_LIST)
+            ginfo = self.c.find_global(INFO)
+        except (OSError, RuntimeError, struct.error) as e:
+            self._close_own()
+            raise CmdError("cosmic backend: %s" % e) from None
+        if not glist or not ginfo:
+            self._close_own()
+            raise CmdError("cosmic backend: compositor does not offer %s and %s" % (EXT_LIST, INFO))
+
+        self.tops: dict[int, _Top] = {}       # ext handle oid -> record
+        self.order: list[int] = []            # ext handle oids, arrival order
+        self.by_cosmic: dict[int, _Top] = {}  # zcosmic handle oid -> record
+        self.caps: set[int] = set()
+        #: set once a listing had to report an output rectangle because no `geometry` event arrived
+        self.geometry_is_floor = False
+
+        self.list_oid = self.c.bind(glist[0], EXT_LIST, 1)
+        self.c.on(self.list_oid, self._on_list)
+        self.info_ver = min(ginfo[1], INFO_MAX)
+        self.info = self.c.bind(ginfo[0], INFO, self.info_ver)
+        self.c.on(self.info, lambda op, cur, fds: None)
+
+        gmgr = self.c.find_global(MANAGER)
+        self.mgr = None
+        self.mgr_ver = 0
+        if gmgr:
+            self.mgr_ver = min(gmgr[1], MANAGER_MAX)
+            self.mgr = self.c.bind(gmgr[0], MANAGER, self.mgr_ver)
+            self.c.on(self.mgr, self._on_mgr)
+
+        self.seat = None
+        sg = self.c.find_global("wl_seat")
+        if sg:
+            self.seat = self.c.bind(sg[0], "wl_seat", min(sg[1], 2))
+            self.c.on(self.seat, lambda op, cur, fds: None)
+
+        self.out_w = self.out_h = 0
+        self.outputs: list[int] = []
+        for gname, (iface, ver) in list(reg.items()):
+            if iface == "wl_output":
+                oid = self.c.bind(gname, "wl_output", min(ver, 2))
+                self.outputs.append(oid)
+                self.c.on(oid, self._on_output)
+
+        self.ws = ext_workspace.WorkspaceClient.bind(self.c)
+        self._x = "unset"
+
+        self._pump()   # the toplevel announcements and their ext events
+        self._attach()  # one get_cosmic_toplevel per handle
+        self._pump()   # state / geometry / workspace for each
+
+    def _close_own(self):
+        if self._own_conn:
+            try:
+                self.c.close()
+            except OSError:
+                pass
+
+    # -- events ---------------------------------------------------------------
+
+    def _on_list(self, op, cur, fds):
+        if op == _LIST_EV_TOPLEVEL:
+            oid = cur.u32()
+            rec = _Top(oid)
+            self.tops[oid] = rec
+            self.order.append(oid)
+            self.c.on(oid, lambda o, c, f, r=rec: self._on_ext(r, o, c))
+        # op 1 = finished
+
+    def _on_ext(self, rec: _Top, op, cur):
+        if op == _EXT_EV_TITLE:
+            rec.title = cur.string()
+        elif op == _EXT_EV_APP_ID:
+            rec.app_id = cur.string()
+        elif op == _EXT_EV_IDENTIFIER:
+            rec.identifier = cur.string()
+        elif op == _EXT_EV_CLOSED:
+            rec.closed = True
+        # op _EXT_EV_DONE: the batch boundary; every field is read as it arrives
+
+    def _on_cosmic(self, rec: _Top, op, cur):
+        if op == _CH_EV_STATE:
+            arr = cur.array()
+            rec.states = set(struct.unpack("<%dI" % (len(arr) // 4), arr[:len(arr) // 4 * 4]))
+        elif op == _CH_EV_GEOMETRY:
+            cur.u32()   # output
+            rec.geometry = (cur.i32(), cur.i32(), cur.i32(), cur.i32())
+        elif op in (_CH_EV_WORKSPACE_ENTER, _CH_EV_EXT_WORKSPACE_ENTER):
+            # v3 renamed the pair: `workspace_enter` carries a zcosmic_workspace_handle_v1 (deprecated) and
+            # `ext_workspace_enter` an ext_workspace_handle_v1. Only the latter is an object this client
+            # created, so both are recorded as an oid and the lookup against WorkspaceClient decides.
+            rec.workspace = cur.u32()
+        elif op in (_CH_EV_WORKSPACE_LEAVE, _CH_EV_EXT_WORKSPACE_LEAVE):
+            if rec.workspace == cur.u32():
+                rec.workspace = None
+        elif op == _CH_EV_CLOSED:
+            rec.closed = True
+        # _CH_EV_DONE, output_enter/leave: nothing to keep
+
+    def _on_mgr(self, op, cur, fds):
+        if op == _MGR_EV_CAPABILITIES:
+            arr = cur.array()
+            self.caps = set(struct.unpack("<%dI" % (len(arr) // 4), arr[:len(arr) // 4 * 4]))
+
+    def _on_output(self, op, cur, fds):
+        if op == 1:  # mode(flags, width, height, refresh)
+            flags, w, h = cur.u32(), cur.i32(), cur.i32()
+            if flags & 1:
+                self.out_w = max(self.out_w, w)
+                self.out_h = max(self.out_h, h)
+
+    # -- plumbing -------------------------------------------------------------
+
+    def _pump(self):
+        """One roundtrip; the wire's three failure shapes become one line, as on the wlr floor."""
+        try:
+            self.c.roundtrip()
+        except CmdError:
+            raise
+        except (OSError, RuntimeError, struct.error) as e:
+            raise CmdError("cosmic backend: %s" % e) from None
+
+    def _attach(self):
+        """`get_cosmic_toplevel` for every handle that has not got one: the ext protocol carries the title,
+        the app id and the identifier, and everything else -- state, geometry, workspace -- arrives only on
+        the zcosmic handle this creates."""
+        for oid in self.order:
+            rec = self.tops[oid]
+            if rec.cosmic is not None or rec.closed:
+                continue
+            new_id = self.c.alloc()
+            try:
+                self.c.send(self.info, _INFO_REQ_GET, [("u", new_id), ("u", rec.ext)])
+            except OSError as e:
+                raise CmdError("cosmic backend: %s" % e) from None
+            rec.cosmic = new_id
+            self.by_cosmic[new_id] = rec
+            self.c.on(new_id, lambda o, c, f, r=rec: self._on_cosmic(r, o, c))
+
+    def _refresh(self):
+        self._pump()
+        self._attach()
+        self._pump()
+
+    def _ids(self) -> "dict[int, int]":
+        """{ext handle oid: window id}, minted from `identifier` in arrival order.
+
+        `mint_map` rather than a comprehension so that the ~1e-6 chance of two live windows hashing to the
+        same 30 bits re-mints the second one instead of dropping it out of the listing entirely."""
+        live = [self.tops[o] for o in self.order if not self.tops[o].closed]
+        minted = mint_map([r.identifier for r in live])
+        return {r.ext: minted.get(r.identifier, 0) for r in live}
+
+    def _by_wid(self, wid: int) -> _Top:
+        self._refresh()
+        for ext, mid in self._ids().items():
+            if mid == wid:
+                return self.tops[ext]
+        raise CmdError("window %d not found" % wid)
+
+    def _need(self, cap: int, op: str):
+        """Refuse an operation the manager did not advertise, naming the capability.
+
+        Decision C5.15: gate on the array rather than send the request anyway. `set_fullscreen` did work on
+        the live compositor although 5 was not in `[1,2,3,4,6]`, but a client that ignores a capability array
+        is a client that will be wrong the first time the array is right."""
+        if self.mgr is None:
+            raise CmdError("cosmic backend: compositor offers no %s; cannot %s" % (MANAGER, op))
+        if cap not in self.caps:
+            err = CmdError("%s is not supported by the cosmic backend: cosmic-comp does not advertise the "
+                           "%s capability" % (op, CAP_NAMES.get(cap, cap)))
+            err.unsupported = True
+            raise err
+
+    def _mgr_send(self, opcode: int, args):
+        try:
+            self.c.send(self.mgr, opcode, args)
+        except OSError as e:
+            raise CmdError("cosmic backend: %s" % e) from None
+        self._pump()
+
+    def _act(self, rec: _Top, opcode: int, cap: int, op: str, extra=()):
+        self._need(cap, op)
+        self._mgr_send(opcode, [("u", rec.cosmic)] + list(extra))
+
+    # -- WindowBackend --------------------------------------------------------
+
+    def _rect(self, rec: _Top) -> "tuple[int, int, int, int]":
+        """This window's rectangle, or the output's when no `geometry` event ever arrived.
+
+        Silently, the way the wlr floor reports the same fallback: `list()` is what every `wdotool search`,
+        `getactivewindow` and `wwmctl -l` runs, and no `geometry` event arrived at all in the nested rig
+        [M cosmic.md §4] -- so a warning here would be one line of stderr on every window command of every
+        COSMIC session. `geometry_is_floor` is the flag for a caller that wants to say so."""
+        if rec.geometry is not None:
+            return rec.geometry
+        self.geometry_is_floor = True
+        return (0, 0, self.out_w, self.out_h)
+
+    def list(self) -> list[Window]:
+        self._refresh()
+        ids = self._ids()
+        active = self._active_workspaces()
+        wins = []
+        for oid in self.order:
+            rec = self.tops[oid]
+            if rec.closed:
+                continue
+            x, y, w, h = self._rect(rec)
+            desktop = self._desktop_of(rec)
+            wins.append(Window(
+                id=ids.get(oid, 0),
+                title=rec.title,
+                class_=rec.app_id,
+                pid=0,                       # the protocol carries none
+                x=x, y=y, w=w, h=h,
+                focused=ST_ACTIVATED in rec.states,
+                # On another workspace is invisible -- but only where some workspace claims to be the active
+                # one. The live cosmic-comp published both of its workspaces with an EMPTY state array
+                # [M cosmic.md §4: `ws {'name': '1', ... 'state': []}` twice], and filtering on that would
+                # empty the whole listing on the one session this was measured against.
+                visible=(ST_MINIMIZED not in rec.states
+                         and (not active or rec.workspace is None or rec.workspace in active)),
+                desktop=desktop,
+            ))
+        return wins
+
+    def _ws_rows(self):
+        """The workspace records in desktop-number order, or [].
+
+        `WorkspaceClient._live()` is the ordering rule -- coordinates first, arrival second -- and this
+        backend needs the handle object ids it carries, which `workspace_list()` (the public `Workspace`
+        rows) deliberately does not: `workspace_enter` names a workspace by oid, and `move_to_ext_workspace`
+        takes one. See the request filed against wdotool/ext_workspace.py for a public accessor."""
+        return [] if self.ws is None else self.ws._live()
+
+    def _active_workspaces(self) -> "set[int]":
+        """The handle oids of the workspaces that say they are active; empty when none does."""
+        return {r.oid for r in self._ws_rows() if r.state & ext_workspace.STATE_ACTIVE}
+
+    def _desktop_of(self, rec: _Top) -> int:
+        if rec.workspace is None:
+            return -1
+        for i, r in enumerate(self._ws_rows()):
+            if r.oid == rec.workspace:
+                return i
+        return -1
+
+    def activate(self, wid: int):
+        rec = self._by_wid(wid)
+        if self.seat is None:
+            raise CmdError("cosmic backend: compositor offers no wl_seat; cannot activate windows")
+        self._act(rec, _MGR_ACTIVATE, CAP_ACTIVATE, "windowactivate", [("u", self.seat)])
+
+    def close(self, wid: int):
+        self._act(self._by_wid(wid), _MGR_CLOSE, CAP_CLOSE, "windowclose")
+
+    def minimize(self, wid: int):
+        self._act(self._by_wid(wid), _MGR_SET_MINIMIZED, CAP_MINIMIZE, "windowminimize")
+
+    def map(self, wid: int):
+        self._act(self._by_wid(wid), _MGR_UNSET_MINIMIZED, CAP_MINIMIZE, "windowmap")
+
+    def unmap(self, wid: int):
+        self._act(self._by_wid(wid), _MGR_SET_MINIMIZED, CAP_MINIMIZE, "windowunmap")
+
+    def set_state(self, wid: int, state: str, action: int):
+        rec = self._by_wid(wid)
+        if state == "FULLSCREEN":
+            on = action == 1 or (action == 2 and ST_FULLSCREEN not in rec.states)
+            self._need(CAP_FULLSCREEN, "windowstate FULLSCREEN")
+            if on:
+                # set_fullscreen(toplevel, output) -- a null output means "wherever it is"
+                self._mgr_send(_MGR_SET_FULLSCREEN, [("u", rec.cosmic), ("u", 0)])
+            else:
+                self._mgr_send(_MGR_UNSET_FULLSCREEN, [("u", rec.cosmic)])
+            return None
+        if state in ("MAXIMIZED_VERT", "MAXIMIZED_HORZ"):
+            on = action == 1 or (action == 2 and ST_MAXIMIZED not in rec.states)
+            self._act(rec, _MGR_SET_MAXIMIZED if on else _MGR_UNSET_MAXIMIZED,
+                      CAP_MAXIMIZE, "windowstate %s" % state)
+            return None
+        if state == "STICKY":
+            on = action == 1 or (action == 2 and ST_STICKY not in rec.states)
+            if self.mgr_ver < 3:
+                self._unsupported("windowstate STICKY")
+            self._act(rec, _MGR_SET_STICKY if on else _MGR_UNSET_STICKY,
+                      CAP_STICKY, "windowstate STICKY")
+            return None
+        if state == "HIDDEN":
+            on = action == 1 or (action == 2 and ST_MINIMIZED not in rec.states)
+            self._act(rec, _MGR_SET_MINIMIZED if on else _MGR_UNSET_MINIMIZED,
+                      CAP_MINIMIZE, "windowstate HIDDEN")
+            return None
+        self._unsupported("windowstate %s" % state)
+
+    def _no_geometry(self, op: str):
+        err = CmdError("%s is not supported by the cosmic backend: %s" % (op, NO_GEOMETRY))
+        err.unsupported = True
+        raise err
+
+    def move_window(self, wid: int, x: int, y: int):
+        self._no_geometry("windowmove")
+
+    def resize(self, wid: int, w: int, h: int):
+        self._no_geometry("windowsize")
+
+    def raise_(self, wid: int):
+        self._no_geometry("windowraise")
+
+    def lower(self, wid: int):
+        self._no_geometry("windowlower")
+
+    # -- desktops -------------------------------------------------------------
+
+    def get_desktop(self) -> int:
+        if self.ws is None:
+            self._unsupported("get_desktop")
+        self._pump()
+        return self.ws.active_index()
+
+    def set_desktop(self, n: int):
+        if self.ws is None:
+            self._unsupported("set_desktop")
+        self._pump()
+        if not self.ws.activate(n):
+            raise CmdError("cosmic backend: cannot activate workspace %d" % n)
+        self._pump()
+
+    def num_desktops(self) -> int:
+        if self.ws is None:
+            self._unsupported("get_num_desktops")
+        self._pump()
+        return self.ws.count()
+
+    def workspaces(self):
+        if self.ws is None:
+            return None
+        self._pump()
+        return self.ws.workspace_list()
+
+    def set_window_desktop(self, wid: int, n: int):
+        """`move_to_ext_workspace`, which is the v4 spelling of the capability the manager advertises as 6.
+
+        cosmic-comp's own handler for the deprecated `move_to_workspace` (opcode 10) is an empty arm --
+        `zcosmic_toplevel_manager_v1::Request::MoveToWorkspace { .. } => {}` -- while `MoveToExtWorkspace`
+        resolves the handle and moves the window [R recon2/cosmic/tlmgmt.rs:251-263]. Its capability array
+        still says 6 and not 8 [R state.rs:752-756], so the gate is 6 and the request is the one that works;
+        below manager v4 there is no request this client can send, because the deprecated one wants a
+        `zcosmic_workspace_handle_v1` from a workspace protocol this backend does not bind.
+
+        Any `wl_output` will do, and `outputs[0]` is not a multi-head guess: cosmic-comp's dispatcher
+        refuses the request unless `Output::from_resource(&output)` is Some [R recon2/cosmic/tlmgmt.rs:255-262]
+        and its handler then ignores the value (`_output: Output`, R toplevel_management.rs:144-149) -- the
+        workspace handle is what decides where the window lands."""
+        if self.ws is None:
+            self._unsupported("set_desktop_for_window")
+        rec = self._by_wid(wid)
+        self._need(CAP_MOVE_TO_WORKSPACE, "set_desktop_for_window")
+        if self.mgr_ver < 4 or not self.outputs:
+            self._unsupported("set_desktop_for_window")
+        rows = self._ws_rows()
+        if not 0 <= n < len(rows):
+            raise CmdError("cosmic backend: no workspace %d" % n)
+        self._mgr_send(_MGR_MOVE_TO_EXT_WORKSPACE,
+                       [("u", rec.cosmic), ("u", rows[n].oid), ("u", self.outputs[0])])
+
+    def display_size(self) -> tuple[int, int]:
+        if not self.out_w or not self.out_h:
+            raise CmdError("cosmic backend: no wl_output mode seen")
+        return self.out_w, self.out_h
+
+    # -- XWayland ids ---------------------------------------------------------
+    # `views()`, the X connection and the matcher are `XPlaneViews`, shared with the wlr floor: neither
+    # protocol carries an X id, a pid or a rectangle, so the join is the same code with the same rules.
+    # Only the state bits below are COSMIC's own -- it has a fifth, STICKY, which wlr has no word for.
+
+    def _view_flags(self) -> "list[dict]":
+        """The `View` state flags for each row of `list()`, in the same order.
+
+        wxprop reads exactly these off the View: `visible` from `minimized`/`hidden`, `fullscreen_mode` from
+        `fullscreen`, and `_NET_WM_STATE_HIDDEN`/`_NET_WM_STATE_STICKY` off that node [wxprop/core.py:171-176,
+        545]. `minimized` is the state bit rather than `not w.visible`, because a window can also be
+        invisible here for being on another workspace, and that is not what HIDDEN means."""
+        out = []
+        for oid in self.order:
+            rec = self.tops[oid]
+            if rec.closed:
+                continue
+            mx = ST_MAXIMIZED in rec.states
+            out.append({"minimized": ST_MINIMIZED in rec.states,
+                        "fullscreen": ST_FULLSCREEN in rec.states,
+                        "maximized_h": mx, "maximized_v": mx,
+                        "sticky": ST_STICKY in rec.states})
+        return out

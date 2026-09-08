@@ -88,7 +88,15 @@ class BrokenCompositor(_Server):
 
     `mode` picks the failure: "silent" (accept, then never answer), "closes"
     (go away after the globals), "shortmode" (a wl_output.mode event whose
-    payload is empty)."""
+    payload is empty). Any other mode is no failure at all: the constructor
+    gets every answer it asks for and no toplevel is announced.
+
+    `GLOBALS` is what the registry advertises, so a subclass can be a
+    compositor that is missing one (see NoToplevelManager)."""
+
+    #: (name, interface, version) per wl_registry.global event
+    GLOBALS = ((1, "wl_output", 2),
+               (2, "zwlr_foreign_toplevel_manager_v1", 3))
 
     def __init__(self, mode):
         self.mode = mode
@@ -124,12 +132,10 @@ class BrokenCompositor(_Server):
                         output_oid = nid
                 elif oid == 1 and op == 1:     # wl_display.get_registry
                     registry = struct.unpack_from("<I", pay)[0]
-                    c.sendall(
-                        msg(registry, 0, struct.pack("<I", 1)
-                             + wstr("wl_output") + struct.pack("<I", 2))
-                        + msg(registry, 0, struct.pack("<I", 2)
-                               + wstr("zwlr_foreign_toplevel_manager_v1")
-                               + struct.pack("<I", 3)))
+                    c.sendall(b"".join(
+                        msg(registry, 0, struct.pack("<I", n) + wstr(iface)
+                            + struct.pack("<I", ver))
+                        for n, iface, ver in self.GLOBALS))
                     announced = True
                 elif oid == 1 and op == 0:     # wl_display.sync
                     cb = struct.unpack_from("<I", pay)[0]
@@ -185,9 +191,21 @@ class CursorBounds(unittest.TestCase):
         self.assertEqual(cur.string(), "hi")
 
 
+class NoToplevelManager(BrokenCompositor):
+    """A compositor with no zwlr_foreign_toplevel_manager_v1 -- cosmic-comp's and Mutter's shape from here.
+
+    The one registry the wlr constructor refuses over, which is what the connection-ownership guards below
+    need: a refusal that happens *after* the connection was opened or handed in."""
+
+    GLOBALS = ((1, "wl_output", 2),)
+
+
 class WlrBackendGuards(unittest.TestCase):
-    def _backend(self, mode):
-        srv = BrokenCompositor(mode)
+    """`len(srv.conns)` is how many clients connected, which is what says whether a handed-in connection was
+    reused or quietly duplicated."""
+
+    def _backend(self, mode, cls=BrokenCompositor):
+        srv = cls(mode)
         self.addCleanup(srv.close)
         old = os.environ.get("WAYLAND_DISPLAY")
         os.environ["WAYLAND_DISPLAY"] = srv.path
@@ -207,6 +225,7 @@ class WlrBackendGuards(unittest.TestCase):
             return c
 
         backend_wlr.WlConn = tracking
+        self._made = made
 
         def restore():
             backend_wlr.WlConn = real
@@ -234,6 +253,44 @@ class WlrBackendGuards(unittest.TestCase):
         with self.assertRaises(CmdError) as cm:
             WlrBackend()
         self.assertIn("wlr backend:", str(cm.exception))
+
+    def test_a_handed_in_connection_is_used_and_not_a_second_one(self):
+        """`WlrBackend(conn=...)` is the seam detection needs: it already pays one registry round trip to
+        choose between the wlr and the COSMIC toplevel protocols, and a session should not then open a
+        second connection to read the same registry again."""
+        srv = BrokenCompositor("ok")
+        self.addCleanup(srv.close)
+        conn = WlConn(srv.path)
+        self.addCleanup(conn.close)
+        conn.get_registry()
+        WlrBackend = self._backend("ok")
+        b = WlrBackend(conn=conn)
+        self.assertIs(b.c, conn)
+        self.assertEqual(len(srv.conns), 1, "the handed-in connection is the only one")
+
+    def test_a_handed_in_connection_survives_a_constructor_failure(self):
+        """Whoever opened it still holds it, and detection's next arm reads the registry off it: closing
+        somebody else's connection on the way out of a refusal would take that away."""
+        srv = NoToplevelManager("ok")
+        self.addCleanup(srv.close)
+        conn = WlConn(srv.path)
+        self.addCleanup(conn.close)
+        conn.get_registry()
+        WlrBackend = self._backend("ok", cls=NoToplevelManager)
+        with self.assertRaises(CmdError) as cm:
+            WlrBackend(conn=conn)
+        self.assertIn("does not offer", str(cm.exception))
+        self.assertNotEqual(conn.sock.fileno(), -1, "the socket must still be open")
+        self.assertEqual(conn.find_global("wl_output")[0], 1,
+                         "and the registry it holds is still readable")
+
+    def test_a_connection_this_constructor_opened_is_closed_on_failure(self):
+        """The other half of the same rule, and the reason the flag exists: an fd left to the collector is
+        a leak in a long-running process and a stray ResourceWarning in a shared test runner."""
+        WlrBackend = self._backend("ok", cls=NoToplevelManager)
+        with self.assertRaises(CmdError):
+            WlrBackend()
+        self.assertEqual([c.sock.fileno() for c in self._made], [-1])
 
 
 # -- sway ------------------------------------------------------------------

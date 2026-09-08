@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """misc commands — exec (incl. --sync/--args/--terminator), sleep,
-getdisplaygeometry, and the shared getopt clone."""
+getdisplaygeometry, and the shared getopt clone.
+
+The plain-assert script body is the older half; `DisplayGeometryOnI3` below is a unittest class because it
+needs a real backend on a real socket (`support.FakeSway`), which wants setUp/cleanup rather than a bare
+assert."""
 
 import contextlib
 import io
@@ -9,11 +13,18 @@ import sys
 import unittest
 import tempfile
 import time
+from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
+# `import support` resolves only with the tests directory itself on sys.path.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import support
+from fwcommon.errors import CmdError
 from wdotool import cli
+from wdotool.backend_sway import SwayBackend
+from wdotool.ctx import Context, NoSessionError
 from wdotool.misc_cmds import _atof, _atoi, cmd_getdisplaygeometry
 
 # The suite never hands a tool over to the real X11 one: see
@@ -252,11 +263,23 @@ def _run_all():
         # B5: no compositor reachable -> the daemon answers with the built-in
         # guess. getdisplaygeometry must NOT print it with rc 0; it is the one
         # command that used to "succeed" with no session at all.
+        # The window backend is asked before the refusal (it answers on i3, where there is a layout and no
+        # Wayland socket), so "no compositor reachable" has to mean that here too: a detector that found the
+        # developer's own session would otherwise make this the one environment-dependent line in the file.
+        import wdotool.backend_detect as detect_mod
+        orig_detect = detect_mod.detect
+
+        def no_session():
+            raise NoSessionError("wdotool: no Wayland session found: nothing at all")
+        detect_mod.detect = no_session
         FakeDaemon.fallback = True
-        rc, out, err = run(["getdisplaygeometry"])
+        try:
+            rc, out, err = run(["getdisplaygeometry"])
+        finally:
+            detect_mod.detect = orig_detect
+            FakeDaemon.fallback = False
         assert rc == 2, (rc, out, err)
         assert out == "" and "no Wayland session found" in err, (out, err)
-        FakeDaemon.fallback = False
     finally:
         daemon_mod.DaemonClient = orig_dc
 
@@ -299,6 +322,101 @@ def _run_all():
         assert e.opts == [("help", None)], e.opts
 
 
+class DisplayGeometryOnI3(unittest.TestCase):
+    """U04: `getdisplaygeometry` answers on a session that has a layout and no Wayland socket.
+
+    Closes recon2/i3.md §2b.  The daemon's geometry is a `wl_output` query, so on i3 -- an X11 session whose
+    layout the sway backend can read over the same IPC socket every other command was already using -- it
+    exited 2 with "no Wayland session found: cannot query the output layout".  The measured answer is
+    `1920 1080`, out of the recorded GET_OUTPUTS (`screen` 1920x1080 active, plus the `xroot-0` pseudo-output
+    that is not).
+
+    The daemon is a stand-in answering `fallback=True`, which is what it answered on that box; the backend is
+    the real `SwayBackend` over `support.FakeSway(dialect="i3")`, so the numbers come off the wire."""
+
+    def chain(self, argv, backend=None, guessed=True):
+        class FakeDaemon:
+            def geometry_status(self):
+                return (1920, 1080, guessed)
+
+        ctx = Context()
+        ctx._daemon = FakeDaemon()
+        if backend is not None:
+            ctx._backend = backend
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = cli.run_chain(ctx, "wdotool", argv)
+        return (rc if rc else ctx.exit_code), out.getvalue(), err.getvalue()
+
+    def i3_backend(self):
+        srv = support.FakeSway("ok", dialect="i3")
+        self.addCleanup(srv.close)
+        b = SwayBackend(sockpath=srv.path)
+        self.addCleanup(b.sock.close)
+        return b
+
+    def test_an_i3_socket_answers_from_the_backend(self):
+        rc, out, err = self.chain(["getdisplaygeometry"], backend=self.i3_backend())
+        self.assertEqual((rc, err), (0, ""))
+        self.assertEqual(out, "1920 1080\n")
+
+    def test_the_shell_form_too(self):
+        rc, out, _err = self.chain(["getdisplaygeometry", "--shell"], backend=self.i3_backend())
+        self.assertEqual((rc, out), (0, "WIDTH=1920\nHEIGHT=1080\n"))
+
+    def test_with_no_backend_either_it_is_still_the_rc_2_refusal(self):
+        """B5's refusal stands: the fallback is a second place to ask, not a licence to guess."""
+        import wdotool.backend_detect as detect_mod
+        with mock.patch.object(detect_mod, "detect",
+                               mock.Mock(side_effect=NoSessionError("nothing here"))):
+            rc, out, err = self.chain(["getdisplaygeometry"])
+        self.assertEqual((rc, out), (2, ""))
+        self.assertIn("no Wayland session found", err)
+        self.assertIn("not guessing a display size", err)
+
+    def test_a_backend_that_cannot_answer_is_the_refusal_too(self):
+        """`display_size()` raising (a compositor with no active output) is not a reason to print the
+        daemon's guess -- which is the 1920x1080 this command exists to refuse."""
+        class Mute:
+            def display_size(self):
+                raise CmdError("sway backend: no active outputs")
+
+        rc, out, err = self.chain(["getdisplaygeometry"], backend=Mute())
+        self.assertEqual((rc, out), (2, ""))
+        self.assertIn("no Wayland session found", err)
+
+    def test_a_bug_in_the_backend_is_not_reported_as_no_session(self):
+        """The fallback catches `CmdError` (a backend saying it cannot answer) and `NoSessionError` (no
+        session at all), and nothing else: an `AttributeError` out of a backend is a bug in us, and turning
+        it into "no Wayland session found" would be a lie about the session to whoever is probing it."""
+        class Broken:
+            def display_size(self):
+                raise AttributeError("'dict' object has no attribute 'rect'")
+
+        with self.assertRaises(AttributeError):
+            cmd_getdisplaygeometry(self.broken_ctx(Broken()), [])
+
+    def broken_ctx(self, backend):
+        class FakeDaemon:
+            def geometry_status(self):
+                return (1920, 1080, True)
+
+        ctx = Context()
+        ctx._daemon = FakeDaemon()
+        ctx._backend = backend
+        return ctx
+
+    def test_a_real_geometry_never_reaches_the_backend(self):
+        """The backend is asked only when the daemon guessed: a healthy Wayland session must not pay for a
+        second query, and must not be answered by a different layout reader than it was before."""
+        class Boom:
+            def display_size(self):
+                raise AssertionError("the backend was asked on a session that answered")
+
+        rc, out, _err = self.chain(["getdisplaygeometry"], backend=Boom(), guessed=False)
+        self.assertEqual((rc, out), (0, "1920 1080\n"))
+
+
 class ScriptBody(unittest.TestCase):
     """The whole file, as one test.
 
@@ -314,5 +432,7 @@ class ScriptBody(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    _run_all()
-    print("test_cli_misc: OK")
+    # unittest.main(), not the bare `_run_all()` its three sibling script files still end with: the script
+    # body is a test of its own (ScriptBody) and there is now a second class in this file, which running the
+    # body alone would silently skip -- the failure mode tests/test_passthrough.py:SuiteGuard exists for.
+    unittest.main()

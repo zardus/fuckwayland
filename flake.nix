@@ -5,68 +5,71 @@
 
   outputs = { self, nixpkgs }:
     let
+      version = "0.4.0";
       systems = [ "x86_64-linux" "aarch64-linux" ];
-      forAll = f: nixpkgs.lib.genAttrs systems (s: f nixpkgs.legacyPackages.${s});
+
+      # legacyPackages, with no config of its own.  There was an
+      # `allowUnfreePredicate` here for as long as meta.license was
+      # lib.licenses.unfree, and it had to be: nix refuses to EVALUATE an
+      # unfree package, so a nixosSystem carrying the module answered
+      # `Refusing to evaluate package 'fuckwayland-0.4.0' ... because it has
+      # an unfree license` and nothing built.  LICENSE exists now
+      # (BSD-2-Clause, SPDX line first), meta.license is lib.licenses.bsd2,
+      # and a consumer needs no nixpkgs config at all to use this flake.
+      pkgsFor = system: nixpkgs.legacyPackages.${system};
+
+      forAll = f: nixpkgs.lib.genAttrs systems (s: f (pkgsFor s));
+
+      # Every measurement behind the checks below was taken on x86_64-linux,
+      # and a NixOS VM test on a foreign architecture is emulation, not a
+      # test.  The packages build on both; the checks say only what was run.
+      onX86 = f: { x86_64-linux = f (pkgsFor "x86_64-linux"); };
     in
     {
-      packages = forAll (pkgs: rec {
-        wdotool = pkgs.python3Packages.buildPythonApplication {
-          pname = "fuckwayland";
-          version = "0.4.0";
-          src = ./.;
-          pyproject = true;
-          build-system = [ pkgs.python3Packages.setuptools ];
+      packages = forAll (pkgs:
+        let
+          # `import`, not callPackage: callPackage adds `override` and
+          # `overrideDerivation` to whatever it returns, and this returns a
+          # plain attrset of packages, so those two would show up in
+          # `nix flake show` as outputs that are not packages.
+          fw = import ./nix/package.nix {
+            inherit (pkgs)
+              lib runCommand writeText python3Packages gobject-introspection
+              wrapGAppsHook3 gsettings-desktop-schemas gtk3;
+            src = ./.;
+            inherit version;
+          };
+        in
+        fw // {
+          default = fw.fuckwayland;
 
-          # pyproject.toml declares six console scripts, warandr among them,
-          # so this derivation has always installed $out/bin/warandr -- it
-          # just could not run: warandr is the one GUI here, and `import gi`
-          # needs PyGObject while gi.require_version("Gtk", "3.0") needs the
-          # Gtk/Gdk/Pango typelibs, which are found through $GI_TYPELIB_PATH
-          # and nowhere else. These four attributes are the standard nixpkgs
-          # arrangement for a GTK 3 Python application (its own arandr package
-          # is built exactly this way):
-          #
-          #   gobject-introspection  collects the typelib directory of every
-          #                          buildInput into $GI_TYPELIB_PATH,
-          #   wrapGAppsHook3         turns that -- plus the XDG_DATA_DIRS entry
-          #                          for the GSettings schemas Gtk.Settings
-          #                          reads on startup -- into wrapper arguments,
-          #   gtk3 + schemas         are what there is to collect,
-          #   pygobject3             is the `gi` module itself, at run time.
-          #
-          # The four CLI clones import none of this; they stay stdlib-only and
-          # the extra environment is inert for them.
-          nativeBuildInputs = [
-            pkgs.gobject-introspection
-            pkgs.wrapGAppsHook3
-          ];
-          buildInputs = [
-            pkgs.gsettings-desktop-schemas
-            pkgs.gtk3
-          ];
-          dependencies = [ pkgs.python3Packages.pygobject3 ];
+          # scripts/parity-oracle.sh has told the reader to build the oracles
+          # with `nix build .#xdotool` / `.#wmctrl` since it was written, and
+          # neither attribute existed: `nix build .#xdotool` answered
+          # `does not provide attribute ... Did you mean wdotool?`
+          # [recon2/pkg-nix §1 defect 2].  These two lines make the sentence
+          # true from this side.  They are nixpkgs' packages, unmodified, and
+          # they are the generations the parity files are written against:
+          # xdotool 4.20260303.1 (wdotool.cli.XDO_VERSION) and the plain
+          # wmctrl 1.07 whose --help is 6801 bytes, both read out of the
+          # locked nixos-unstable [recon2/pkg-nix §1].
+          inherit (pkgs) xdotool wmctrl;
+        });
 
-          # buildPythonApplication writes its own wrapper around every script
-          # in postFixup. Let it write this one too rather than wrapping twice:
-          # with dontWrapGApps the hook stops at assembling $gappsWrapperArgs
-          # in preFixup, and makeWrapperArgs hands them to the Python wrapper
-          # that runs after it.
-          dontWrapGApps = true;
-          makeWrapperArgs = [ "\${gappsWrapperArgs[@]}" ];
+      # `{ self }` rather than the packages themselves: a consumer whose flake
+      # sets `inputs.fuckwayland.inputs.nixpkgs.follows` gets the module built
+      # against THEIR nixpkgs, because self.packages is evaluated at their
+      # system's attribute.  Both live NixOS releases (25.11 and 26.05) build
+      # `.#default` unchanged, measured with --override-input [recon2/nixos].
+      nixosModules.default = import ./nix/module.nix { inherit self; };
+      homeManagerModules.default = import ./nix/home-manager.nix { inherit self; };
 
-          # No --prefix PATH here, deliberately: warandr and the clones look
-          # up the real xrandr/xdotool/wmctrl/xprop on the *user's* PATH (see
-          # fwcommon/passthrough.py), and a store xrandr baked into the wrapper
-          # would change which binary the handover finds.
-          postInstall = ''
-            ln -s $out/bin/wdotool $out/bin/xdotool
-            if [ -e $out/bin/wwmctl ]; then ln -s $out/bin/wwmctl $out/bin/wmctrl; fi
-            if [ -e $out/bin/wxprop ]; then ln -s $out/bin/wxprop $out/bin/xprop; fi
-            if [ -e $out/bin/wxrandr ]; then ln -s $out/bin/wxrandr $out/bin/xrandr; fi
-            if [ -e $out/bin/warandr ]; then ln -s $out/bin/warandr $out/bin/arandr; fi
-          '';
-        };
-        default = wdotool;
+      checks = onX86 (pkgs: {
+        nixos-sway = import ./nix/checks/nixos-sway.nix { inherit self pkgs; };
+        nixos-gnome = import ./nix/checks/nixos-gnome.nix { inherit self pkgs; };
+        nixos-kde = import ./nix/checks/nixos-kde.nix { inherit self pkgs; };
+        module-eval = import ./nix/checks/module-eval.nix { inherit self nixpkgs pkgs; };
+        tools = import ./nix/checks/tools.nix { inherit pkgs version; src = ./.; };
       });
 
       devShells = forAll (pkgs: {

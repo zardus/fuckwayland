@@ -1088,5 +1088,94 @@ class WarandrNeverAsks(unittest.TestCase):
         self.assertNotIn("never_ask", inspect.getsource(randr.Backend.allow_overlap))
 
 
+# ---------------------------------------------------- the session, not the build
+
+class OnXorg(ConsentCase):
+    """U18.  GNOME-on-Xorg owns `org.gnome.Mutter.DisplayConfig` exactly as GNOME-on-Wayland does (measured
+    against a live one: `GetCurrentState` there answers with `'renderer': <'xrandr'>`), so wxrandr's detection
+    picks the `mutter` backend off the bus name and `--gnome-overlap-status` -- which answers before any
+    handover -- ran the extension's own checks and reported `unavailable / shell: 46.0 / reason: the overlap
+    extension is not running...` [M recon2/gnome-xorg.md §4 item 7].
+
+    Every word of that is true and the advice is wrong: installing the extension changes nothing, because the
+    X server has been placing overlapping monitors all along.  The status has to say which session this is,
+    in the same words the flag itself uses on a handed-over X11 run (wxrandr/cli.py's handover branch)."""
+
+    def session_env(self, kind):
+        """A session that says what it is the way pam_systemd says it (`XDG_SESSION_TYPE`, step 3 of
+        fwcommon/passthrough.py) -- and with the suite's `FUCKWAYLAND_PASSTHROUGH=never` lifted, since that
+        variable's whole job is to answer this question first (step 1) and leaving it in would make every
+        session below `wayland` whatever the type said.
+
+        `WAYLAND_DISPLAY` is dropped for both kinds: step 2 wants a socket that exists, and this box has a
+        dozen other agents' sockets in it. So the type is read from the one variable that differs, which is
+        what makes the x11 and wayland cases a real pair."""
+        from fwcommon import passthrough
+        passthrough.reset_cache()
+        self.addCleanup(passthrough.reset_cache)
+        env = dict(os.environ)
+        env.pop("WAYLAND_DISPLAY", None)
+        env.pop("SUDO_UID", None)
+        env.pop("PKEXEC_UID", None)
+        env["FUCKWAYLAND_PASSTHROUGH"] = ""
+        env["XDG_SESSION_TYPE"] = kind
+        return mock.patch.dict(os.environ, env, clear=True)
+
+    def x11_env(self):
+        return self.session_env("x11")
+
+    def status(self):
+        code, out, err = self.run_cli(STATUS)
+        self.assertEqual(code, 0, err)
+        return [ln for ln in out.splitlines() if ln.strip()]
+
+    def test_the_status_on_an_x11_session_says_the_session_is_x11(self):
+        with self.x11_env():
+            lines = self.status()
+        self.assertEqual(lines[0], "unavailable")
+        self.assertIn("reason: this session is x11, which places overlapping monitors "
+                      "without it", lines)
+        # ...which is the handover branch's own sentence, word for word: the plan asks the status to
+        # answer in the words the flag already uses (A 1.7), and wxrandr/cli.py:1807 is where they are.
+        self.assertIn(gnome_overlap.X11_REASON,
+                      "%s only means anything on GNOME; this session is x11, which places "
+                      "overlapping monitors without it\n" % gnome_overlap.FLAG)
+
+    def test_it_does_not_send_the_reader_to_the_extension(self):
+        """The extension IS on this mock bus and the shell IS a measured 50.1, so before the fix this session
+        answered `available`.  Neither fact is an answer to "can I overlap here?" on X11."""
+        with self.x11_env():
+            lines = self.status()
+        self.assertNotIn("extension: running", lines)
+        for ln in lines:
+            self.assertNotIn("install-overlap", ln)
+
+    def test_the_shell_version_is_still_reported(self):
+        """It is a GNOME session and the version is readable, so the machine-readable half keeps carrying it:
+        the reason changed, not what is known."""
+        with self.x11_env():
+            self.assertIn("shell: 50.1", self.status())
+
+    def test_a_wayland_session_is_untouched(self):
+        """The control, and it is built through the same recipe with one variable changed: same bus, same
+        extension, same recorded nothing, `FUCKWAYLAND_PASSTHROUGH` lifted here too. Keeping the suite's
+        override in would have had `session_kind()` answer `wayland` without ever reading
+        `XDG_SESSION_TYPE`, and an implementation that ignored that variable entirely would have passed
+        both halves of this pair."""
+        with self.session_env("wayland"):
+            lines = self.status()
+        self.assertEqual(lines[0], "available")
+        self.assertIn("extension: running", lines)
+
+    def test_the_recorded_agreement_is_still_read_back(self):
+        """`--gnome-overlap-status` is also how somebody asks what they have agreed to, and that answer is a
+        file: it must survive the session being one this cannot be used on."""
+        self.record()
+        with self.x11_env():
+            lines = self.status()
+        self.assertEqual(lines[0], "unavailable")
+        self.assertIn("agreed on: 2026-01-02T03:04:05Z", lines)
+
+
 if __name__ == "__main__":
     unittest.main()

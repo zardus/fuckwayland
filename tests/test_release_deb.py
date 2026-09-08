@@ -61,8 +61,14 @@ PAIRS = {
         "gnome/60-fuckwayland-uinput.rules",
     "usr/lib/modules-load.d/fuckwayland-uinput.conf":
         "gnome/modules-load-uinput.conf",
-    "usr/lib/fuckwayland/enable-bridge": "debian/enable-bridge",
-    "usr/lib/fuckwayland/enable-bridge.desktop": "debian/enable-bridge.desktop",
+    # packaging/common/, not debian/: the enabler and its autostart entry are a
+    # per-user gsettings enable and an XDG entry, needed identically by the
+    # .deb, the rpm and the PKGBUILD, and an Arch recipe reaching into a
+    # directory named for dpkg was what said they were in the wrong place.  The
+    # bytes did not move, only the directory, so the package in release/ still
+    # matches them byte for byte with no rebuild.
+    "usr/lib/fuckwayland/enable-bridge": "packaging/common/enable-bridge",
+    "usr/lib/fuckwayland/enable-bridge.desktop": "packaging/common/enable-bridge.desktop",
     "usr/share/applications/warandr.desktop": "warandr.desktop",
     "usr/share/doc/fuckwayland/copyright": "debian/copyright",
     "usr/share/lintian/overrides/fuckwayland": "debian/fuckwayland.lintian-overrides",
@@ -495,6 +501,43 @@ class OneVersionEverywhere(unittest.TestCase):
         with open(os.path.join(ROOT, "flake.nix"), encoding="utf-8") as f:
             found = set(re.findall(r'version\s*=\s*"([0-9][^"]*)"', f.read()))
         self.assertEqual(found, {VERSION}, found)
+
+    def test_the_rpm_spec_says_it_twice(self):
+        """The Fedora package's Version: and the top %changelog entry, which
+        rpm builds the package's name out of.  `sh scripts/build-rpm.sh`
+        refuses the build over either; this is the same check from the other
+        end, and it is the one that runs on every push."""
+        with open(os.path.join(ROOT, "packaging", "rpm", "fuckwayland.spec"),
+                  encoding="utf-8") as f:
+            spec = f.read()
+        self.assertEqual(re.findall(r"^Version: *(\S+)$", spec, re.M), [VERSION])
+        entries = re.findall(r"^\* \w{3} \w{3} \d{2} \d{4} .+ - (\S+)-\d+$", spec, re.M)
+        self.assertTrue(entries, "no %changelog entry in the spec")
+        self.assertEqual(entries[0], VERSION)
+
+    def test_the_pkgbuild_says_it(self):
+        """pkgver, and pkgrel back at 1: a release that bumps the version and
+        leaves pkgrel at 2 produces a package that sorts after itself."""
+        with open(os.path.join(ROOT, "packaging", "arch", "PKGBUILD"),
+                  encoding="utf-8") as f:
+            recipe = f.read()
+        self.assertEqual(re.findall(r"^pkgver=(\S+)$", recipe, re.M), [VERSION])
+        self.assertEqual(re.findall(r"^pkgrel=(\S+)$", recipe, re.M), ["1"])
+
+    def test_the_changelogs_top_heading_names_this_release(self):
+        """CHANGELOG.md is the long form of the README's per-version section,
+        and its top heading is what a reader compares against the package they
+        installed.  It is written two-component (`## Version 0.4`) where
+        pyproject is three (`0.4.0`) -- so are the git tags, v0.4 and v0.3 --
+        so either spelling of THIS release passes and no other; which of the
+        two the project settles on is design decision 2, and the day it does,
+        this test keeps working."""
+        with open(os.path.join(ROOT, "CHANGELOG.md"), encoding="utf-8") as f:
+            md = f.read()
+        headings = re.findall(r"^## Version (\S+)\s*$", md, re.M)
+        self.assertTrue(headings, "CHANGELOG.md has no `## Version` heading")
+        short = VERSION[:-2] if VERSION.endswith(".0") else VERSION
+        self.assertIn(headings[0], (VERSION, short), headings[:3])
 
 
 

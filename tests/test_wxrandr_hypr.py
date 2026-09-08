@@ -1,0 +1,622 @@
+#!/usr/bin/env python3
+"""U20: wxrandr's Hyprland backend -- `j/monitors` to read, `keyword monitor` to write.
+
+Why there is a backend here at all is one measurement [M recon2/hyprland.md §4, repeated on 0.56.2 in
+recon2/arch.md]: Hyprland advertises `zwlr_output_manager_v1` version 4 and takes exactly ONE apply per
+session through it. The second times out at 10 s with nothing changed and no `[COutputConfiguration] Applying
+configuration` in Hyprland's own log; with a second output present even the first one hangs; and `wlr-randr`,
+the reference client, hangs for ever on the same request. Its own `keyword monitor` applied at once on a
+session that had never touched the protocol -- so that is the route, and U08 (tests/test_wxrandr_hostile.py)
+is the sentence `--backend wlr` gets on such a session.
+
+The double is `support.FakeHypr` replaying the recorded `j/monitors` (a 1920x1080@74.998 Virtual-1 and a
+scale-2.0 HEADLESS-2 at +1920+0), plus one thing no recon report recorded and this file has to model: what
+`j/monitors` says AFTER a `keyword monitor`. `_ApplyingHypr` below is that, and its `deaf` mood is the
+measured post-wedge Hyprland -- `ok` to a `keyword monitor` it then ignores, three times in a row.
+"""
+
+import contextlib
+import io
+import json
+import os
+import re
+import shutil
+import sys
+import tempfile
+import time
+import unittest
+from unittest import mock
+
+# The suite never hands a tool over to the real X11 one: see
+# tests/conftest.py (which covers pytest) and tests/test_passthrough.py.
+# This line is what covers `python3 tests/<file>.py`, where conftest is
+# not loaded, and it reaches every subprocess a test spawns.
+os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import support
+from fwcommon import session
+from wdotool.hypr_ipc import HyprIPC
+from wxrandr import cli, core, hypr
+
+#: `NAME,WxH@Hz,XxY,SCALE` and the keyword pairs after it
+_LINE = re.compile(r"^([^,]+),(.*)$")
+
+
+class _ApplyingHypr(support.FakeHypr):
+    """`support.FakeHypr` that lets a `keyword monitor` change what `j/monitors` says next.
+
+    The recorded double replays one session and answers `ok` to every keyword, which is all a request-log
+    assertion needs; an apply that has to be VERIFIED needs the other half. Only the four positional fields
+    and the two keyword pairs this backend writes are understood, because they are the only ones it writes.
+
+    `deaf=True` answers `ok` and changes nothing -- Hyprland after its wlr-output-management path has wedged,
+    measured three times in a row on one session [M recon2/hyprland.md §4]."""
+
+    def __init__(self, mode="ok", deaf=False, **kw):
+        self.deaf = deaf
+        self.keywords = []
+        super().__init__(mode, **kw)
+
+    def reply_for(self, req: str) -> bytes:
+        if req.startswith("keyword monitor "):
+            self.keywords.append(req[len("keyword monitor "):])
+            if not self.deaf:
+                self._apply(self.keywords[-1])
+            return b"ok"
+        return super().reply_for(req)
+
+    def _apply(self, spec: str):
+        m = _LINE.match(spec)
+        name, rest = m.group(1), m.group(2)
+        rows = json.loads(json.dumps(self.payloads["monitors"]))
+        row = next((r for r in rows if r["name"] == name), None)
+        if row is None:
+            return
+        fields = rest.split(",")
+        if fields[0] == "disable":
+            row["disabled"] = True
+        else:
+            row["disabled"] = False
+            size, rate = (fields[0].split("@") + [None])[:2]
+            if "x" in size:
+                row["width"], row["height"] = (int(v) for v in size.split("x"))
+            if rate:
+                row["refreshRate"] = float(rate)
+            row["x"], row["y"] = (int(v) for v in fields[1].split("x"))
+            row["scale"] = float(fields[2])
+            row["transform"] = 0
+            row["mirrorOf"] = "none"
+            for i in range(3, len(fields) - 1, 2):
+                if fields[i] == "transform":
+                    row["transform"] = int(fields[i + 1])
+                elif fields[i] == "mirror":
+                    row["mirrorOf"] = fields[i + 1]
+        self.payloads["monitors"] = rows
+
+
+class Base(unittest.TestCase):
+    """A FakeHypr whose socket is where `session.find_hypr_socket()` looks."""
+
+    DOUBLE = _ApplyingHypr
+
+    def hypr(self, **kw):
+        srv = self.DOUBLE(**kw)
+        self.addCleanup(srv.close)
+        self.srv = srv
+        return srv
+
+    def plant(self, srv=None, sig="sig0"):
+        """`<runtime dir>/hypr/<sig>/.socket.sock` pointing at the double's own socket.
+
+        A symlink, because the double picks its own temp directory: `find_hypr_socket()` stats the path
+        (os.path.exists and the owner check both follow it) and connect() follows it too, so what is being
+        exercised is the real finder and not a stub of it."""
+        srv = srv or self.hypr()
+        self.tmp = tempfile.mkdtemp(prefix="wxr-hypr-rt-")
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        d = os.path.join(self.tmp, "hypr", sig)
+        os.makedirs(d)
+        os.symlink(srv.path, os.path.join(d, ".socket.sock"))
+        old = session.RUN_USER_DIR
+        session.RUN_USER_DIR = self.tmp
+        self.addCleanup(setattr, session, "RUN_USER_DIR", old)
+        return srv
+
+    def outputs(self, srv=None) -> hypr.HyprOutputs:
+        srv = srv or self.hypr()
+        return hypr.HyprOutputs(ipc=HyprIPC(srv.path))
+
+    def state(self) -> core.State:
+        d = tempfile.mkdtemp(prefix="wxr-hypr-st-")
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        return core.State(os.path.join(d, "key"))
+
+    def run_cli(self, *argv, **env):
+        """The real cli.Session, over the planted socket: the branch in wxrandr/cli.py that builds
+        HyprOutputs is part of what U20 has to prove, so nothing here is stubbed."""
+        base = dict(XDG_RUNTIME_DIR=self.tmp, HYPRLAND_INSTANCE_SIGNATURE=None,
+                    WAYLAND_DISPLAY=None, DISPLAY=None, WXRANDR_BACKEND=None,
+                    XDG_SESSION_TYPE="wayland", SWAYSOCK=None, I3SOCK=None)
+        base.update(env)
+        out, err = io.StringIO(), io.StringIO()
+        with support.env(**base):
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                try:
+                    code = cli.main(list(argv))
+                except SystemExit as e:
+                    code = e.code if isinstance(e.code, int) else 0
+        return code, out.getvalue(), err.getvalue()
+
+
+class Snapshot(Base):
+    """`j/monitors` -> OutputState, and the `--query` block it renders."""
+
+    def test_the_query_block_is_the_recorded_session(self):
+        """74.998 Hz prints as 75.00 because xrandr's refresh column is `%6.2f`, and the scale-2.0 head is
+        960x540 of layout at +1920+0 where the compositor drives 1920x1080 of pixels."""
+        self.plant()
+        code, out, err = self.run_cli("--query")
+        self.assertEqual((code, err), (0, ""))
+        lines = out.splitlines()
+        self.assertEqual(lines[0],
+                         "Screen 0: minimum 16 x 16, current 2880 x 1080, maximum 32767 x 32767")
+        self.assertEqual(lines[1], "Virtual-1 connected 1920x1080+0+0 "
+                         "(normal left inverted right x axis y axis) 480mm x 270mm")
+        self.assertEqual(lines[2], "   1920x1080     75.00*+  60.00    50.00  ")
+        head = [ln for ln in lines if ln.startswith("HEADLESS-2")]
+        self.assertEqual(head, ["HEADLESS-2 connected 960x540+1920+0 "
+                                "(normal left inverted right x axis y axis) 0mm x 0mm"])
+        self.assertEqual(lines[lines.index(head[0]) + 1], "   1920x1080      0.06*+")
+
+    def test_make_model_serial_and_the_mode_list(self):
+        outs = {o.name: o for o in self.outputs().snapshot(self.state())}
+        v = outs["Virtual-1"]
+        # an empty serial reads `Unknown`, which is what xrandr prints for an output that has none
+        self.assertEqual((v.make, v.model, v.serial), ("Red Hat, Inc.", "QEMU Monitor", "Unknown"))
+        self.assertEqual(len(v.modes), 26)
+        self.assertEqual((v.current.w, v.current.h, v.current.refresh_mhz), (1920, 1080, 75000))
+        self.assertTrue(v.current.preferred)
+        h = outs["HEADLESS-2"]
+        self.assertEqual((h.make, h.model), ("Unknown", "Unknown"))
+        self.assertEqual((h.mm_w, h.mm_h, h.scale), (0, 0, 2.0))
+
+    def test_the_current_mode_is_the_advertised_one_nearest_the_live_rate(self):
+        """`refreshRate` is 74.998 and `availableModes` says `1920x1080@75.00Hz`: one mode row, not two
+        reading 75.00 apiece."""
+        v = [o for o in self.outputs().snapshot(self.state()) if o.name == "Virtual-1"][0]
+        same = [m for m in v.modes if (m.w, m.h) == (1920, 1080)]
+        self.assertEqual([m.refresh_mhz for m in same], [75000, 60000, 50000])
+        self.assertIs(v.current, same[0])
+
+    def test_a_mode_the_list_does_not_carry_is_still_reported(self):
+        srv = self.hypr()
+        mons = json.loads(json.dumps(srv.payloads["monitors"]))
+        mons[0]["width"], mons[0]["height"] = 1234, 567
+        srv.payloads["monitors"] = mons
+        v = [o for o in self.outputs(srv).snapshot(self.state()) if o.name == "Virtual-1"][0]
+        self.assertEqual((v.current.w, v.current.h), (1234, 567))
+        self.assertEqual((v.w, v.h), (1234, 567))
+
+    def test_a_disabled_monitor_is_inactive_and_has_no_rectangle(self):
+        srv = self.hypr()
+        mons = json.loads(json.dumps(srv.payloads["monitors"]))
+        mons[1]["disabled"] = True
+        srv.payloads["monitors"] = mons
+        h = [o for o in self.outputs(srv).snapshot(self.state()) if o.name == "HEADLESS-2"][0]
+        self.assertFalse(h.active)
+        self.assertEqual((h.x, h.y, h.w, h.h), (0, 0, 0, 0))
+
+    def test_the_transform_is_the_wlroots_numbering_and_not_the_spec_reading(self):
+        """Measured: `wxrandr --output Virtual-1 --rotate left` over the protocol put sway transform "270" on
+        the wire and `hyprctl` reported `transform: 3` [M recon2/hyprland.md §4]. That is core.WL_TRANSFORM's
+        numbering (3 == 270 == xrandr `left`); core.from_wl_spec_transform reads 3 as `right`, which is how
+        Mutter and KWin number the same enum, and using it here would report every rotated Hyprland head
+        ninety degrees out."""
+        self.assertEqual(core.from_wl_spec_transform(3), "90")     # the numbering NOT used here
+        srv = self.hypr()
+        for number, sway_tf, word, wh in ((3, "270", "left", (1080, 1920)),
+                                          (1, "90", "right", (1080, 1920)),
+                                          (2, "180", "inverted", (1920, 1080))):
+            mons = json.loads(json.dumps(srv.payloads["monitors"]))
+            mons[0]["transform"] = number
+            srv.payloads["monitors"] = mons
+            v = [o for o in self.outputs(srv).snapshot(self.state()) if o.name == "Virtual-1"][0]
+            self.assertEqual(v.transform, sway_tf, number)
+            self.assertEqual((v.w, v.h), wh, number)
+            self.assertIn(" " + word + " ", core.render_output_header(v, None))
+
+    def test_a_mirror_is_remembered_for_the_apply(self):
+        srv = self.hypr()
+        mons = json.loads(json.dumps(srv.payloads["monitors"]))
+        mons[1]["mirrorOf"] = "Virtual-1"
+        srv.payloads["monitors"] = mons
+        out = self.outputs(srv)
+        out.snapshot(self.state())
+        self.assertEqual(out.mirrors, {"HEADLESS-2": "Virtual-1"})
+
+    def test_a_monitors_answer_that_is_not_a_list_is_one_line(self):
+        srv = self.hypr(payloads={"monitors": {"oops": 1}})
+        with self.assertRaises(core.Fatal) as cm:
+            self.outputs(srv).snapshot(self.state())
+        self.assertEqual(str(cm.exception),
+                         "the compositor's j/monitors answer is not a list of monitors\n")
+
+
+class KeywordLines(Base):
+    """The apply's whole contract: one `keyword monitor` argument per output, byte for byte."""
+
+    def test_mode_position_and_scale(self):
+        out = self.outputs()
+        state = self.state()
+        outs = {o.name: o for o in out.snapshot(state)}
+        t = core.Target(output=outs["Virtual-1"], stanza=None, enabled=True,
+                        mode=core.Mode(w=1280, h=1024, refresh_mhz=60020), scale=1.0)
+        self.assertEqual(out.monitor_line(t, {"Virtual-1": (0, 0)}),
+                         "Virtual-1,1280x1024@60.02,0x0,1")
+        t.scale = 1.5
+        self.assertEqual(out.monitor_line(t, {"Virtual-1": (100, 200)}),
+                         "Virtual-1,1280x1024@60.02,100x200,1.5")
+
+    def test_a_whole_number_rate_carries_no_decimals(self):
+        out = self.outputs()
+        outs = {o.name: o for o in out.snapshot(self.state())}
+        t = core.Target(output=outs["Virtual-1"], stanza=None,
+                        mode=core.Mode(w=1920, h=1080, refresh_mhz=75000), scale=1.0)
+        self.assertEqual(out.monitor_line(t, {}), "Virtual-1,1920x1080@75,0x0,1")
+
+    def test_a_mode_with_no_rate_leaves_the_field_out(self):
+        out = self.outputs()
+        outs = {o.name: o for o in out.snapshot(self.state())}
+        t = core.Target(output=outs["HEADLESS-2"], stanza=None,
+                        mode=core.Mode(w=800, h=600), scale=1.0)
+        self.assertEqual(out.monitor_line(t, {"HEADLESS-2": (0, 0)}), "HEADLESS-2,800x600,0x0,1")
+
+    def test_transform_is_appended_as_the_wlroots_number(self):
+        out = self.outputs()
+        outs = {o.name: o for o in out.snapshot(self.state())}
+        t = core.Target(output=outs["Virtual-1"], stanza=None,
+                        mode=core.Mode(w=1920, h=1080, refresh_mhz=75000), scale=1.0, sway_tf="270")
+        self.assertEqual(out.monitor_line(t, {"Virtual-1": (0, 0)}),
+                         "Virtual-1,1920x1080@75,0x0,1,transform,3")
+
+    def test_an_output_going_off_is_the_disable_word(self):
+        out = self.outputs()
+        outs = {o.name: o for o in out.snapshot(self.state())}
+        t = core.Target(output=outs["HEADLESS-2"], stanza=None, enabled=False)
+        self.assertEqual(out.monitor_line(t, {}), "HEADLESS-2,disable")
+
+    def test_same_as_becomes_the_mirror_pair(self):
+        out = self.outputs()
+        outs = {o.name: o for o in out.snapshot(self.state())}
+        st = core.Stanza(name="HEADLESS-2", relation=("same-as", "Virtual-1"))
+        t = core.Target(output=outs["HEADLESS-2"], stanza=st,
+                        mode=core.Mode(w=1920, h=1080, refresh_mhz=60), scale=1.0)
+        self.assertEqual(out.monitor_line(t, {"HEADLESS-2": (0, 0)}),
+                         "HEADLESS-2,1920x1080@0.06,0x0,1,mirror,Virtual-1")
+
+    def test_an_existing_mirror_survives_a_line_that_does_not_mention_it(self):
+        """A `keyword monitor` with no `mirror` field CLEARS one, so a `--pos` on a mirrored output would
+        silently un-mirror it."""
+        srv = self.hypr()
+        mons = json.loads(json.dumps(srv.payloads["monitors"]))
+        mons[1]["mirrorOf"] = "Virtual-1"
+        srv.payloads["monitors"] = mons
+        out = self.outputs(srv)
+        outs = {o.name: o for o in out.snapshot(self.state())}
+        t = core.Target(output=outs["HEADLESS-2"], stanza=None,
+                        mode=core.Mode(w=1920, h=1080, refresh_mhz=60), scale=1.0)
+        self.assertTrue(out.monitor_line(t, {"HEADLESS-2": (0, 0)}).endswith(",mirror,Virtual-1"))
+        # ... and a relation that is not `same-as` drops it, because the user just placed it somewhere else
+        t.stanza = core.Stanza(name="HEADLESS-2", relation=("right-of", "Virtual-1"))
+        self.assertFalse(out.monitor_line(t, {"HEADLESS-2": (1920, 0)}).endswith(",mirror,Virtual-1"))
+
+
+class Apply(Base):
+    """The CLI end to end, over the real Session and the real finder."""
+
+    def test_a_mode_change_is_one_keyword_and_the_re_read_agrees(self):
+        srv = self.plant()
+        code, out, err = self.run_cli("--output", "Virtual-1", "--mode", "1280x1024")
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(srv.keywords, ["Virtual-1,1280x1024@60.02,0x0,1"])
+        self.assertEqual(srv.payloads["monitors"][0]["width"], 1280)
+
+    def test_only_the_touched_outputs_are_written(self):
+        srv = self.plant()
+        self.run_cli("--output", "Virtual-1", "--mode", "1280x1024")
+        self.assertEqual([k.split(",")[0] for k in srv.keywords], ["Virtual-1"])
+
+    def test_off_and_auto(self):
+        """`NAME,disable` off, and a plain mode line back on.
+
+        A disabled `j/monitors` row publishes no `x`/`y` and no scale worth reading, so `--auto` puts the
+        head back at 0x0 at scale 1 -- which is what `xrandr --auto` does with an output it is enabling and
+        was given no position for, and it is verified by the re-read like every other apply."""
+        srv = self.plant()
+        code, _out, err = self.run_cli("--output", "HEADLESS-2", "--off")
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(srv.keywords, ["HEADLESS-2,disable"])
+        self.assertTrue(srv.payloads["monitors"][1]["disabled"])
+        code, _out, err = self.run_cli("--output", "HEADLESS-2", "--auto")
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(srv.keywords[1:], ["HEADLESS-2,1920x1080@0.06,0x0,1"])
+        self.assertFalse(srv.payloads["monitors"][1]["disabled"])
+
+    def test_a_rotation_goes_out_as_the_wlroots_number(self):
+        srv = self.plant()
+        code, _out, err = self.run_cli("--output", "Virtual-1", "--rotate", "left")
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(srv.keywords, ["Virtual-1,1920x1080@75,0x0,1,transform,3"])
+        self.assertEqual(srv.payloads["monitors"][0]["transform"], 3)
+
+    def test_a_dryrun_sends_nothing(self):
+        srv = self.plant()
+        code, out, err = self.run_cli("--dryrun", "--output", "Virtual-1", "--mode", "1280x1024")
+        self.assertEqual(code, 0)
+        self.assertEqual(srv.keywords, [])
+
+    def test_a_compositor_that_says_ok_and_does_nothing_is_one_line(self):
+        """The measured post-wedge Hyprland: `hyprctl keyword monitor` accepted with `ok` and no change,
+        three times in a row on one session [M recon2/hyprland.md §4]. Trusting the `ok` would report a
+        layout that is not on the screen."""
+        self.plant(self.hypr(deaf=True))
+        code, _out, err = self.run_cli("--output", "Virtual-1", "--mode", "1280x1024")
+        self.assertEqual(code, 1)
+        self.assertEqual(err, "xrandr: Hyprland accepted the mode 1280x1024 for Virtual-1 and did not "
+                              "apply it (it reports 1920x1080)\n")
+
+    def test_a_position_that_does_not_move_is_one_line(self):
+        self.plant(self.hypr(deaf=True))
+        code, _out, err = self.run_cli("--output", "HEADLESS-2", "--pos", "3000x0")
+        self.assertEqual(code, 1)
+        self.assertEqual(err, "xrandr: Hyprland accepted the position 3000x0 for HEADLESS-2 and did not "
+                              "apply it (it reports 1920x0)\n")
+
+    def test_an_output_that_will_not_go_off_is_one_line(self):
+        self.plant(self.hypr(deaf=True))
+        code, _out, err = self.run_cli("--output", "HEADLESS-2", "--off")
+        self.assertEqual(code, 1)
+        self.assertEqual(err, "xrandr: Hyprland accepted HEADLESS-2 off and did not apply it "
+                              "(it is still on)\n")
+
+    def test_a_refused_keyword_is_hyprlands_own_words(self):
+        srv = self.plant(self.hypr(payloads={}))
+        srv.reply_for = lambda req: (b"Invalid keyword" if req.startswith("keyword")
+                                     else support.FakeHypr.reply_for(srv, req))
+        code, _out, err = self.run_cli("--output", "Virtual-1", "--mode", "1280x1024")
+        self.assertEqual((code, err), (1, "xrandr: hypr: Invalid keyword\n"))
+
+    def test_persistent_is_said_once_and_the_layout_still_applies(self):
+        """Hyprland's layout lives in hyprland.conf, which is not ours to write."""
+        srv = self.plant()
+        code, _out, err = self.run_cli("--persistent", "--output", "Virtual-1", "--mode", "1280x1024")
+        self.assertEqual(code, 0)
+        # the literal sentence, not hypr.PERSIST_NOTE: reading the note back out of the module under test
+        # would pass whatever it said, and this one is what the WXRANDR.md row promises
+        self.assertEqual(err, "xrandr: --persistent: Hyprland keeps its layout in hyprland.conf, which is "
+                              "not ours to write; this layout lasts as long as the session\n")
+        self.assertEqual(srv.keywords, ["Virtual-1,1280x1024@60.02,0x0,1"])
+
+    def test_the_dryrun_backend_hook_sends_nothing_at_all(self):
+        out = self.outputs()
+        self.assertIsNone(out.verify(self.state(), []))
+        self.assertEqual([r for r in self.srv.requests if not r.startswith("j/")], [])
+
+
+class Probe(Base):
+    """`--backends`, `--print-backend` and the two spellings `--backend` takes."""
+
+    def test_the_backends_row_names_the_socket(self):
+        self.plant()
+        code, out, _err = self.run_cli("--backends")
+        self.assertEqual(code, 0)
+        rows = {ln[2:10].strip(): ln for ln in out.splitlines()}
+        self.assertEqual(rows["hypr"],
+                         "* hypr      available    IPC socket %s"
+                         % os.path.join(self.tmp, "hypr", "sig0", ".socket.sock"))
+
+    def test_print_backend_verbose_names_the_version_and_the_protocol(self):
+        self.plant()
+        code, out, _err = self.run_cli("--print-backend", "--verbose")
+        self.assertEqual(code, 0)
+        self.assertEqual(out.splitlines(), [
+            "hypr",
+            "session: wayland",
+            "chosen by: detection",
+            "compositor: Hyprland 0.53.3",
+            "protocol: Hyprland IPC (hyprctl)",
+            "available: yes",
+        ])
+
+    def test_the_alias_hyprland_resolves_and_works(self):
+        self.plant()
+        self.assertEqual(cli.canonical_backend("hyprland"), "hypr")
+        code, out, err = self.run_cli("--backend", "hyprland", "--query")
+        self.assertEqual((code, err), (0, ""))
+        self.assertTrue(out.startswith("Screen 0:"))
+
+    def test_the_environment_variable_takes_it_too(self):
+        self.plant()
+        code, out, err = self.run_cli("--print-backend", WXRANDR_BACKEND="hyprland")
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(out.splitlines()[0], "hypr")
+
+    def test_hypr_is_probed_second_so_a_hyprland_box_never_touches_the_bus(self):
+        """`sway` first (an i3/sway socket is the only thing above it), then `hypr` -- and detection stops
+        there, so the two D-Bus probes are never made on a Hyprland session. Hyprland owns neither bus name
+        [M recon2/hyprland.md §2, `busctl --user list`]."""
+        self.assertEqual(cli.AUTO_ORDER, ("sway", "hypr", "kwin", "mutter", "cinnamon"))
+        self.assertEqual(cli.AUTO_FALLBACK, "wlr")
+        self.plant()
+        with support.env(XDG_RUNTIME_DIR=self.tmp, HYPRLAND_INSTANCE_SIGNATURE=None,
+                         SWAYSOCK=None, I3SOCK=None):
+            probes = {}
+            self.assertEqual(cli.detect_wayland(probes)[0], "hypr")
+        self.assertEqual(sorted(probes), ["hypr", "sway"])
+        for p in probes.values():
+            p.close()
+
+    def test_a_wedged_compositor_ends_the_probe_at_its_own_deadline(self):
+        """The probe's deadline is not the backend's: `hypr` is second in AUTO_ORDER and `--backends` runs
+        every probe, so a box whose compositor is wedged inside its own event loop must not pay the apply
+        path's ten seconds on every wxrandr run.
+
+        A wedged compositor is the only thing that can spend the deadline -- it accepts the connection (the
+        kernel does that for it) and then says nothing, so nothing but our own clock ends the wait. Driven at
+        0.3 s rather than the shipped 2, and the assertion that it is well under IPC_TIMEOUT is what says the
+        probe used its own constant and not the backend's."""
+        self.plant(self.hypr(mode="wedged"))
+        with mock.patch.object(hypr, "PROBE_TIMEOUT", 0.3):
+            start = time.monotonic()
+            code, out, _err = self.run_cli("--backends")
+        spent = time.monotonic() - start
+        self.assertEqual(code, 0)
+        row = [ln for ln in out.splitlines() if ln[2:10].strip() == "hypr"][0]
+        self.assertIn("unavailable", row)
+        self.assertIn("no answer from the compositor within 0.3s", row)
+        self.assertLess(spent, hypr.IPC_TIMEOUT)
+
+    def test_a_socket_whose_compositor_is_gone_is_a_row_and_not_a_traceback(self):
+        """A stale instance directory whose compositor exited between the finder and the connect: one row
+        carrying Hyprland's silence, and the sweep goes on to the next backend."""
+        self.plant(self.hypr(mode="gone"))
+        code, out, _err = self.run_cli("--backends")
+        self.assertEqual(code, 0)
+        row = [ln for ln in out.splitlines() if ln[2:10].strip() == "hypr"][0]
+        self.assertIn("unavailable", row)
+        self.assertIn("closed the IPC socket without answering `j/version`", row)
+
+    def test_an_answer_that_is_not_hyprlands_is_refused_by_name(self):
+        self.plant(self.hypr(payloads={"version": {"nope": True}}))
+        code, out, _err = self.run_cli("--backends")
+        row = [ln for ln in out.splitlines() if ln[2:10].strip() == "hypr"][0]
+        self.assertIn("did not answer j/version like Hyprland", row)
+
+    def test_no_socket_at_all_is_the_pinned_reason(self):
+        tmp = tempfile.mkdtemp(prefix="wxr-hypr-none-")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        old = session.RUN_USER_DIR
+        session.RUN_USER_DIR = tmp
+        self.addCleanup(setattr, session, "RUN_USER_DIR", old)
+        with support.env(XDG_RUNTIME_DIR=tmp, HYPRLAND_INSTANCE_SIGNATURE=None):
+            p = cli.probe_backend("hypr")
+        self.assertEqual((p.available, p.reason),
+                         (False, "no Hyprland IPC socket ($HYPRLAND_INSTANCE_SIGNATURE)"))
+
+
+class TheTwoClients(Base):
+    """`wxrandr.hypr.HyprIPC` is a second copy of `wdotool.hypr_ipc.HyprIPC`'s reader, and this is what keeps
+    them from drifting.
+
+    The copy is not laziness: `scripts/build-pyz.sh` builds `dist/wxrandr` out of `fwcommon` and `wxrandr`
+    alone, and `tests/test_build_scripts.py:TheZipapps.test_no_display_tool_carries_the_input_stack` pins
+    that, so a `from wdotool...` in this package would work from the .deb and quietly not from the second
+    install route -- and on Hyprland "quietly" means falling back to a wlr path that cannot apply
+    [M recon2/hyprland.md §4]. `wdotool/layoutbox.py` carries a copy of Mutter's logical-size rule for the
+    same reason, pinned the same way (tests/test_scale_spaces.py).
+
+    So: same bytes on the wire, same sentence for every failure, differing only in the exception type each
+    package speaks."""
+
+    def pair(self, srv, timeout=10.0):
+        from wdotool.hypr_ipc import HyprIPC as WdotoolIPC
+        return hypr.HyprIPC(srv.path, timeout=timeout), WdotoolIPC(srv.path, timeout=timeout)
+
+    def test_no_module_under_wxrandr_imports_wdotool(self):
+        """The zipapp guard, as a check rather than a comment."""
+        offenders = []
+        d = os.path.join(ROOT, "wxrandr")
+        for name in sorted(os.listdir(d)):
+            if not name.endswith(".py"):
+                continue
+            with open(os.path.join(d, name), encoding="utf-8") as fh:
+                code = "\n".join(ln for ln in fh.read().splitlines()
+                                 if not ln.lstrip().startswith("#"))
+            if re.search(r"^\s*(from|import)\s+wdotool\b", code, re.M):
+                offenders.append(name)
+        self.assertEqual(offenders, [])
+
+    def test_both_clients_send_the_same_bytes(self):
+        srv = self.hypr()
+        mine, theirs = self.pair(srv)
+        self.assertEqual(mine.json("monitors"), theirs.json("monitors"))
+        mine.keyword("monitor Virtual-1,disable")
+        theirs.keyword("monitor Virtual-1,disable")
+        self.assertEqual(srv.requests, ["j/monitors", "j/monitors",
+                                        "keyword monitor Virtual-1,disable",
+                                        "keyword monitor Virtual-1,disable"])
+
+    def test_both_derive_the_event_socket_the_same_way(self):
+        mine, theirs = self.pair(self.hypr())
+        for ipc in (mine, theirs):
+            self.assertTrue(ipc.events_path.endswith(".socket2.sock"))
+        self.assertEqual(mine.events_path, theirs.events_path)
+
+    def test_every_failure_is_the_same_sentence(self):
+        from fwcommon.errors import CmdError
+        for mode, want in (
+                ("gone", "hypr backend: the compositor closed the IPC socket without answering `j/monitors`"),
+                ("badjson", "hypr backend: the compositor's answer to j/monitors is not JSON"),
+                ("short", "hypr backend: the compositor's answer to j/monitors is not JSON")):
+            srv = self.hypr(mode=mode)
+            mine, theirs = self.pair(srv)
+            with self.assertRaises(core.Fatal) as a:
+                mine.json("monitors")
+            with self.assertRaises(CmdError) as b:
+                theirs.json("monitors")
+            # the only difference is the newline wxrandr's Fatal carries, because xrandr's fatal() prints
+            # the message as it is given
+            self.assertEqual(str(a.exception), str(b.exception) + "\n", mode)
+            self.assertTrue(str(b.exception).startswith(want), mode)
+
+    def test_a_wedged_compositor_ends_at_the_same_deadline_in_both(self):
+        from fwcommon.errors import CmdError
+        srv = self.hypr(mode="wedged")
+        mine, theirs = self.pair(srv, timeout=0.4)
+        with self.assertRaises(core.Fatal) as a:
+            mine.json("monitors")
+        with self.assertRaises(CmdError) as b:
+            theirs.json("monitors")
+        self.assertEqual(str(a.exception),
+                         "hypr backend: no answer from the compositor within 0.4s "
+                         "(it is not responding)\n")
+        self.assertEqual(str(a.exception), str(b.exception) + "\n")
+
+    def test_a_refused_keyword_reads_the_same_in_both(self):
+        from fwcommon.errors import CmdError
+        srv = self.hypr(payloads={})
+        srv.reply_for = lambda req: (b"Invalid keyword" if req.startswith("keyword")
+                                     else support.FakeHypr.reply_for(srv, req))
+        mine, theirs = self.pair(srv)
+        with self.assertRaises(core.Fatal) as a:
+            mine.keyword("monitor nonsense")
+        with self.assertRaises(CmdError) as b:
+            theirs.keyword("monitor nonsense")
+        self.assertEqual(str(a.exception), "hypr: Invalid keyword\n")
+        self.assertEqual(str(a.exception), str(b.exception) + "\n")
+
+    def test_no_socket_at_all_is_the_same_sentence_in_both(self):
+        from fwcommon.errors import CmdError
+        from wdotool.hypr_ipc import HyprIPC as WdotoolIPC
+        tmp = tempfile.mkdtemp(prefix="wxr-hypr-bare-")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        old = session.RUN_USER_DIR
+        session.RUN_USER_DIR = tmp
+        self.addCleanup(setattr, session, "RUN_USER_DIR", old)
+        with support.env(XDG_RUNTIME_DIR=tmp, HYPRLAND_INSTANCE_SIGNATURE=None):
+            with self.assertRaises(core.Fatal) as a:
+                hypr.HyprIPC()
+            with self.assertRaises(CmdError) as b:
+                WdotoolIPC()
+        self.assertEqual(str(a.exception), str(b.exception) + "\n")
+        self.assertEqual(str(b.exception),
+                         "hypr backend: no Hyprland IPC socket found ($HYPRLAND_INSTANCE_SIGNATURE unset "
+                         "and no hypr/*/.socket.sock in any runtime dir)")
+
+
+if __name__ == "__main__":
+    unittest.main()

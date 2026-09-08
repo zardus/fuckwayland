@@ -19,7 +19,13 @@ from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
+# ...and the tests directory itself, for the bare `import wl_fake` below: running this file by path puts it
+# on sys.path for free, `python3 -m unittest tests/<file>.py` does not.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import wl_fake
+from fwcommon import distro
+from fwcommon.wayland_mini import WlConn
 from fwcommon import passthrough
 from fwcommon import session
 from fwcommon import procs
@@ -374,6 +380,59 @@ class Detection(Base):
         self.assertIn(core.EXTCOPY, joined)
         self.assertIn("GNOME and KDE", joined)
         self.assertIn("portal", joined)
+
+    def test_the_second_capture_protocol_is_not_a_footnote(self):
+        """The line used to read `wl-mirror needs wlroots (sway, hyprland, ...) or a compositor with
+        ext-image-copy-capture-v1`, which reads as "wlroots, or something exotic". It is not exotic:
+        `wmirror --check` passed on COSMIC with `capture: ext_image_copy_capture_manager_v1 v1` and no
+        screencopy manager anywhere in cosmic-comp's 53 globals, and labwc and sway 1.12 publish both
+        [M recon2/cosmic.md §3, labwc.md §2, nixos.md]."""
+        second = core.no_capture_lines()[1]
+        self.assertIn(core.SCREENCOPY, second)
+        self.assertIn(core.EXTCOPY, second)
+        self.assertIn("COSMIC", second)
+        self.assertIn("labwc", second)
+        self.assertNotIn("needs wlroots", second)
+
+    def test_a_registry_with_extcopy_alone_qualifies(self):
+        """The code path already accepted it; nothing had ever asked it against a compositor that really
+        has one protocol and not the other. cosmic-comp is that compositor, and its recorded registry is
+        the peer here -- a real Wayland socket, our own client, no mock."""
+        srv = wl_fake.registry_server("cosmic")
+        self.addCleanup(srv.close)
+        ifaces = {i for i, _v in wl_fake.registry_fixture("cosmic")}
+        self.assertNotIn(core.SCREENCOPY, ifaces)
+        conn = WlConn(srv.path)
+        self.addCleanup(conn.close)
+        conn.get_registry()
+        self.assertEqual(core.capture_support(conn), [(core.EXTCOPY, 1)])
+        self.assertEqual(core.require_capture(conn), [(core.EXTCOPY, 1)])
+
+    def test_a_registry_with_neither_is_still_the_refusal(self):
+        """The control: a Mutter-shaped registry (Cinnamon's muffin, 23 globals, neither protocol) still
+        raises, so the test above is about the registry and not about the call always succeeding."""
+        srv = wl_fake.registry_server("cinnamon")
+        self.addCleanup(srv.close)
+        conn = WlConn(srv.path)
+        self.addCleanup(conn.close)
+        conn.get_registry()
+        self.assertEqual(core.capture_support(conn), [])
+        with self.assertRaises(core.Refusal):
+            core.require_capture(conn)
+
+    def test_the_install_hint_follows_the_distribution(self):
+        """`apt install wl-mirror` was printed on Fedora, on Arch and on a NixOS box with no apt at all
+        [M recon2/fedora.md, arch.md, nixos.md]. The Debian bytes are unchanged, which is what keeps
+        docs/WMIRROR.md and the two tests above true."""
+        want = {"debian": "on Ubuntu/Debian: sudo apt install wl-mirror",
+                "fedora": "on Fedora: sudo dnf install wl-mirror",
+                "arch": "on Arch: sudo pacman -S wl-mirror",
+                "nixos": "on NixOS: sudo nix-env -iA nixpkgs.wl-mirror",
+                None: "on Ubuntu/Debian: sudo apt install wl-mirror"}
+        for fam, line in want.items():
+            with mock.patch.object(distro, "family", return_value=fam):
+                self.assertEqual(core.install_hint(), line, fam)
+                self.assertEqual(core.missing_helper_lines()[1], line, fam)
 
     def test_an_x11_session_is_told_it_is_one(self):
         from fwcommon import passthrough

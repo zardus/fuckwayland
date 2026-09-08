@@ -313,6 +313,27 @@ class Environment(Tree):
 
 
 class NoOriginal(Tree):
+    def test_the_127_line_names_this_boxs_own_package_manager(self):
+        """U14, the subprocess half: four real processes, four exit 127s, each naming the package the box it
+        is running on actually has.
+
+        The line said `apt install ...` everywhere, on every distribution: a NixOS box with no apt on it was
+        told to run apt, and Fedora and Arch were named packages that do not exist there [M recon2/nixos.md,
+        fedora.md, arch.md].  The expected text comes from `fwcommon.distro`, whose seam is a module constant
+        no subprocess can be handed, so what this pins is the whole path -- PATH walk, refusal, exit status --
+        on whatever family the runner is; the byte-exact table for the other four families is
+        tests/test_passthrough.py:MissingOriginalPerDistro.
+
+        xprop is not here: it has an X11 client of its own and never exits 127 (the test below)."""
+        from fwcommon import distro
+        for tool in ("xdotool", "wmctrl", "xrandr"):
+            with self.subTest(tool=tool):
+                args = {"xdotool": ("key", "a"), "wmctrl": ("-l",), "xrandr": ("--query",)}[tool]
+                p, out, err = self.run_tool(tool, *args, env=self.env(real=False))
+                self.assertEqual(p.returncode, 127, err)
+                self.assertEqual(out, "")
+                self.assertIn("(%s)" % distro.hint(tool), err)
+
     def test_missing_original_is_127_with_a_useful_message(self):
         p, out, err = self.run_tool("xdotool", "key", "a", env=self.env(real=False))
         self.assertEqual(p.returncode, 127)

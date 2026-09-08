@@ -118,8 +118,14 @@ class FakeMutter:
     strings). `logical` entries: (x, y, scale, transform, primary,
     [(connector, mode_id), ...])."""
 
-    def __init__(self, connectors, logical, layout_mode=1, serial=42):
-        self.monitors = [MONITORS[c] for c in connectors]
+    def __init__(self, connectors, logical, layout_mode=1, serial=42, table=None,
+                 extra_props=None):
+        self.table = MONITORS if table is None else table
+        self.monitors = [self.table[c] for c in connectors]
+        #: properties of GetCurrentState this backend does not read, sent anyway because the compositor
+        #: sends them: muffin's reply carries `renderer` and, on its X11 backend, `max-screen-size`
+        #: [M recon2/cinnamon.md §2.2, §3.1]
+        self.extra_props = dict(extra_props or {})
         self.logical = [tuple(lm) for lm in logical]
         self.layout_mode = layout_mode
         self.serial = serial
@@ -208,6 +214,7 @@ class FakeMutter:
                     [self.monitor(c)[0] for c, _mid in members], {})
                    for (x, y, scale, tf, prim, members) in self.logical]
         props = {"layout-mode": Variant("u", self.layout_mode)}
+        props.update(self.extra_props)
         if self.supports_changing_layout:
             props["supports-changing-layout-mode"] = Variant("b", True)
         if self.global_scale_required:
@@ -292,27 +299,38 @@ class FakeMutter:
 
 
 class _MutterConn(tdm._Conn):
-    """The mock bus's per-client loop with org.gnome.Mutter.DisplayConfig
-    served from the bus's FakeMutter (None = no GNOME on this bus)."""
+    """The mock bus's per-client loop with org.gnome.Mutter.DisplayConfig -- or, on a bus whose flavour is
+    MUFFIN, org.cinnamon.Muffin.DisplayConfig -- served from the bus's FakeMutter (None = no GNOME on this
+    bus).  The three names are the bus's, because they are the whole of the difference: muffin answers the
+    same two methods with the same signatures [M recon2/cinnamon.md §2.2, displayconfig-introspect.txt]."""
+
+    def dispatch(self, m):
+        """The base class routes `org.gnome.Mutter.DisplayConfig` to `_test_method` by name (test_dbus_mini's
+        own table); a bus serving Muffin's name has to add it here or every call to it comes back
+        ServiceUnknown."""
+        if m.type == dbus_mini.METHOD_CALL and m.destination == self.bus.flavor.dest:
+            return self._test_method(m)
+        return super().dispatch(m)
 
     def _bus_method(self, m):
-        svc = self.bus.mutter
-        if m.member == "NameHasOwner" and m.args()[0] == DEST:
+        svc, fl = self.bus.mutter, self.bus.flavor
+        if m.member == "NameHasOwner" and m.args()[0] == fl.dest:
             self.send(Message.method_return(m, "b", (svc is not None,)))
         elif m.member == "ListNames":
-            names = self.bus.list_names() + ([DEST] if svc is not None else [])
+            names = self.bus.list_names() + ([fl.dest] if svc is not None else [])
             self.send(Message.method_return(m, "as", (names,)))
         else:
             super()._bus_method(m)
 
     def _test_method(self, m):
-        if m.destination != DEST:
+        fl = self.bus.flavor
+        if m.destination != fl.dest:
             return super()._test_method(m)
         svc = self.bus.mutter
         if svc is None:
             self.send(Message.error(m, ERR + "ServiceUnknown",
                                     "The name %s was not provided by any .service files"
-                                    % DEST))
+                                    % fl.dest))
         elif m.interface == dbus_mini.PROPS_IFACE and m.member == "Get":
             _iface, name = m.args()
             if name == "ApplyMonitorsConfigAllowed":
@@ -331,7 +349,7 @@ class _MutterConn(tdm._Conn):
                     svc.serial += 1
                     svc.bump_after_get = False
                 if svc.plug_after_get:
-                    svc.monitors.append(MONITORS[svc.plug_after_get])
+                    svc.monitors.append(svc.table[svc.plug_after_get])
                     svc.serial += 1
                     svc.plug_after_get = None
                 if svc.move_after_get:
@@ -367,15 +385,19 @@ class _MutterConn(tdm._Conn):
                 for c in self.bus.connections():
                     if any("MonitorsChanged" in r or "type='signal'" in r
                            for r in c.matches):
-                        c.send(Message.signal(PATH, IFACE, "MonitorsChanged"))
+                        c.send(Message.signal(fl.path, fl.iface, "MonitorsChanged"))
             self.send(Message.method_return(m))
         else:
             self.send(Message.error(m, ERR + "UnknownMethod", "no %s" % m.member))
 
 
 class MutterMockBus(tdm.MockBus):
-    def __init__(self, **kw):
+    """`flavor` names which DisplayConfig this bus serves: mutter.MUTTER (GNOME) or mutter.MUFFIN (Cinnamon),
+    which tests/test_wxrandr_cinnamon.py passes."""
+
+    def __init__(self, flavor=mutter.MUTTER, **kw):
         self.mutter = None
+        self.flavor = flavor
         super().__init__(**kw)
 
     def _accept(self):

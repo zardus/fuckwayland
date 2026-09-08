@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """The three shell scripts that run on somebody else's desktop.
 
-`debian/enable-bridge` runs inside the user's first GNOME session after the
-package is installed; `gnome/install-bridge.sh` and `gnome/install-overlap.sh`
-are what a clone is installed with.  Between them they are the only code in
-this project that edits another program's configuration, and until now not one
-line of any of them was executed by this suite: every branch is chosen by what
-`gsettings`, `gnome-extensions` and `gdbus` answer, none of which exists in a
-container, and the ones on a developer's machine would write into that
-developer's own dconf.
+`packaging/common/enable-bridge` runs inside the user's first GNOME session
+after the package is installed; `gnome/install-bridge.sh` and
+`gnome/install-overlap.sh` are what a clone is installed with.  Between them
+they are the only code in this project that edits another program's
+configuration, and until now not one line of any of them was executed by this
+suite: every branch is chosen by what `gsettings`, `gnome-extensions` and
+`gdbus` answer, none of which exists in a container, and the ones on a
+developer's machine would write into that developer's own dconf.
 
 So they are run for real -- the shipped files, sliced function by function
 where a whole run is not possible -- against `support.fake_gnome_bin()`, a
@@ -57,7 +57,15 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import support                                                    # noqa: E402
 
-ENABLE_BRIDGE = os.path.join(ROOT, "debian", "enable-bridge")
+# packaging/common/, not debian/: the enabler and its .desktop are a per-user
+# gsettings enable and an XDG autostart entry, which the .deb, the rpm and the
+# PKGBUILD need identically -- an Arch recipe reaching into a directory named
+# for dpkg is what said they were in the wrong place [recon2/pkg-arch.md 7].
+# The bytes did not move, only the directory; ThePackagingsShareTheEnabler at
+# the end of this file is what keeps it that way.
+ENABLE_BRIDGE = os.path.join(ROOT, "packaging", "common", "enable-bridge")
+ENABLE_BRIDGE_DESKTOP = os.path.join(ROOT, "packaging", "common",
+                                     "enable-bridge.desktop")
 INSTALL_BRIDGE = os.path.join(ROOT, "gnome", "install-bridge.sh")
 INSTALL_OVERLAP = os.path.join(ROOT, "gnome", "install-overlap.sh")
 
@@ -131,7 +139,7 @@ class ShellCase(unittest.TestCase):
         return support.gnome_list(self.state, DISABLED)
 
 
-# -- debian/enable-bridge -----------------------------------------------------
+# -- packaging/common/enable-bridge -------------------------------------------
 
 class EnableBridge(ShellCase):
     """Every branch of the script /etc/xdg/autostart runs in the user's first
@@ -324,7 +332,7 @@ class EnableBridge(ShellCase):
 # -- the three routes into one setting ----------------------------------------
 
 class EnableFallbacksAgree(ShellCase):
-    """install-bridge.sh, install-overlap.sh and debian/enable-bridge each own
+    """install-bridge.sh, install-overlap.sh and the packaged enable-bridge own
     a copy of "put the uuid in enabled-extensions".  From one starting state
     they have to reach one ending state, or "the extension is enabled" means a
     different thing depending on how it was installed."""
@@ -369,8 +377,9 @@ class EnableFallbacksAgree(ShellCase):
         self.assertEqual(self.disabled(), ())
 
     def test_the_autostart_script_ends_in_the_same_state(self):
-        """The whole of debian/enable-bridge, not a slice: it is the route
-        every .deb user takes and the only one with no function to lift."""
+        """The whole of packaging/common/enable-bridge, not a slice: it is the
+        route every packaged user takes and the only one with no function to
+        lift."""
         self.seed(settings=dict(self.START, **{DISABLED: "['%s']" % BRIDGE_UUID}))
         with open(self.p("installed"), "w"):
             pass
@@ -744,6 +753,53 @@ class InstallBridgeUdev(ShellCase):
         uninstall = src.split('if [ "$MODE" = uninstall ]; then')[1].split("fi\n")[0]
         self.assertIn("UDEV_PKG", uninstall)
         self.assertIn("apt remove fuckwayland", uninstall)
+
+
+# -- the enabler's home ------------------------------------------------------
+
+class ThePackagingsShareTheEnabler(unittest.TestCase):
+    """One enabler, three packagings, and nothing under debian/ that names it.
+
+    Design decision 8.  The move is worth a test of its own because it can be
+    half-undone in three ways and every one of them is silent: a copy left
+    behind under debian/ that the .deb keeps installing while the rpm installs
+    the other one; a debian/rules still pointing at the old path (dpkg then
+    fails the build, which is loud) or at a copy (which is not); and an rpm or
+    PKGBUILD that goes on reaching into debian/.  What ships is one file, and
+    tests/test_release_deb.py's PAIRS table compares the .deb's copy with THIS
+    path byte for byte."""
+
+    def test_the_enabler_and_its_desktop_are_under_packaging_common(self):
+        self.assertTrue(os.path.exists(ENABLE_BRIDGE), ENABLE_BRIDGE)
+        self.assertTrue(os.access(ENABLE_BRIDGE, os.X_OK), "it is run, not sourced")
+        self.assertTrue(os.path.exists(ENABLE_BRIDGE_DESKTOP), ENABLE_BRIDGE_DESKTOP)
+
+    def test_nothing_under_debian_is_named_enable_bridge(self):
+        """A left-behind copy is the failure this names: debian/rules would go
+        on installing it, the .deb would ship a file the other two packagings
+        do not have, and every test in this file would still pass because they
+        all read the new path."""
+        left = sorted(n for n in os.listdir(os.path.join(ROOT, "debian"))
+                      if n.startswith("enable-bridge"))
+        self.assertEqual(left, [])
+
+    def test_debian_rules_installs_from_packaging_common(self):
+        with open(os.path.join(ROOT, "debian", "rules"), encoding="utf-8") as fh:
+            rules = fh.read()
+        self.assertIn("install -D -m 755 packaging/common/enable-bridge", rules)
+        self.assertIn("install -D -m 644 packaging/common/enable-bridge.desktop", rules)
+        self.assertNotIn("debian/enable-bridge", rules)
+
+    def test_the_autostart_entry_still_points_at_the_dpkg_path(self):
+        """The .desktop's Exec= is /usr/lib/fuckwayland/enable-bridge, which is
+        where the .deb and the PKGBUILD put the helper.  The rpm rewrites the
+        line to %{_libexecdir}/fuckwayland/enable-bridge at build time, because
+        /usr/libexec is Fedora's place for it -- one file, one sed, and no
+        second copy of a .desktop to keep in step."""
+        with open(ENABLE_BRIDGE_DESKTOP, encoding="utf-8") as fh:
+            entry = fh.read()
+        self.assertIn("Exec=/usr/lib/fuckwayland/enable-bridge", entry)
+        self.assertIn("OnlyShowIn=GNOME;", entry)
 
 
 if __name__ == "__main__":

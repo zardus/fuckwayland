@@ -73,8 +73,11 @@ class ShortIPC(core.SwayIPC):
         self.sock.settimeout(SHORT)
 
 
-class SwayWire(unittest.TestCase):
-    """One FakeSway per test, reached as the session's own compositor."""
+class _Wire(unittest.TestCase):
+    """One FakeSway per test, reached as the session's own compositor.
+
+    No tests of its own: `SwayWire` below is the hostile-compositor half and `I3Dialect` the i3 half, and
+    both want this harness and neither wants the other's cases."""
 
     def sway(self, mode, **kw):
         srv = support.FakeSway(mode, **kw)
@@ -126,6 +129,10 @@ class SwayWire(unittest.TestCase):
         self.assertTrue(lines[0].startswith("xrandr: "), lines[0])
         return lines[0]
 
+
+class SwayWire(_Wire):
+    """The five ways a compositor on the sway socket goes wrong, and the healthy control."""
+
     # -- the healthy control -------------------------------------------------
 
     def test_an_answering_sway_needs_no_wayland_display(self):
@@ -139,7 +146,10 @@ class SwayWire(unittest.TestCase):
         self.assertEqual((code, err), (0, ""))
         self.assertIn("HEADLESS-1 connected 1280x720+0+0", out)
         self.assertIn("HEADLESS-2 connected 1280x1024+1280+0", out)
-        self.assertEqual([mt for mt, _p in srv.requests], [support.GET_OUTPUTS])
+        # GET_VERSION then GET_OUTPUTS, and nothing else. The version is the dialect (`SwayIPC.dialect()`,
+        # cached for the connection): one round trip per session buys the i3 answers below.
+        self.assertEqual([mt for mt, _p in srv.requests],
+                         [support.GET_VERSION, support.GET_OUTPUTS])
 
     def test_the_command_socket_carries_a_deadline_at_all(self):
         """Which is the whole reason a wedged sway ends in a message rather than
@@ -267,6 +277,108 @@ class SwayWire(unittest.TestCase):
                     gc.collect()
                 self.assertEqual([str(w.message) for w in caught
                                   if issubclass(w.category, ResourceWarning)], [])
+
+
+class I3Dialect(_Wire):
+    """U06: the same client against i3 4.25.1, which speaks this protocol and is not sway.
+
+    `wxrandr --backend sway` is one of the two ways onto our own code on an i3 box (the other is
+    `FUCKWAYLAND_PASSTHROUGH=never`), and what it did there was half-true [M recon2/i3.md §2b]: it called the
+    compositor `sway 4.25.1 (2026-02-06)`, it listed i3's `xroot-0` pseudo-output as a connected output with
+    no geometry beside the real one, and every apply died with i3's own 30-token parse error after the modes
+    had already been recorded.
+
+    The double is `support.FakeSway(dialect="i3")`, replaying tests/fixtures/i3/: GET_VERSION major 4,
+    GET_OUTPUTS with `xroot-0` and `screen`, and `run_output_pos.json` -- the parse error -- to any
+    `output ...`."""
+
+    #: what the live i3 called itself, out of GET_VERSION's `human_readable`
+    LABEL = "i3 4.25.1 (2026-02-06)"
+
+    def test_print_backend_verbose_names_i3(self):
+        self.sway("ok", dialect="i3")
+        code, out, err = self.run_cli("--backend", "sway", "--print-backend", "--verbose")[:3]
+        self.assertEqual((code, err), (0, ""))
+        self.assertIn("compositor: %s\n" % self.LABEL, out)
+        self.assertNotIn("compositor: sway", out)
+        # the token is still `sway`: one backend, two dialects, and scripts read the first line
+        self.assertEqual(out.splitlines()[0], "sway")
+
+    def test_sway_is_still_called_sway(self):
+        """The control for the line above: the same code path on the same double in its sway mood."""
+        self.sway("ok")
+        _code, out, _err, _s = self.run_cli("--backend", "sway", "--print-backend", "--verbose")
+        self.assertIn("compositor: sway 1.11\n", out)
+
+    def test_query_drops_the_xroot_pseudo_output(self):
+        """i3 reports `xroot-0` (`active: false`, no modes, no current mode) covering the X screen; it is not
+        a head and xrandr must not list one."""
+        self.sway("ok", dialect="i3")
+        code, out, err = self.run_cli("--backend", "sway", "--query")[:3]
+        self.assertEqual((code, err), (0, ""))
+        self.assertNotIn("xroot-0", out)
+        self.assertIn("screen connected 1920x1080+0+0", out)
+
+    def test_query_invents_no_modes(self):
+        """i3's GET_OUTPUTS carries no `modes` and no `current_mode` at all, so the block under the header is
+        empty rather than filled with a mode nobody reported."""
+        self.sway("ok", dialect="i3")
+        out = self.run_cli("--backend", "sway", "--query")[1]
+        rows = [ln for ln in out.splitlines() if ln.startswith("   ")]
+        self.assertEqual(rows, [], out)
+        self.assertEqual(len([ln for ln in out.splitlines() if ln.strip()]), 2, out)
+
+    def test_an_apply_is_one_line_naming_i3_and_sends_nothing(self):
+        """The refusal is up front: i3 has no `output` command, so the only thing a two-phase apply could
+        achieve is recording modes that were never applied and printing i3's parse error twice."""
+        srv = self.sway("ok", dialect="i3")
+        code, out, err, _s = self.run_cli("--backend", "sway", "--output", "screen", "--pos", "0x0")
+        self.assertEqual((code, out), (1, ""))
+        self.assertEqual(
+            self.one_line(err),
+            "xrandr: this is i3, which has no output command; the X server owns the layout here"
+            " -- use xrandr (or drop --backend sway)")
+        self.assertNotIn(support.RUN_COMMAND, [mt for mt, _p in srv.requests])
+
+    def test_without_the_refusal_the_same_apply_reaches_i3s_parse_error(self):
+        """So the test above cannot pass by accident.  The same command, the same double, the same product
+        path, with only `dialect()` lying about which compositor this is: RUN_COMMAND goes out and what comes
+        back is the 30-token parse error every apply on the live i3 died with, relayed as an `xrandr:` line
+        [M recon2/i3.md §2b].  That is what the one-line refusal replaces, and it is a measurement of the
+        code under test rather than of the double."""
+        srv = self.sway("ok", dialect="i3")
+        with mock.patch.object(core.SwayIPC, "dialect", lambda _self: "sway"):
+            code, out, err, _s = self.run_cli("--backend", "sway", "--output", "screen", "--pos", "0x0")
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn(support.RUN_COMMAND, [mt for mt, _p in srv.requests])
+        line = self.one_line(err)
+        self.assertIn("compositor rejected `output screen position 0 0`", line)
+        self.assertIn("Expected one of these tokens", line)
+
+    def test_a_disconnected_sway_head_is_still_listed(self):
+        """The drop is gated on the dialect as well as on the shape, which the plan did not ask for: on sway
+        an output with `active: false` and no `current_mode` is a real head with nothing plugged into it, and
+        `xrandr --query` has to keep printing it as `disconnected` -- dropping it would make outputs vanish
+        from the listing rather than show as unplugged.  Only i3's `xroot-0` is not a head."""
+        dark = dict(support.SWAY_OUTPUTS[1], active=False, modes=[])
+        dark.pop("current_mode", None)
+        self.sway("ok", outputs=[support.SWAY_OUTPUTS[0], dark])
+        code, out, err = self.run_cli("--backend", "sway", "--query")[:3]
+        self.assertEqual((code, err), (0, ""))
+        self.assertIn(dark["name"], out)
+        # the same shape on an i3 socket -- active false, no current mode, no modes -- is the pseudo-output
+        # and is dropped, which is the only reason this row is interesting
+        self.sway("ok", dialect="i3", outputs=[dict(dark, name="xroot-0")])
+        out = self.run_cli("--backend", "sway", "--query")[1]
+        self.assertNotIn("xroot-0", out)
+
+    def test_an_apply_against_sway_still_applies(self):
+        """The refusal is dialect-keyed and nothing else: sway takes the same command."""
+        srv = self.sway("ok")
+        code, _out, err, _s = self.run_cli("--backend", "sway", "--output",
+                                           "HEADLESS-2", "--pos", "0x720")
+        self.assertEqual((code, err), (0, ""))
+        self.assertIn(support.RUN_COMMAND, [mt for mt, _p in srv.requests])
 
 
 if __name__ == "__main__":

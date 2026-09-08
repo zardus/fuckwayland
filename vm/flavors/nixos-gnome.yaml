@@ -1,0 +1,32 @@
+# vmctl flavor nixos-gnome: NixOS 26.05 + GNOME 50.4 on Wayland, GDM autologin (delay 0)
+# of user test (uid 1000, password test, NOPASSWD sudo).  Native display tool: the
+# org.gnome.Mutter.DisplayConfig gdbus call, the same one every GNOME flavor uses.
+#
+# THIS FILE IS NOT CLOUD-INIT USER-DATA -- see nixos-sway.yaml, which says why at length.
+# The flavor is vm/nixos/{flake.nix,common.nix,nixos-gnome.nix}, built by
+# vm/build-nixos-golden.sh.
+#
+# What it is for, beyond the module: this is the wrapped-comm flavor.  nixpkgs wraps
+# gnome-shell, so its /proc/comm is `.gnome-shell-wr` (fifteen characters, truncated),
+# and BOTH halves of vmctl's gnome paint gate are comm matches -- `pgrep -x gnome-shell`
+# and `journalctl _COMM=gnome-shell ... "GNOME Shell started"`.  vmctl's pg() builds that
+# name from the plain one rather than guessing a `-wr.*` suffix [recon2/nixos §6.1].  The
+# display-manager unit is `display-manager.service` here and `gdm.service` on Ubuntu
+# (nixpkgs' gdm module sets systemd.services.gdm.enable = false), which the DESKTOPS row
+# uses only in cmd_session's failure hint.
+#
+# It is also the only rig image where the GNOME bridge is enabled by a system dconf
+# profile rather than by an autostart script and a stamp file: the extension is in the
+# system profile before the session starts, so it is on at the FIRST login and the .deb's
+# "log out and back in once" banner has no analogue.  Measured in a NixOS VM test before
+# the module existed -- "[fuckwayland-bridge] enabled (bridge v3, gnome-shell 50.4)" and
+# "acquired org.fuckwayland.Bridge" in the guest journal at t=60.7 s [recon2/pkg-nix §7].
+#
+# On demand rather than per push: a GNOME image is ~15 min of build against sway's ~10
+# (the recon measured ~50 min wall on the dev host, nearly all of it substitution), and
+# the module's GNOME half already has a per-push proof in `nix flake check`'s nixos-gnome.
+#
+# vmctl-nix: nixos-gnome
+# vmctl-desktop: gnome
+# vmctl-distro: nixos
+# vmctl-ci: on-demand
