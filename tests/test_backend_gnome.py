@@ -8,7 +8,9 @@ interface XML. No GNOME, no real bus needed."""
 
 import contextlib
 import io
+import json
 import os
+import re
 import shutil
 import socket
 import sys
@@ -16,13 +18,15 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tests"))
 
 from fwcommon import dbus_mini, session
-from fwcommon.dbus_mini import Bus, DBusError, Message, Variant
+from fwcommon.dbus_mini import Bus, DBusError, Variant
 from fwcommon.errors import CmdError
 from support import env
 from test_dbus_mini import MockBus
@@ -92,6 +96,17 @@ def fixture_windows():
     ]
 
 
+def _ext_info_variant(v):
+    """One value of GetExtensionInfo's a{sv}, typed the way gnome-shell types
+    it: numbers are doubles (`state`, `version`), `shell-version` is an array
+    of strings, everything else a string."""
+    if isinstance(v, (list, tuple)):
+        return Variant("as", [str(x) for x in v])
+    if isinstance(v, (int, float)):
+        return Variant("d", float(v))
+    return Variant("s", str(v))
+
+
 class MockBridge:
     """The extension's D-Bus surface on a Bus of its own (serve_calls),
     owning org.gnome.Shell and/or org.fuckwayland.Bridge like the real shell
@@ -120,6 +135,10 @@ class MockBridge:
         self.saved = {}
         self.stale = {}
         self.calls = []
+        #: org.freedesktop.DBus.Properties.Get, kept apart from `calls` so
+        #: that the "which bridge methods did this cost?" assertions above
+        #: stay about the bridge's own interface
+        self.prop_gets = []
         self.active_ws = 0
         self.n_ws = 3
         self.eval_unsafe = eval_unsafe
@@ -137,6 +156,21 @@ class MockBridge:
         self.version = self.VERSION if version is None else version
         self.xinfo = (":0", "/run/user/1000/.mutter-Xwaylandauth.AB12CD")
         self.pointer = (640, 400, 0)
+        #: members that answer LATE rather than not at all: a gnome-shell
+        #: busy in a JS loop still holds the D-Bus connection open, so the
+        #: client's own timeout is the only thing that ends the call
+        self.stall = set()
+        self.stall_for = 2.0
+        #: member -> the exact string to hand back where a JSON document is
+        #: expected. A bridge that answers `{}` to ListWindows is not
+        #: hypothetical: a shell that lost its window list mid-restart did.
+        self.garble = {}
+        #: ListMonitors' rows -- one 1920x1080 head at scale 1, as the QEMU
+        #: rig reports on all three GNOME goldens; a test that wants two
+        #: heads or a fractional scale assigns to this
+        self.monitors = [{"index": 0, "x": 0, "y": 0, "width": 1920,
+                          "height": 1080, "scale": 1, "primary": True,
+                          "connector": "Virtual-1"}]
         #: is gnome-shell's "Keep these display settings?" dialog on screen?
         #: True between a persistent ApplyMonitorsConfig and its answer.
         self.display_change_pending = False
@@ -211,6 +245,7 @@ class MockBridge:
     def _dispatch(self, m):
         a = m.args()
         if m.interface == dbus_mini.PROPS_IFACE and m.member == "Get":
+            self.prop_gets.append(a)
             if a == (IFACE, "Version"):
                 return "v", (Variant("u", self.version),)
             if a == (SHELL_NAME, "Mode"):
@@ -227,8 +262,11 @@ class MockBridge:
         if m.interface == SHELL_NAME + ".Extensions" and m.member == "GetExtensionInfo":
             self.calls.append(("GetExtensionInfo", a))
             info = dict(self.ext_info or {}) if a[0] == EXT_UUID else {}
-            return "a{sv}", ({k: Variant("d", float(v)) if isinstance(v, (int, float))
-                              else Variant("s", str(v)) for k, v in info.items()},)
+            # `shell-version` is an array of strings on the wire (gnome-shell
+            # hands the extension's metadata straight through), not the
+            # string repr of a Python list: measured with gdbus on
+            # stonking-gnome, `{'shell-version': <['45', ..., '50']>}`.
+            return "a{sv}", ({k: _ext_info_variant(v) for k, v in info.items()},)
         if m.interface == SHELL_NAME and m.member == "Eval":
             self.calls.append(("Eval", a))
             if not self.eval_unsafe:
@@ -240,6 +278,10 @@ class MockBridge:
             raise DBusError(dbus_mini.ERR + "UnknownMethod",
                             "no %s on %s" % (m.member, m.path))
         self.calls.append((m.member, a))
+        if m.member in self.stall:
+            time.sleep(self.stall_for)
+        if m.member in self.garble:
+            return "s", (self.garble[m.member],)
         h = getattr(self, "m_" + m.member, None)
         if h is None:
             raise DBusError(dbus_mini.ERR + "UnknownMethod", "no %s" % m.member)
@@ -510,9 +552,7 @@ class MockBridge:
 
     def m_ListMonitors(self, m):
         import json
-        return "s", (json.dumps([{"index": 0, "x": 0, "y": 0, "width": 1920,
-                                  "height": 1080, "scale": 1, "primary": True,
-                                  "connector": "Virtual-1"}]),)
+        return "s", (json.dumps(self.monitors),)
 
     def m_XInfo(self, m):
         return "ss", self.xinfo
@@ -1006,6 +1046,153 @@ class BackendTests(_Base):
             gen.close()
             emitter.close()
 
+    def test_monitors_come_back_typed_from_the_bridges_json(self):
+        """The other end of the bridge's ListMonitors (tests/test_bridge_js.py
+        MonitorsWorkspacesAndDesktop): two heads at geometry_scale 2 and 1.5
+        with the second one primary. The scale has to survive as a float --
+        wxrandr's callers divide by it, and a 1.5 that arrived as 1 places
+        every window on a 125%-scaled head wrong."""
+        self.bridge.monitors = [
+            {"index": 0, "x": 0, "y": 0, "width": 3840, "height": 2160,
+             "scale": 2, "primary": False, "connector": "DP-1"},
+            {"index": 1, "x": 1920, "y": 0, "width": 2560, "height": 1440,
+             "scale": 1.5, "primary": True, "connector": "HDMI-1"}]
+        got = self.b.monitors()
+        self.assertEqual(got, self.bridge.monitors)
+        self.assertEqual(got[1]["scale"], 1.5)
+        self.assertIsInstance(got[1]["scale"], float)
+        self.assertEqual([m["connector"] for m in got], ["DP-1", "HDMI-1"])
+        # a bridge that answers an object where the list belongs is "no
+        # monitors", not a traceback
+        self.bridge.garble = {"ListMonitors": "{}"}
+        self.assertEqual(self.b.monitors(), [])
+
+    # -- versions
+
+    def test_compositor_version_parses_every_shape_the_shell_reports(self):
+        """The only version anyone can ask a GNOME session for is the
+        read-only `ShellVersion` property. Measured on the rig: '46.0' on
+        noble-gnome, '50.1' on resolute-gnome, '51.beta' on stonking-gnome --
+        so a chunk that is not a number ends the tuple rather than raising,
+        and a shell that will not answer at all is (), never a crash.
+
+        Read once per backend: wwmctl asks for it on every -e with a gravity
+        and this must not be a round trip each time."""
+        cases = [("46.0", (46, 0)), ("50.1", (50, 1)), ("51.0", (51, 0)),
+                 ("51.beta", (51,)), ("47.alpha", (47,)), ("46.rc", (46,)),
+                 ("50.1.1", (50, 1, 1)), ("", ()), (None, ())]
+        for raw, want in cases:
+            self.bridge.shell_version = raw
+            self.bridge.prop_gets = []
+            b = GnomeBackend(settle=0.05)
+            try:
+                self.assertEqual(b.compositor_version(), want, raw)
+                self.assertEqual(b.compositor_version(), want, raw)
+                self.assertEqual(
+                    [a for a in self.bridge.prop_gets if a[1] == "ShellVersion"],
+                    [(SHELL_NAME, "ShellVersion")], raw)
+            finally:
+                b.bus.close()
+
+    # -- a bridge that stalls, garbles or dies
+
+    def test_a_stalled_bridge_times_out_rather_than_hanging(self):
+        """gnome-shell wedged in a JS loop still holds its D-Bus connection,
+        so nothing but our own timeout ends the call: SetState comes back as
+        one line naming the timeout, not a client that never returns.
+
+        Driven twice. Once through _call() with an explicit timeout, which is
+        the mechanism; and once through set_state(), which is what `wdotool
+        windowstate` and `wwmctl -b` actually reach -- a public method that
+        passed a literal of its own would pass the first half and fail the
+        second. The default is bound in _call's signature at def time, so a
+        module-attribute patch does not reach it; __defaults__ is where it
+        lives and where it is both overridden and asserted."""
+        self.bridge.stall = {"SetState"}
+        self.bridge.stall_for = 1.5
+        start = time.monotonic()
+        with self.assertRaises(CmdError) as cm:
+            self.b._call("SetState", "tss", (XTERM, "FULLSCREEN", "add"),
+                         timeout=0.3)
+        took = time.monotonic() - start
+        self.assertIn("no reply from the bridge within the timeout",
+                      str(cm.exception))
+        self.assertIn("SetState", str(cm.exception))
+        self.assertLess(took, 1.4)
+
+        # the public method, with the bound default swapped for 0.3 so the
+        # test does not have to wait CALL_TIMEOUT out
+        call = backend_gnome.GnomeBackend._call
+        kept = call.__defaults__
+        call.__defaults__ = kept[:-1] + (0.3,)
+        try:
+            start = time.monotonic()
+            with self.assertRaises(CmdError) as cm:
+                self.b.set_state(XTERM, "FULLSCREEN", 1)    # 1 = add
+            took = time.monotonic() - start
+        finally:
+            call.__defaults__ = kept
+        self.assertIn("no reply from the bridge within the timeout",
+                      str(cm.exception))
+        self.assertIn("SetState", str(cm.exception))
+        self.assertLess(took, 1.4)
+        # ...and what that default really is, restored: ten seconds, not the
+        # 0.3 above and not None
+        self.assertEqual(backend_gnome.GnomeBackend._call.__defaults__[-1],
+                         backend_gnome.CALL_TIMEOUT)
+
+    def test_a_bridge_that_answers_something_other_than_json(self):
+        """Two different failures with two different answers: a reply that is
+        not JSON at all is an error (the caller must not think the session is
+        empty), while a well-formed JSON document of the wrong SHAPE -- an
+        object where the list of windows belongs -- is an empty list, which
+        is what every other backend's "no windows" looks like."""
+        self.bridge.garble = {"ListWindows": "not json"}
+        with self.assertRaises(CmdError) as cm:
+            self.b.list()
+        self.assertIn("ListWindows returned malformed JSON", str(cm.exception))
+        self.bridge.garble = {"ListWindows": "{\"windows\": []}"}
+        self.assertEqual(self.b.list(), [])
+
+    def test_losing_the_bus_connection_mid_call_says_so(self):
+        """Not the same failure as a bridge that went away: the socket to the
+        session bus itself is gone (a dbus-daemon restart, a session teardown
+        under us), and the client cannot ask anyone anything after it. The
+        bridge stalls so the connection dies with a call in flight."""
+        self.bridge.stall = {"ListWindows"}
+        self.bridge.stall_for = 3.0
+        conn = self.mock.conn_of(self.b.bus.unique_name)
+
+        def cut():
+            time.sleep(0.2)
+            try:
+                conn.sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+
+        t = threading.Thread(target=cut, daemon=True)
+        t.start()
+        try:
+            with self.assertRaises(CmdError) as cm:
+                self.b.list()
+        finally:
+            t.join(5)
+        self.assertIn("session bus connection lost", str(cm.exception))
+
+    def test_an_error_name_nobody_knows_still_names_the_method(self):
+        """The bridge's four error names are mapped; a fifth from a newer
+        extension must still reach the user as one line saying which call
+        failed, not as a bare D-Bus name."""
+        def weird(m, wid, state, action):
+            raise DBusError(IFACE + ".Weird", "the shell is having a moment")
+
+        self.bridge.m_SetState = weird
+        with self.assertRaises(CmdError) as cm:
+            self.b.set_state(XTERM, "FULLSCREEN", 1)
+        self.assertEqual(str(cm.exception),
+                         "gnome backend: SetState: the shell is having a moment")
+        self.assertFalse(getattr(cm.exception, "unsupported", False))
+
     # -- errors
 
     def test_bridge_gone_is_a_clear_error(self):
@@ -1117,6 +1304,13 @@ class SessionReadinessTests(_Base):
 
 
 class ConstructorTests(_Base):
+    #: what `extension_installed()` answers when a copy is on disk. It is a
+    #: path and not a bool since fix 5: the one message that needs the answer
+    #: needs the directory too, and a reader who is told which of the four
+    #: data directories holds the copy can check it is theirs.
+    EXT_DIR = os.path.join("/home/test/.local/share", "gnome-shell",
+                           "extensions", EXT_UUID)
+
     def setUp(self):
         # Every case here but the not-installed ones describes a session
         # where the extension *is* on disk and the diagnosis has to come
@@ -1126,26 +1320,56 @@ class ConstructorTests(_Base):
         self.installed(True)
 
     def installed(self, yes):
+        """Answer `extension_installed()` with a directory (True), a
+        directory of the caller's (a string), or "" for not on disk."""
+        where = yes if isinstance(yes, str) else (self.EXT_DIR if yes else "")
         orig = backend_gnome.extension_installed
-        backend_gnome.extension_installed = lambda: yes
+        backend_gnome.extension_installed = lambda: where
         self.addCleanup(setattr, backend_gnome, "extension_installed", orig)
+        return where
 
-    def test_no_bridge_gives_the_install_hint_without_touching_eval(self):
-        # review finding 4: the common "installed, needs a re-login" path
-        # must not probe org.gnome.Shell.Eval
+    def test_an_on_disk_bridge_says_log_out_and_names_where_it_found_it(self):
+        """fix 5, finding F0.2: a copy on disk that the shell has never heard
+        of is waiting for a new session, and the old text sent the reader to
+        `gnome/install-bridge.sh` -- a script the .deb does not ship at all
+        (measured on the package route, all three GNOME goldens: `apt install
+        ./fw.deb` puts the extension in /usr/share and there is no
+        install-bridge.sh anywhere on the box). The message now names the
+        directory it found and the one action that helps.
+
+        Also review finding 4: this is the common path, and it must not probe
+        org.gnome.Shell.Eval -- the bridge sees GetActive and
+        GetExtensionInfo, nothing else."""
         bridge = MockBridge(self.mock, own_bridge=False)
         try:
             with self.assertRaises(CmdError) as cm:
                 GnomeBackend()
             msg = str(cm.exception)
-            self.assertIn("gnome/install-bridge.sh", msg)
-            self.assertIn("restart the session", msg)
+            self.assertIn("installed in %s" % self.EXT_DIR, msg)
+            self.assertIn("has not loaded it", msg)
+            self.assertIn("log out and back in", msg)
+            self.assertNotIn("install-bridge.sh", msg)
+            self.assertEqual(msg.count("\n"), 0, msg)
             self.assertEqual([m for m, _ in bridge.calls], ["GetActive", "GetExtensionInfo"])
+        finally:
+            bridge.close()
+
+    def test_a_bridge_that_is_not_on_disk_still_gets_the_install_hint(self):
+        """The other side of fix 5: nothing on disk keeps _HINT word for
+        word, because there the script (or the package) IS the answer."""
+        self.installed(False)
+        bridge = MockBridge(self.mock, own_bridge=False)
+        try:
+            with self.assertRaises(CmdError) as cm:
+                GnomeBackend()
+            self.assertEqual(str(cm.exception), backend_gnome._HINT)
+            self.assertIn("restart the session", str(cm.exception))
         finally:
             bridge.close()
 
     def test_eval_autoload_is_opt_in(self):
         # unsafe mode on, but nobody asked: still no Eval, still the hint
+        self.installed(False)
         bridge = MockBridge(self.mock, own_bridge=False, eval_unsafe=True)
         try:
             for value in (None, "", "0", "no"):
@@ -1169,7 +1393,9 @@ class ConstructorTests(_Base):
             # GNOME Classic: not a lock screen (observed live on 24.04)
             (dict(shell_mode="ubuntu", ext_info={"uuid": EXT_UUID, "state": 2}), "installed but not enabled"),
             (dict(shell_mode="classic", ext_info={"uuid": EXT_UUID, "state": 3, "error": "x"}), "failed to load"),
-            (dict(shell_mode="ubuntu"), "gnome/install-bridge.sh"),
+            # on disk, and the shell has never heard of the uuid: the copy
+            # appeared after this session started (fix 5)
+            (dict(shell_mode="ubuntu"), "log out and back in"),
             # GNOME 46 keeps Mode at 'ubuntu' behind the lock screen and the
             # extension shows as merely INACTIVE: org.gnome.ScreenSaver tells
             (dict(shell_mode="ubuntu", screensaver_active=True,
@@ -1264,6 +1490,106 @@ class ConstructorTests(_Base):
         self.assertTrue(any(x.endswith("/.local/share") for x in dirs), dirs)
         self.assertIn("/usr/share", dirs)
 
+    def test_out_of_date_names_the_running_shell_and_the_extensions_list(self):
+        """fix 4, finding F0.0. Live on stonking-gnome (GNOME Shell 51.beta,
+        26.10, the shipped .deb): every tool printed `...marked out of date
+        for this GNOME Shell (['45', ..., '50']); reinstall a matching gnome/
+        from the repo` -- and the repo's gnome/ carries that same list, so
+        the one instruction given could not work. The message has to name the
+        shell it is running under (51) and the majors the extension claims,
+        because adding the one to the other is the whole fix."""
+        listed = ["45", "46", "47", "48", "49", "50"]
+        bridge = MockBridge(self.mock, own_bridge=False, shell_version="51.0",
+                            ext_info={"uuid": EXT_UUID, "state": 4,
+                                      "shell-version": listed})
+        try:
+            with self.assertRaises(CmdError) as cm:
+                GnomeBackend()
+            msg = str(cm.exception)
+            self.assertIn("out of date for this GNOME Shell 51", msg)
+            self.assertIn("(it names 45, 46, 47, 48, 49, 50)", msg)
+            self.assertIn('add "51" to shell-version', msg)
+            self.assertNotIn("reinstall a matching gnome/ from the repo", msg)
+            self.assertEqual(msg.count("\n"), 0, msg)
+        finally:
+            bridge.close()
+
+    def test_out_of_date_on_a_shell_that_will_not_say_its_version(self):
+        """The property is the only version source there is, and a shell that
+        refuses it must not turn the message into `GNOME Shell None`."""
+        bridge = MockBridge(self.mock, own_bridge=False, shell_version=None,
+                            ext_info={"uuid": EXT_UUID, "state": 4,
+                                      "shell-version": ["45", "46"]})
+        try:
+            with self.assertRaises(CmdError) as cm:
+                GnomeBackend()
+            msg = str(cm.exception)
+            self.assertIn("this GNOME Shell (the shell will not say which)", msg)
+            self.assertIn("(it names 45, 46)", msg)
+            self.assertIn("add this shell's major to shell-version", msg)
+            self.assertNotIn("None", msg)
+        finally:
+            bridge.close()
+
+    def test_extension_dirs_under_sudo_are_the_session_users_not_roots(self):
+        """`sudo wdotool` runs as root, and root has no bridge installed: the
+        per-user directory that matters is the one belonging to the session
+        whose windows are being driven, which is what install-bridge.sh does
+        with $SUDO_USER. The runtime dir holding a wayland socket is what
+        names that user (uid 1000 here, root's own /run/user/0 beside it)."""
+        tmp = tempfile.mkdtemp(prefix="wdotool-run-")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        os.makedirs(os.path.join(tmp, "1000"))
+        os.makedirs(os.path.join(tmp, "0"))
+        open(os.path.join(tmp, "1000", "wayland-0"), "w").close()
+
+        class _Pw:
+            def __init__(self, home):
+                self.pw_dir = home
+
+        homes = {0: "/root", 1000: "/home/test"}
+        with mock.patch.object(session, "RUN_USER_DIR", tmp), \
+                mock.patch.object(backend_gnome.pwd, "getpwuid",
+                                  lambda uid: _Pw(homes[uid])), \
+                env(SUDO_UID="1000", PKEXEC_UID=None, XDG_RUNTIME_DIR=None,
+                    XDG_DATA_HOME=None, XDG_DATA_DIRS="/usr/local/share:/usr/share"):
+            dirs = backend_gnome._extension_dirs()
+            self.assertEqual(dirs[0], "/home/test/.local/share")
+            self.assertNotIn("/root/.local/share", dirs)
+            self.assertEqual(dirs, ["/home/test/.local/share",
+                                    "/usr/local/share", "/usr/share"])
+            # XDG_DATA_HOME is appended once, and never twice when it is the
+            # same directory the session user's home already gave us
+            with env(XDG_DATA_HOME="/home/test/.local/share"):
+                self.assertEqual(backend_gnome._extension_dirs(), dirs)
+            with env(XDG_DATA_HOME="/opt/data"):
+                self.assertEqual(backend_gnome._extension_dirs()[:2],
+                                 ["/home/test/.local/share", "/opt/data"])
+            # empty entries in XDG_DATA_DIRS are dropped, the order kept
+            with env(XDG_DATA_DIRS="/a::/b:/a"):
+                self.assertEqual(backend_gnome._extension_dirs(),
+                                 ["/home/test/.local/share", "/a", "/b"])
+
+    def test_an_unreadable_extension_directory_reads_as_not_installed(self):
+        """Documents today's answer rather than praising it: a per-user data
+        directory this process may not stat is indistinguishable from one
+        holding no copy, so the message becomes the install hint. Nothing
+        here can tell the two apart without a privileged look."""
+        d = tempfile.mkdtemp(prefix="wdotool-ext-")
+        self.addCleanup(shutil.rmtree, d, True)
+        p = os.path.join(d, "gnome-shell", "extensions", EXT_UUID)
+        os.makedirs(p)
+        open(os.path.join(p, "extension.js"), "w").close()
+        orig = backend_gnome._extension_dirs
+        backend_gnome._extension_dirs = lambda: [d]
+        self.addCleanup(setattr, backend_gnome, "_extension_dirs", orig)
+        self.assertEqual(self.real_installed(), p)
+        os.chmod(os.path.join(d, "gnome-shell", "extensions"), 0)
+        self.addCleanup(os.chmod, os.path.join(d, "gnome-shell", "extensions"), 0o700)
+        if os.geteuid() == 0:
+            self.skipTest("root reads a 0000 directory anyway")
+        self.assertEqual(self.real_installed(), "")
+
     def test_no_shell_at_all(self):
         bridge = MockBridge(self.mock, own_shell=False, own_bridge=False)
         try:
@@ -1286,14 +1612,15 @@ class ConstructorTests(_Base):
             bridge.close()
 
     def test_eval_autoload_asked_but_shell_not_unsafe(self):
+        self.installed(False)
         bridge = MockBridge(self.mock, own_bridge=False)
         try:
             with env(WDOTOOL_GNOME_AUTOLOAD="1"):
                 with self.assertRaises(CmdError) as cm:
                     GnomeBackend()
             self.assertIn("gnome/install-bridge.sh", str(cm.exception))
-            self.assertEqual([m for m, _ in bridge.calls],
-                             ["Eval", "GetActive", "GetExtensionInfo"])
+            # nothing on disk, so the diagnosis stops before GetExtensionInfo
+            self.assertEqual([m for m, _ in bridge.calls], ["Eval", "GetActive"])
         finally:
             bridge.close()
 
@@ -1428,7 +1755,8 @@ class ShippedFilesTests(unittest.TestCase):
         # review finding 1: MODE/GROUP would hand every `input` member a
         # standing injection channel; uaccess alone is what wdotool needs
         with open(os.path.join(self.GNOME, "60-fuckwayland-uinput.rules")) as f:
-            rules = [l.strip() for l in f if l.strip() and not l.startswith("#")]
+            rules = [ln.strip() for ln in f
+                     if ln.strip() and not ln.startswith("#")]
         self.assertEqual(len(rules), 1)
         rule = rules[0]
         self.assertIn('KERNEL=="uinput"', rule)
@@ -1670,6 +1998,100 @@ class ShippedFilesTests(unittest.TestCase):
                       conf)
         self.assertTrue(conf.rstrip().endswith("return false;"))
 
+    def test_the_method_table_the_xml_and_the_mock_bridge_name_the_same_calls(self):
+        """Three copies of the bridge's surface -- the METHODS table in
+        extension.js, org.fuckwayland.Bridge1.xml beside it, and MockBridge's
+        m_<Name> methods, which is what every test in this suite drives
+        instead of the extension. A method that exists in one and not the
+        others is a test that proves nothing about the shipped file, and the
+        out signatures have to agree too or the Variant the extension packs
+        does not fit the reply the client unpacks.
+
+        SelectWindow is the one method not in METHODS: it answers
+        asynchronously (the grab outlives the D-Bus call), so the extension
+        defines SelectWindowAsync by hand."""
+        import xml.etree.ElementTree as ET
+
+        js = self._extension_js()
+        table = dict(re.findall(r"^    (\w+): \['\(([a-z]*)\)'", js, re.M))
+        self.assertGreater(len(table), 20, table)
+        with open(os.path.join(self.EXT, "org.fuckwayland.Bridge1.xml")) as f:
+            root = ET.fromstring(f.read())
+        iface = root.find("interface")
+        xml_out = {}
+        for meth in iface.findall("method"):
+            xml_out[meth.get("name")] = "".join(
+                a.get("type") for a in meth.findall("arg")
+                if a.get("direction") == "out")
+        mock_names = {m[2:] for m in dir(MockBridge) if m.startswith("m_")}
+        self.assertEqual(set(table) | {"SelectWindow"}, set(xml_out))
+        self.assertEqual(set(xml_out), mock_names)
+        for name, sig in table.items():
+            self.assertEqual(sig, xml_out[name], name)
+        # SelectWindow's own answer, packed where it is returned
+        self.assertEqual(xml_out["SelectWindow"], "t")
+        self.assertIn("sel.invocation.return_value(new GLib.Variant('(t)', "
+                      "[Number(id) || 0]));", js)
+
+    def test_the_uuid_is_one_string_in_every_file_that_names_it(self):
+        """Four copies, and a mismatch is silent in three of them: the shell
+        keys the extension by the directory name in metadata.json, the tools
+        ask GetExtensionInfo for EXT_UUID, install-bridge.sh copies into
+        $UUID and debian/enable-bridge enables $UUID. Any one of those
+        drifting leaves the package installing an extension nothing turns on
+        or diagnoses."""
+        with open(os.path.join(self.EXT, "metadata.json")) as f:
+            meta = json.load(f)
+        self.assertEqual(meta["uuid"], EXT_UUID)
+        self.assertEqual(os.path.basename(self.EXT), EXT_UUID)
+        for path in (os.path.join(self.GNOME, "install-bridge.sh"),
+                     os.path.join(ROOT, "debian", "enable-bridge")):
+            with open(path) as f:
+                src = f.read()
+            found = re.findall(r"^UUID='([^']+)'", src, re.M)
+            self.assertEqual(found, [EXT_UUID], path)
+
+    def _vm_gnome_majors(self):
+        """The GNOME Shell majors the rig's flavor table carries, which is
+        the list of shells this project claims to run on."""
+        with open(os.path.join(ROOT, "vm", "README.md")) as f:
+            md = f.read()
+        start = md.index("| flavor | release | desktop (as built) |")
+        table = md[start:md.index("\n\n", start)]
+        return sorted({int(m) for m in re.findall(r"GNOME Shell (\d+)", table)})
+
+    def test_the_bridge_names_every_gnome_major_the_rig_carries(self):
+        """The bridge's shell-version list has to name every GNOME major the
+        rig carries and every generation the overlap extension was measured
+        on: the bridge is public API and feature-detected, so it runs
+        wherever the private layout was measured. Findings F0.0 and F6.2.
+
+        Measured on stonking-gnome (Ubuntu 26.10, GNOME Shell 51.beta, the
+        shipped .deb): as installed the bridge is OUT OF DATE and every
+        window/desktop/input command refuses. With "51" appended to
+        shell-version in the installed metadata.json and one reboot, on a
+        fresh instance and nothing else touched, the bridge is ACTIVE
+        (`[fuckwayland-bridge] enabled (bridge v3, gnome-shell 51.beta)`) and
+        every operation works, the maximize pair included through the 49+
+        set_maximize_flags() path. So the whole gap is one line.
+
+        The overlap extension's own table already claims 51 (it was measured
+        on libmutter-51.so.0), and the overlap needs a running shell to be
+        worth anything, so its majors must be a subset of the bridge's:
+        public API cannot be supported on fewer shells than a private struct
+        layout."""
+        with open(os.path.join(self.EXT, "metadata.json")) as f:
+            listed = [int(v) for v in json.load(f)["shell-version"]]
+        from wxrandr import gnome_overlap
+        overlap = sorted(g["shell_major"] for g in gnome_overlap.GENERATIONS)
+        self.assertEqual([m for m in self._vm_gnome_majors() if m not in listed],
+                         [], "the rig runs a GNOME the bridge will not load on")
+        self.assertEqual([m for m in overlap if m not in listed], [],
+                         "the overlap claims a shell the bridge does not")
+        with open(os.path.join(self.GNOME, "README.md")) as f:
+            readme = f.read()
+        self.assertNotIn("51 is not in", readme)
+
     def test_embedded_xml_matches_file_and_has_no_hit_test(self):
         with open(os.path.join(self.EXT, "org.fuckwayland.Bridge1.xml")) as f:
             xml = f.read().strip()
@@ -1736,8 +2158,25 @@ class SessionTests(unittest.TestCase):
 
         The stand-in is a real process whose /proc/<pid>/comm is one of the
         names we look for: `startplasma-x11` is exactly the 15 characters
-        comm holds, so a copy of /bin/sleep under that name is the honest
-        test of the length limit as well."""
+        comm holds, so a copy under that name is the honest test of the
+        length limit as well.
+
+        The copy is /bin/sh and not /bin/sleep because Ubuntu 26.04's
+        coreutils is the uutils multicall binary (/usr/bin/sleep is a symlink
+        into /usr/lib/cargo/bin/coreutils/) and dispatches on argv[0]: run as
+        `startplasma-x11` it recognises no applet and exits at once, so there
+        was nothing left in /proc to read by the time the scan ran. The shell
+        blocks in its own `read` builtin rather than on a `sleep` child, so
+        the process under test is the one whose name we chose and there is no
+        grandchild left holding the inherited pipes open.
+
+        The wait below is for the ENVIRONMENT, not just the name: execve sets
+        comm in setup_new_exec() and publishes mm->env_start only afterwards,
+        so between the two `/proc/<pid>/environ` reads back empty while comm
+        already says `startplasma-x11`. Waiting on the name alone lost that
+        race roughly one run in three here (measured: 10 of 30 iterations of
+        this body), which is what made this test fail in class order and pass
+        on its own."""
         import subprocess
 
         cookie_dir = os.path.join(self.tmp, "elsewhere")
@@ -1746,16 +2185,20 @@ class SessionTests(unittest.TestCase):
         with open(cookie, "w"):
             pass
         leader = os.path.join(self.tmp, "startplasma-x11")
-        shutil.copy(shutil.which("sleep") or "/bin/sleep", leader)
-        proc = subprocess.Popen([leader, "60"],
+        shutil.copy(os.path.realpath("/bin/sh"), leader)
+        proc = subprocess.Popen([leader, "-c", "read line"],
+                                stdin=subprocess.PIPE,
                                 env={"XAUTHORITY": cookie, "DISPLAY": ":7"})
         self.addCleanup(proc.wait)
         self.addCleanup(proc.kill)
-        for _ in range(500):        # comm is set by execve, not by fork
+        for _ in range(500):
             try:
                 with open("/proc/%d/comm" % proc.pid) as f:
-                    if f.read().strip() == "startplasma-x11":
-                        break
+                    named = f.read().strip() == "startplasma-x11"
+                with open("/proc/%d/environ" % proc.pid, "rb") as f:
+                    published = b"XAUTHORITY=" in f.read()
+                if named and published:
+                    break
             except OSError:
                 pass
             time.sleep(0.01)

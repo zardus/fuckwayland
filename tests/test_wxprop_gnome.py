@@ -25,13 +25,14 @@ from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tests"))
 
 from fwcommon.dbus_mini import Bus
 from test_backend_gnome import (CALC, DESKTOP, EDITOR, XTERM, XTERM_XID,
                                 MockBridge, _Base)
 from test_wxprop_cli import _CapStdout
-from wdotool import backend_detect
+from wdotool import backend_detect, backend_gnome
 from wdotool.backend_gnome import IFACE, OBJECT_PATH, GnomeBackend
 from wdotool.x11_mini import X11Error
 from wxprop import cli, core
@@ -694,6 +695,13 @@ class ErrorPathTests(_Base):
             bridge.close()
 
     def test_bridge_not_installed_is_one_clear_line(self):
+        """Whether the bridge is on disk is a fact about the disk, and this
+        read the runner's own ~/.local/share for it: on a box with the
+        extension installed the line under test was a different line. The
+        state the test is named for is now the state it sets."""
+        self.addCleanup(setattr, backend_gnome, "extension_installed",
+                        backend_gnome.extension_installed)
+        backend_gnome.extension_installed = lambda: ""
         bridge = MockBridge(self.mock, own_bridge=False)
         try:
             for args in (("WM_CLASS",), ("-id", "4194307", "WM_CLASS"),

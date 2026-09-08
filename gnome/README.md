@@ -32,7 +32,7 @@ spawns on the hot path.
 gnome/
   fuckwayland-bridge@fuckwayland/
     metadata.json                 uuid, and the shell-version list, written by hand
-                                  (45 to 50 today; the other extension's is generated)
+                                  (45 to 51 today; the other extension's is generated)
     extension.js                  the extension (ESM)
     org.fuckwayland.Bridge1.xml   introspection XML (also embedded in extension.js)
   install-bridge.sh               POSIX sh installer / checker / uninstaller (+ --udev)
@@ -133,9 +133,10 @@ Nobody gets this one by accident, and nothing else in fuckwayland needs it.
 Why separate, in one line each:
 
 * the bridge calls **public** Shell API and feature-detects everything, so it works on
-  45 through 50, which is the whole of its `shell-version` list — GNOME 51 is not in
-  that list, so `gnome-shell` 51 will not load it until somebody adds the line and
-  runs it there. This one ships a **compiled type description of a private structure
+  45 through 51, which is the whole of its `shell-version` list (51 was added after a
+  measured run on Ubuntu 26.10's GNOME Shell 51.beta: every window, desktop, input and
+  display operation, the maximize pair included, through the feature-detected 49+
+  path). This one ships a **compiled type description of a private structure
   layout** and works on exactly the three builds it has been measured on;
 * the bridge is a dependency of three tools and is installed by the package. This one
   is a dependency of nothing, is installed by hand, and is off in the tool as well;

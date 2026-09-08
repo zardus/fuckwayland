@@ -561,19 +561,19 @@ class Core:
         skip = self._compositor_cannot_set() if w.is_x else frozenset()
         names = [p.upper() for p in (p1, p2) if p is not None]
         for name, atoms in self._state_steps(names):
-            if name in skip and self._x_set_states(w, atoms, action):
+            if name in skip and self._x_set_state(w, atoms, action):
                 continue
             try:
                 why = self.backend().set_state(w.node_id, name, action)
             except CmdError as e:
-                if self._x_set_states(w, atoms, action):
+                if self._x_set_state(w, atoms, action):
                     continue
                 _warn("%s; ignoring" % e)
                 continue
             # Accepted and ignored: KWin does that for a window rule and for size hints a fullscreen cannot
             # satisfy. Real wmctrl gets these through, because the X plane is a different window manager -- so
             # take that route before calling it a loss.
-            if why and not self._x_set_states(w, atoms, action):
+            if why and not self._x_set_state(w, atoms, action):
                 _warn("%s; ignoring" % why)
         return 0
 
@@ -606,15 +606,6 @@ class Core:
                                 # below reports it exactly as it did before
         return _backend_state_steps(b, names)
 
-    def _x_set_states(self, w: UWindow, names, action: int) -> bool:
-        """_x_set_state for every EWMH name of one -b step; True when they all went through. A folded maximize
-        pair still names both atoms here, so the X fallback stays byte for byte what it was."""
-        ok = True
-        for name in names:
-            if not self._x_set_state(w, name, action):
-                ok = False
-        return ok
-
     def _compositor_cannot_set(self):
         """_NET_WM_STATE names the compositor backend answers "not applied" to. The backend reports them (GNOME:
         the bridge's own gaps); one that does not say lets the CmdError path decide."""
@@ -624,39 +615,65 @@ class Core:
         except Exception:
             return frozenset()
 
-    def _x_set_state(self, w: UWindow, name: str, action: int) -> bool:
-        """The EWMH _NET_WM_STATE ClientMessage, sent to the X root about an XWayland window -- byte for byte
-        what real wmctrl does. False when there is no X window, no X plane to send it on, or the window manager
-        dropped the message.
+    def _x_set_state(self, w: UWindow, names, action: int) -> bool:
+        """The EWMH _NET_WM_STATE ClientMessage for ONE -b step, sent to the X root about an XWayland window --
+        byte for byte what real wmctrl does. `names` are that step's atom names (one, or the two maximize axes).
+        False when there is no X window, no X plane to send it on, or the window manager dropped the message.
+
+        _NET_WM_STATE carries TWO atoms in one message (data.l[1] and data.l[2]) and every EWMH window manager
+        applies them as one change: wmctrl's own `-b add,maximized_vert,maximized_horz` is a single message with
+        both, which is why it does not corrupt a Mutter window's restore size the way two messages do (see
+        _state_steps). Splitting the pair here sent two messages where wmctrl sends one, so the fallback was not
+        the thing it claims to be. A step with one name puts 0 in the second slot, as wmctrl does.
 
         Real wmctrl returns as soon as the message is on the wire, and that is all it can do. This is a
         *fallback*: its caller has already been told the compositor said no, and answering "sent" for a message
-        KWin 6 drops on the floor turned a failure into silence. So the property is read back, which is what the
-        caller means by success."""
+        KWin 6 drops on the floor turned a failure into silence. So the properties are read back -- all of them,
+        because a pair the window manager honoured on one axis only is not what was asked for."""
         if not w.is_x:
             return False
         x = self.x11() if self._x_is_up() else None
         if x is None:
             return False
+        names = list(names)
+        if not names:
+            return False
         try:
-            atom = x.atom("_NET_WM_STATE_%s" % name)
-            before = self._x_state_has(x, w.id, atom)
-            x.send_root_message(w.id, "_NET_WM_STATE", [action, atom, 0, 0, 0])
+            atoms = [x.atom("_NET_WM_STATE_%s" % n) for n in names]
+            before = [self._x_state_has(x, w.id, a) for a in atoms]
+            x.send_root_message(w.id, "_NET_WM_STATE",
+                                [action, atoms[0], atoms[1] if len(atoms) > 1 else 0, 0, 0])
         except Exception as e:
             self.vprint("_NET_WM_STATE ClientMessage failed: %s\n" % e)
             return False
-        if before is None:
-            return True     # unreadable: "sent" is the best answer there is
-        # want: add -> present, remove -> absent, toggle -> the other one
-        want = (action == STATE_ADD) if action != STATE_TOGGLE else not before
+        # want: add -> present, remove -> absent, toggle -> the other one. Which flag a TOGGLE reads is the
+        # window manager's business, and there are two cases here because there are only two:
+        #   one atom  -- every EWMH window manager reads that atom's own flag, which is before[0].
+        #   both maximize atoms -- Mutter special-cases the pair: it folds them into a single `directions`
+        #     bitmask and makes one decision, off the horizontal flag (window-x11.c: `action == ADD ||
+        #     (action == TOGGLE && !...is_maximized_horizontally (...))`), so both axes land the same way.
+        # A step only ever carries two names where the backend names the pair (backend.state_steps ->
+        # WindowBackend.maximize_pair_state), which is GNOME and nothing else -- KWin and sway answer None
+        # there and reach this with one atom at a time -- so modelling Mutter for the pair is not a guess about
+        # the compositor. It is also the only multi-atom step state_steps() can produce; if another is ever
+        # folded, the reference flag for it has to be decided here rather than falling out of names[0].
+        if action == STATE_TOGGLE:
+            ref = before[names.index("MAXIMIZED_HORZ")] if "MAXIMIZED_HORZ" in names else before[0]
+            if ref is None:
+                return True     # unreadable: "sent" is the best answer there is
+            want = [not ref] * len(atoms)
+        else:
+            if all(b is None for b in before):
+                return True     # as above
+            want = [action == STATE_ADD] * len(atoms)
         deadline = time.monotonic() + _X_SETTLE
         while True:
-            now = self._x_state_has(x, w.id, atom)
-            if now is None or now == want:
+            now = [self._x_state_has(x, w.id, a) for a in atoms]
+            if all(n is None or n == wanted for n, wanted in zip(now, want)):
                 return True
             if time.monotonic() >= deadline:
                 self.vprint("_NET_WM_STATE_%s did not appear on 0x%08x "
-                            "within %gs\n" % (name, w.id, _X_SETTLE))
+                            "within %gs\n" % ("/".join(names), w.id, _X_SETTLE))
                 return False
             time.sleep(0.02)
 

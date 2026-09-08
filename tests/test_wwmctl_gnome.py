@@ -20,12 +20,13 @@ from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tests"))
 
 from fwcommon import session
-from test_backend_gnome import (CALC, DESKTOP, EDITOR, WORK_AREA,
-                                XTERM, XTERM_XID, MockBridge, _Base)
-from wdotool import backend_detect
+from test_backend_gnome import (CALC, EDITOR, WORK_AREA, XTERM,
+                                XTERM_XID, MockBridge, _Base)
+from wdotool import backend_detect, backend_gnome
 from wdotool.backend_gnome import IFACE, OBJECT_PATH, GnomeBackend
 from wwmctl import cli, core
 
@@ -51,6 +52,10 @@ class FakeX11:
         self.calls = []
         self.atoms = {}
         self.states = {}                 # win -> {atom} (_NET_WM_STATE)
+        #: one entry per _NET_WM_STATE property read, so a test can say how
+        #: many atoms the fallback read back -- a pair sent as one message
+        #: reads two before and two after, a single atom one and one
+        self.state_reads = []
         self.wm_honours_state = True     # Mutter is the EWMH WM on X
         self.showing = showing
         self.viewport = list(viewport)   # _NET_DESKTOP_VIEWPORT, as published
@@ -85,6 +90,7 @@ class FakeX11:
         if (win, name) == (0x1C5, "_NET_DESKTOP_VIEWPORT"):
             return list(self.viewport)
         if name == "_NET_WM_STATE":
+            self.state_reads.append(win)
             return sorted(self.states.get(win, ()))
         return []
 
@@ -101,18 +107,38 @@ class FakeX11:
 
     def send_root_message(self, win, type_name, data):
         """Mutter's side of an EWMH request: _NET_SHOWING_DESKTOP really
-        changes the mode and the root property that reports it."""
+        changes the mode and the root property that reports it.
+
+        _NET_WM_STATE carries two atoms (data.l[1] and data.l[2]). A message
+        with one of them is decided on that atom's own flag, as every EWMH
+        window manager decides it. A message carrying BOTH maximize atoms is
+        Mutter's special case: window-x11.c collects them into a single
+        `directions` bitmask and makes one decision off the horizontal flag
+        (`action == ADD || (action == TOGGLE &&
+        !...is_maximized_horizontally (...))`), so a toggle of the pair on a
+        window maximized horizontally only clears BOTH axes rather than
+        swapping them. This is a GNOME fixture and models GNOME; the pair
+        only ever reaches _x_set_state under a backend that names it
+        (maximize_pair_state -- KWin and sway answer None and send one atom
+        per message). data[2] used to be ignored here, which let a fallback
+        that sent the pair as two messages look identical to one that sent
+        it as one."""
         self.calls.append(("client_message", win, type_name, tuple(data)))
         if type_name == "_NET_SHOWING_DESKTOP":
             self.showing = int(data[0])
         if type_name == "_NET_WM_STATE" and self.wm_honours_state:
             # what the caller now reads back to tell "sent" from "applied"
-            action, atom = data[0], data[1]
+            action = data[0]
+            atoms = [a for a in (data[1], data[2]) if a]
             have = self.states.setdefault(win, set())
-            if action == 1 or (action == 2 and atom not in have):
-                have.add(atom)
-            else:
-                have.discard(atom)
+            horz = self.atoms.get("_NET_WM_STATE_MAXIMIZED_HORZ")
+            ref = horz if horz in atoms else atoms[0]
+            on = (action == 1) or (action == 2 and ref not in have)
+            for atom in atoms:
+                if on:
+                    have.add(atom)
+                else:
+                    have.discard(atom)
 
     def close(self):
         pass
@@ -842,26 +868,86 @@ class ActionTests(GnomeCliBase):
         self.wm(["-r", "Calculator"] + pair, x11=None)
         self.assertEqual((d["maximized_h"], d["maximized_v"]), (True, True))
 
-    def test_b_the_pair_falls_back_to_both_atoms_on_x(self):
-        """A bridge that will not do the pair (anything that answers "not
-        applied") leaves an XWayland window with the two atoms real wmctrl
-        sends, not one invented _NET_WM_STATE_MAXIMIZED."""
+    def _refuse_pair(self, *states):
+        """Make the bridge answer "not applied" for these state names (the
+        folded pair, by default), which is what drives the -b step onto the
+        X fallback."""
+        states = frozenset(states or ("MAXIMIZED",))
         orig = self.bridge.m_SetState
 
         def refuse(m, wid, state, action):
-            if state == "MAXIMIZED":
+            if state in states:
                 return "b", (False,)
             return orig(m, wid, state, action)
 
         self.bridge.m_SetState = refuse
+
+    def test_b_the_pair_falls_back_to_one_message_with_both_atoms(self):
+        """A bridge that will not do the pair leaves an XWayland window with
+        the message real wmctrl sends: ONE _NET_WM_STATE ClientMessage
+        carrying both atoms, in data.l[1] and data.l[2].
+
+        Two messages are not the same request. wmctrl's own
+        `-b remove,maximized_vert,maximized_horz` is one message, and Mutter
+        turns its two atoms into a single `directions` bitmask and one
+        meta_window_set_unmaximize_flags() call (window-x11.c) -- which is
+        precisely what stops the restore size being corrupted (measured on
+        GNOME 46 and 50: two calls left a 200,150 900x600 window at 200,32
+        900x1048, see core._state_steps). Sending two here rebuilt the bug
+        the fold exists to avoid, on the one route that is supposed to be
+        byte-for-byte wmctrl."""
+        self._refuse_pair()
         x = FakeX11()
         rc, _o, err = self.wm(["-r", "test@vm", "-b",
                                "remove,maximized_vert,maximized_horz"], x11=x)
         self.assertEqual((rc, err), (0, ""))
-        self.assertEqual([(c[3][0], c[3][1]) for c in x.calls
-                          if c[0] == "client_message"],
-                         [(0, x.atom("_NET_WM_STATE_MAXIMIZED_VERT")),
-                          (0, x.atom("_NET_WM_STATE_MAXIMIZED_HORZ"))])
+        self.assertEqual([c for c in x.calls if c[0] == "client_message"],
+                         [("client_message", XTERM_XID, "_NET_WM_STATE",
+                           (0, x.atom("_NET_WM_STATE_MAXIMIZED_VERT"),
+                            x.atom("_NET_WM_STATE_MAXIMIZED_HORZ"), 0, 0))])
+        # and both atoms are read back, not just the first: two before the
+        # message and two in the settle loop
+        self.assertEqual(x.state_reads, [XTERM_XID] * 4)
+
+    def test_b_a_toggle_of_the_pair_on_x_follows_the_horizontal_atom(self):
+        """One message, so Mutter makes one decision for both axes and takes
+        it off the horizontal flag: a window maximized horizontally only
+        ends with BOTH atoms gone, never with the axes swapped. Two separate
+        toggles would have cleared HORZ and set VERT."""
+        self._refuse_pair()
+        x = FakeX11()
+        horz = x.atom("_NET_WM_STATE_MAXIMIZED_HORZ")
+        vert = x.atom("_NET_WM_STATE_MAXIMIZED_VERT")
+        x.states[XTERM_XID] = {horz}
+        rc, _o, err = self.wm(["-r", "test@vm", "-b",
+                               "toggle,maximized_vert,maximized_horz"], x11=x)
+        self.assertEqual((rc, err), (0, ""))
+        self.assertEqual(x.states[XTERM_XID], set())
+        self.assertEqual([c[3] for c in x.calls if c[0] == "client_message"],
+                         [(2, vert, horz, 0, 0)])
+
+    def test_b_a_single_axis_toggle_on_x_reads_its_own_atom(self):
+        """The other half of the rule, and the reason _x_set_state cannot
+        just always read the horizontal flag: `-b toggle,maximized_vert` is
+        ONE atom in data.l[1] and 0 in data.l[2], and Mutter decides it on
+        maximized_vertically. On a window that is maximized horizontally
+        only, that toggle ADDS the vertical atom -- the window ends up
+        maximized on both axes, not unmaximized -- and the read-back has to
+        expect exactly that or the caller is told the state "did not appear"
+        on a window manager that did what it was asked."""
+        self._refuse_pair("MAXIMIZED_VERT")
+        x = FakeX11()
+        horz = x.atom("_NET_WM_STATE_MAXIMIZED_HORZ")
+        vert = x.atom("_NET_WM_STATE_MAXIMIZED_VERT")
+        x.states[XTERM_XID] = {horz}
+        rc, _o, err = self.wm(["-r", "test@vm", "-b", "toggle,maximized_vert"],
+                              x11=x)
+        self.assertEqual((rc, err), (0, ""))
+        self.assertEqual(x.states[XTERM_XID], {horz, vert})
+        self.assertEqual([c[3] for c in x.calls if c[0] == "client_message"],
+                         [(2, vert, 0, 0, 0)])
+        # one atom asked for, so one atom read before and one after
+        self.assertEqual(x.state_reads, [XTERM_XID] * 2)
 
     def test_b_gaps_warn_and_succeed(self):
         rc, _o, err = self.wm(["-r", "Calculator", "-b", "add,shaded,below"],
@@ -951,6 +1037,14 @@ class ErrorPathTests(_Base):
             bridge.close()
 
     def test_bridge_not_installed_is_one_clear_line(self):
+        """Not installed is a state of the DISK, and this test asked the
+        runner's own ~/.local/share for it: on a developer box that happens
+        to have the bridge installed the message under test was a different
+        one entirely. It is a double now, and the name of the test is the
+        thing it sets."""
+        self.addCleanup(setattr, backend_gnome, "extension_installed",
+                        backend_gnome.extension_installed)
+        backend_gnome.extension_installed = lambda: ""
         bridge = MockBridge(self.mock, own_bridge=False)
         try:
             for argv in (["-l"], ["-d"], ["-m"], ["-a", "x"], ["-s", "1"]):

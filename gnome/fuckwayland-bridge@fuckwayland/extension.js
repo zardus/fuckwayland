@@ -8,7 +8,7 @@
 // disabled outside "unsafe mode", org.gnome.Shell.Introspect is read-only and
 // sender-allowlisted. The only supported way in is an extension.
 //
-// Targets GNOME Shell 45..50 (Ubuntu 24.04 = 46, Ubuntu 26.04 = 50), ESM.
+// Targets GNOME Shell 45..51 (Ubuntu 24.04 = 46, Ubuntu 26.04 = 50, 26.10 = 51), ESM.
 // Every Mutter API that drifted between those releases is feature-detected at
 // runtime. Verified live on Ubuntu 24.04 (gnome-shell 46.0) and 26.04
 // (gnome-shell 50.1); every method here has now been exercised on both, and

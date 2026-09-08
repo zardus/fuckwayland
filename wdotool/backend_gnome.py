@@ -74,7 +74,8 @@ _ALSO_LOCKED = ("; the screen is locked as well, and GNOME Shell disables "
                 "not be enough")
 #: install-bridge.sh's own two destinations, both
 #: <data dir>/gnome-shell/extensions/<uuid>
-_EXT_FILE = os.path.join("gnome-shell", "extensions", EXT_UUID, "extension.js")
+_EXT_SUBDIR = os.path.join("gnome-shell", "extensions", EXT_UUID)
+_EXT_FILE = os.path.join(_EXT_SUBDIR, "extension.js")
 
 CALL_TIMEOUT = 10.0     # every bridge call answers in milliseconds
 AUTOLOAD_WAIT = 3.0     # after a successful Eval(loadExtension)
@@ -145,14 +146,22 @@ def _extension_dirs() -> list:
     return dirs
 
 
-def extension_installed() -> bool:
-    """Is a copy of the bridge extension on disk? The question `gnome/install-bridge.sh --check` answers with
-    its `files:` line, asked of the same places and without a subprocess.
+def extension_installed() -> str:
+    """*Where* a copy of the bridge extension is on disk -- its directory -- or "" when there is none. The
+    question `gnome/install-bridge.sh --check` answers with its `files:` line, asked of the same places and
+    without a subprocess.
 
     Worth asking only on the error path, and there it decides which of two true sentences to print: behind the
     lock screen GNOME Shell disables every extension, so from the *bus* a bridge that was never installed and
-    one that is merely asleep look exactly alike (live, 24.04). From disk they do not."""
-    return any(os.path.isfile(os.path.join(d, _EXT_FILE)) for d in _extension_dirs())
+    one that is merely asleep look exactly alike (live, 24.04). From disk they do not.
+
+    The directory rather than a yes/no because the one message that needs the answer needs the path too: a copy
+    the running shell has never heard of is waiting for a re-login, and a reader who is told which of the four
+    possible directories holds it can check that the one they installed is the one being found."""
+    for d in _extension_dirs():
+        if os.path.isfile(os.path.join(d, _EXT_FILE)):
+            return os.path.join(d, _EXT_SUBDIR)
+    return ""
 
 
 class GnomeBackend(WindowBackend):
@@ -242,7 +251,8 @@ class GnomeBackend(WindowBackend):
                     "GDM greeter ('%s' mode): nobody is logged in there, and "
                     "extensions do not run in the greeter" % mode)
         locked = mode in _LOCKED_MODES or self._screen_locked()
-        if not extension_installed():
+        where = extension_installed()
+        if not where:
             return _HINT + (_ALSO_LOCKED if locked else "")
         if mode in _LOCKED_MODES:
             return ("gnome backend: the fuckwayland bridge is unavailable while "
@@ -269,13 +279,36 @@ class GnomeBackend(WindowBackend):
                         "to load: %s (gnome/install-bridge.sh --check)"
                         % (info.get("error") or "see journalctl --user _COMM=gnome-shell"))
             if state == 4:
-                return ("gnome backend: the fuckwayland bridge extension is marked "
-                        "out of date for this GNOME Shell (%s); reinstall a "
-                        "matching gnome/ from the repo" % info.get("shell-version"))
+                return self._out_of_date_text(info.get("shell-version"))
             return ("gnome backend: the fuckwayland bridge extension is installed "
                     "but not enabled (state %d); run gnome/install-bridge.sh "
                     "(or: gnome-extensions enable %s)" % (state, EXT_UUID))
-        return _HINT
+        # On disk, and the shell has never heard of the uuid: it has not rescanned the extension directories
+        # since the copy appeared, which only a new session does. Live on 24.04 and 26.04 this is what an
+        # `apt install fuckwayland` inside a running session looks like, and the old text sent the reader to
+        # gnome/install-bridge.sh -- a script the .deb does not ship (F0.2) and which would change nothing here.
+        return ("gnome backend: the fuckwayland bridge extension is installed in %s but the running GNOME "
+                "Shell has not loaded it (it knows nothing about %s): log out and back in" % (where, EXT_UUID))
+
+    def _out_of_date_text(self, listed) -> str:
+        """State 4 (OUT OF DATE): the shell refuses to load the extension because its own major is not in the
+        extension's `shell-version`. Both halves of that have to be in the message -- which shell, and which
+        majors the extension names -- because the fix is to add the one to the other.
+
+        Measured on stonking-gnome (GNOME Shell 51.beta, 26.10, package route): the old text was `...marked out
+        of date for this GNOME Shell (['45', ..., '50']); reinstall a matching gnome/ from the repo`, and the
+        repo's gnome/ carries that same list, so the advice could not help anybody. Naming 51 and the list is
+        what turns it into an instruction."""
+        if isinstance(listed, (list, tuple)):
+            names = ", ".join(str(x) for x in listed)
+        else:
+            names = str(listed)
+        ver = self.compositor_version()
+        major = str(ver[0]) if ver else ""
+        add = ('add "%s" to' % major) if major else "add this shell's major to"
+        return ("gnome backend: the fuckwayland bridge extension is marked out of date for this GNOME Shell "
+                "%s (it names %s); %s shell-version in the extension's metadata.json and log out and back in"
+                % (major or "(the shell will not say which)", names or "nothing", add))
 
     def _screen_locked(self) -> bool:
         """org.gnome.ScreenSaver.GetActive(): public, unprivileged, true while the shell's lock screen is up.
