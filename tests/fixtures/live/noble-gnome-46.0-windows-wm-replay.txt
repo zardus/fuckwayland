@@ -1,0 +1,63 @@
+### capture 2026-09-08T02:38:07+00:00 GNOME Shell 46.0 class=TextEditor order=windows,wm
+### wdotool search --class TextEditor
+1950993699
+### rc=0
+### WIN=1950993699
+### wdotool getwindowname 1950993699
+fw-smoke.txt (/tmp) - Text Editor
+### rc=0
+### wdotool getwindowgeometry 1950993699
+Window 1950993699
+  Position: 100,100 (screen: 0)
+  Geometry: 800x600
+### rc=0
+### wdotool getactivewindow
+1950993699
+### rc=0
+### wdotool getactivewindow
+xdo_get_active_window reported an error
+### rc=1
+### wdotool get_desktop
+1
+### rc=0
+### wdotool get_desktop
+0
+### rc=0
+### wdotool getmouselocation
+x:300 y:300 screen:0 window:1950993699
+### rc=0
+### wdotool mousemove 300 300 click 1
+### rc=0
+### wdotool getwindowgeometry 1950993699
+Window 1950993699
+  Position: 100,100 (screen: 0)
+  Geometry: 800x600
+### rc=0
+### wdotool getwindowgeometry 1950993699
+Window 1950993699
+  Position: 66,32 (screen: 0)
+  Geometry: 1854x1048
+### rc=0
+### wxprop -id 1950993699 _NET_WM_STATE
+_NET_WM_STATE(ATOM) = _NET_WM_STATE_MAXIMIZED_HORZ, _NET_WM_STATE_MAXIMIZED_VERT, _NET_WM_STATE_FOCUSED
+### rc=0
+### wdotool getwindowgeometry 1950993699
+Window 1950993699
+  Position: 100,100 (screen: 0)
+  Geometry: 800x600
+### rc=0
+### wwmctl -l
+0x7449cd23  0 gnome46 fw-smoke.txt (/tmp) - Text Editor
+### rc=0
+### wwmctl -l -G
+0x7449cd23  0 100  100  800  600  gnome46 fw-smoke.txt (/tmp) - Text Editor
+### rc=0
+### wwmctl -d
+0  * DG: 5760x1080  VP: 0,0  WA: 66,32 5694x1048  Workspace 1
+1  - DG: 5760x1080  VP: N/A  WA: 66,32 5694x1048  Workspace 2
+### rc=0
+### wxprop -root _NET_CLIENT_LIST
+_NET_CLIENT_LIST(WINDOW): window id # 0x7449cd23
+### rc=0
+### end 2026-09-08T02:38:24+00:00
+### exit rc=0

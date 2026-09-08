@@ -1,0 +1,186 @@
+#!/usr/bin/env python3
+"""A vmctl that replays a recorded guest instead of booting one.
+
+    LIVE_SMOKE_VMCTL=vm/live-smoke.d/fake-vmctl \\
+    FAKE_VMCTL_TRANSCRIPT=tests/fixtures/live/noble-gnome-46.0-capture.txt \\
+    FAKE_VMCTL_STATE=$(mktemp -d) \\
+        vm/live-smoke.sh noble-gnome --phases windows,wm
+
+Why this is here.  A step file's checks are the interesting part of the smoke,
+and on a host at load average 98 one `vmctl ssh` costs 54 seconds (measured
+2026-09-08 on this box, seven agents running) -- so the checks would never be
+exercised, let alone shown to FAIL, if a VM were the only way to run them.  This
+answers `user`/`ssh` out of a capture taken from the real guest by
+`guest-capture.sh`, which makes the checks runnable in seconds and makes a
+deliberate break (`FAKE_VMCTL_OVERRIDE`) show exactly which line goes red.
+
+It is a test double for the SMOKE, never a substitute for the rig: it knows only
+what the capture recorded, `vm/live-smoke.d/selftest-offline.sh` is its only
+caller, and no measurement in this repository may rest on it.
+
+Transcript format (guest-capture.sh writes it, an override file uses it too):
+
+    ### <command>
+    <output bytes>
+    ### rc=<status>
+
+Lookup is by normalised command: redirections, pipes, `|| true` tails and long
+digit runs (window ids differ per run) come off first, then an exact match, then
+the longest matching prefix.  An unknown command answers empty with status 0 --
+the recorded guest simply has nothing to say about it -- unless FAKE_VMCTL_STRICT
+is set, which makes it say so on stderr and exit 127.
+
+A command recorded MORE THAN ONCE answers with each recording in turn and then
+sticks on the last: `wdotool getwindowgeometry` is asked three times in one
+phase and has to answer 100,100 800x600, then the maximized 66,32 1854x1048,
+then 100,100 800x600 again -- a single answer per command could not express the
+one behaviour (b7a60f0) the phase exists to check."""
+import os
+import re
+import sys
+
+TRANSCRIPT = os.environ.get("FAKE_VMCTL_TRANSCRIPT", "")
+OVERRIDE = os.environ.get("FAKE_VMCTL_OVERRIDE", "")
+STRICT = bool(os.environ.get("FAKE_VMCTL_STRICT"))
+#: Where the per-command position counters live.  It has to be shared between
+#: processes -- every guest command is a fresh fake-vmctl -- and it has to be
+#: fresh per RUN, or the second run of a transcript continues the first one's
+#: sequences and `getwindowgeometry` answers with the maximized geometry from
+#: the start.  A default would silently be one or the other, so there is none:
+#: the caller says where, per run (selftest-offline.sh makes one under its own
+#: mktemp -d, and the invocation in the docstring above does the same).
+STATE = os.environ.get("FAKE_VMCTL_STATE", "")
+if not STATE:
+    sys.stderr.write("fake-vmctl: set FAKE_VMCTL_STATE to a per-run directory "
+                     "(the sequence counters live there and must not outlive one run)\n")
+    raise SystemExit(2)
+os.makedirs(STATE, exist_ok=True)
+
+_TAIL = re.compile(r"\s*(\|\|\s*true|;\s*true)\s*$")
+_REDIR = re.compile(r"\s*(2>&1|2>/dev/null|>/dev/null|>\s*/dev/null|\|\s*head\s+-\d+|\|\s*tr\b.*|"
+                    r"\|\s*cut\b.*|\|\s*wc\b.*|\|\s*grep\b.*|\|\s*sed\b.*|\|\s*awk\b.*)")
+_ID = re.compile(r"\b\d{5,}\b")
+
+
+def norm(cmd):
+    cmd = cmd.strip()
+    prev = None
+    while prev != cmd:
+        prev = cmd
+        cmd = _TAIL.sub("", cmd).strip()
+        cmd = _REDIR.sub(" ", cmd).strip()
+    cmd = _ID.sub("#", cmd)
+    return re.sub(r"\s+", " ", cmd).strip()
+
+
+def load(path):
+    """{normalised command: [(output, rc), ...]} out of a capture file, in the
+    order the sections appear."""
+    table = {}
+    if not path or not os.path.exists(path):
+        return table
+    cmd, buf = None, []
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            if line.startswith("### rc="):
+                if cmd is not None:
+                    try:
+                        rc = int(line.strip()[len("### rc="):])
+                    except ValueError:
+                        rc = 0
+                    table.setdefault(norm(cmd), []).append(("".join(buf), rc))
+                cmd, buf = None, []
+            elif line.startswith("### "):
+                if cmd is not None:                    # a section with no rc line
+                    table.setdefault(norm(cmd), []).append(("".join(buf), 0))
+                cmd, buf = line[4:].rstrip("\n"), []
+            elif cmd is not None:
+                buf.append(line)
+    if cmd is not None:
+        table.setdefault(norm(cmd), []).append(("".join(buf), 0))
+    return table
+
+
+def take(key, table):
+    """The next recording for `key`, sticking on the last one.  The position is
+    kept in a file next to the transcript, because every guest command is a
+    fresh process: one `fake-vmctl` run answers exactly one command."""
+    answers = table[key]
+    i = 0
+    if len(answers) > 1:
+        path = os.path.join(STATE, re.sub(r"[^A-Za-z0-9]+", "_", key)[:120])
+        try:
+            with open(path, encoding="utf-8") as fh:
+                i = int(fh.read() or 0)
+        except (OSError, ValueError):
+            i = 0
+        try:
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(str(min(i + 1, len(answers) - 1)))
+        except OSError:
+            pass
+    return answers[min(i, len(answers) - 1)]
+
+
+def answer(cmd):
+    key = norm(cmd)
+    for table in (OVERRIDES, RECORDED):
+        if key in table:
+            return take(key, table)
+    # the longest recorded command this one starts with: `wdotool search --class
+    # TextEditor` answers for the same call with a `| head -1` the regexes above
+    # did not know about.
+    best = None
+    for table in (OVERRIDES, RECORDED):
+        for k in table:
+            if (key.startswith(k) or k.startswith(key)) and (best is None or len(k) > len(best[0])):
+                best = (k, table)
+    if best:
+        return take(best[0], best[1])
+    if STRICT:
+        sys.stderr.write("fake-vmctl: nothing recorded for %r\n" % key)
+        raise SystemExit(127)
+    return ("", 0)
+
+
+RECORDED = load(TRANSCRIPT)
+OVERRIDES = load(OVERRIDE)
+
+
+def main(argv):
+    if not argv:
+        return 2
+    sub, rest = argv[0], argv[1:]
+    if sub in ("start", "stop", "destroy"):
+        print("fake-vmctl: %s (no VM was touched)" % sub)
+        return 0
+    if sub == "status":
+        print("name %s state running" % (rest[0] if rest else "?"))
+        return 0
+    if sub == "session":
+        print("SESSION_ID=1\nXDG_RUNTIME_DIR=/run/user/1000\nWAYLAND_DISPLAY=wayland-0")
+        return 0
+    if sub == "scp":
+        return 0
+    if sub == "shot":
+        # `shot <name> --all <out>` -> two heads, so that a step that reads the
+        # file list finds something; the bytes are a marker, not a screenshot.
+        out = rest[-1]
+        for i in (0, 1):
+            with open("%s-%d.png" % (out, i), "w", encoding="utf-8") as fh:
+                fh.write("fake-vmctl screenshot placeholder\n")
+        return 0
+    if sub in ("user", "ssh"):
+        cmd = rest[1:]
+        while cmd and cmd[0] in ("--", "-t", "--tty"):
+            cmd.pop(0)
+        if cmd and cmd[0] == "sh" and len(cmd) > 2 and cmd[1] == "-c":
+            cmd = [cmd[2]]
+        text, rc = answer(" ".join(cmd))
+        sys.stdout.write(text)
+        return rc
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

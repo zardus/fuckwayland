@@ -1,0 +1,296 @@
+### capture 2026-09-08T02:34:21+00:00 desktop=gnome host=Linux 6.8.0-138-generic
+### lsb_release -ds
+Ubuntu 24.04.4 LTS
+### rc=0
+### gnome-shell --version || kwin_wayland --version || sway --version
+GNOME Shell 46.0
+### rc=0
+### wdotool --version
+xdotool version 4.20260303.1
+### rc=0
+### dpkg -l fuckwayland | tail -1
+ii  fuckwayland    0.4.0        all          X11 power tools as drop-in clones for Wayland
+### rc=0
+### gnome-extensions info fuckwayland-bridge@fuckwayland
+fuckwayland-bridge@fuckwayland
+  Name: fuckwayland bridge
+  Description: Exports Mutter window, workspace and monitor control over D-Bus (org.fuckwayland.Bridge) so wdotool, wwmctl and wxprop can drive a GNOME Wayland session. wxrandr and warandr do not need it: monitors go through Mutter's own DisplayConfig.
+  Path: /usr/share/gnome-shell/extensions/fuckwayland-bridge@fuckwayland
+  URL: https://github.com/antoniobianchi333/fuckwayland
+  Version: 3
+  Enabled: Yes
+  State: ACTIVE
+### rc=0
+### gnome-extensions info fuckwayland-overlap@fuckwayland
+fuckwayland-overlap@fuckwayland
+  Name: fuckwayland overlap (unsupported)
+  Description: Lets wxrandr --unsafe-gnome-overlap place two GNOME monitors so that they share screen area, which Mutter's own configuration API refuses. It does nothing at all until it is called, and it re-checks this build of libmutter before every write. Only GNOME Shell 46, 50 and 51 have been measured; on anything else it refuses. Not needed by any other fuckwayland tool.
+  Path: /usr/share/gnome-shell/extensions/fuckwayland-overlap@fuckwayland
+  URL: https://github.com/antoniobianchi333/fuckwayland
+  Version: 1
+  Enabled: Yes
+  State: ACTIVE
+### rc=0
+### wdotool search --class TextEditor
+1950993698
+### rc=0
+### WIN=1950993698
+### wdotool getwindowname 1950993698
+fw-smoke.txt (/tmp) - Text Editor
+### rc=0
+### wdotool windowmove 1950993698 100 100
+### rc=0
+### wdotool windowsize 1950993698 800 600
+### rc=0
+### wdotool getwindowgeometry 1950993698
+Window 1950993698
+  Position: 100,100 (screen: 0)
+  Geometry: 800x600
+### rc=0
+### wdotool windowactivate --sync 1950993698
+### rc=0
+### wdotool getactivewindow
+1950993698
+### rc=0
+### wdotool get_desktop
+0
+### rc=0
+### wdotool set_desktop 1
+### rc=0
+### wdotool get_desktop
+1
+### rc=0
+### wdotool set_desktop 0
+### rc=0
+### wdotool mousemove 300 300
+### rc=0
+### wdotool getmouselocation
+x:300 y:300 screen:0 window:1950993698
+### rc=0
+### wdotool mousemove 300 300 click 1
+### rc=0
+### wdotool keys explain yz@
+layout: English (US) -- group 1 of 3, from wayland + gnome input-sources
+level keys: shift = key 42 <LFSH>   level3 = none   level5 = none   (what wdotool presses)
+note: this layout is plain US: wdotool uses its built-in table and never reads the keymap
+'y' -- 1 press on English (US)
+    press key 21 <AD06> -> 'y'
+    wdotool key 29                             (keycodes)
+    wdotool type 'y'                           (characters)
+'z' -- 1 press on English (US)
+    press key 44 <AB01> -> 'z'
+    wdotool key 52                             (keycodes)
+    wdotool type 'z'                           (characters)
+'@' -- 1 press on English (US)
+    press key 3 <AE02> with shift (key 42 <LFSH>, Shift_L) -> '@'
+    wdotool key 50+11                          (keycodes)
+    wdotool type '@'                           (characters)
+### rc=0
+### wwmctl -r :ACTIVE: -b add,maximized_vert,maximized_horz
+### rc=0
+### wdotool getwindowgeometry 1950993698
+Window 1950993698
+  Position: 66,32 (screen: 0)
+  Geometry: 1854x1048
+### rc=0
+### wxprop -id 1950993698 _NET_WM_STATE
+_NET_WM_STATE(ATOM) = _NET_WM_STATE_MAXIMIZED_HORZ, _NET_WM_STATE_MAXIMIZED_VERT, _NET_WM_STATE_FOCUSED
+### rc=0
+### wwmctl -r :ACTIVE: -b remove,maximized_vert,maximized_horz
+### rc=0
+### wdotool getwindowgeometry 1950993698
+Window 1950993698
+  Position: 100,100 (screen: 0)
+  Geometry: 800x600
+### rc=0
+### wwmctl -l
+0x7449cd22  0 gnome46 fw-smoke.txt (/tmp) - Text Editor
+### rc=0
+### wwmctl -l -G
+0x7449cd22  0 100  100  800  600  gnome46 fw-smoke.txt (/tmp) - Text Editor
+### rc=0
+### wwmctl -d
+0  * DG: 5760x1080  VP: 0,0  WA: 66,32 5694x1048  Workspace 1
+1  - DG: 5760x1080  VP: N/A  WA: 66,32 5694x1048  Workspace 2
+### rc=0
+### wxprop -root _NET_CLIENT_LIST
+_NET_CLIENT_LIST(WINDOW): window id # 0x7449cd22
+### rc=0
+### wxprop -id 1950993698 WM_CLASS
+WM_CLASS(STRING) = "org.gnome.TextEditor", "org.gnome.TextEditor"
+### rc=0
+### wxrandr --listmonitors
+Monitors: 3
+ 0: +*Virtual-1 1920/480x1080/270+0+0  Virtual-1
+ 1: +Virtual-2 1920/480x1080/270+1920+0  Virtual-2
+ 2: +Virtual-3 1920/480x1080/270+3840+0  Virtual-3
+### rc=0
+### wxrandr --query
+Screen 0: minimum 16 x 16, current 5760 x 1080, maximum 32767 x 32767
+Virtual-1 connected primary 1920x1080+0+0 (normal left inverted right x axis y axis) 480mm x 270mm
+   5120x2160     50.00  
+   4096x2160     50.00  
+   3840x2160     60.00    59.94    50.00  
+   2560x1080     50.00  
+   2048x1152     60.00  
+   1920x1440     60.00  
+   1920x1200     59.88  
+   1920x1080     75.00*+  60.00    50.00  
+   1856x1392     59.99  
+   1792x1344     60.00  
+   1680x1050     59.95  
+   1600x1200     60.00  
+   1440x900      59.89  
+   1400x1050     59.98  
+   1360x768      60.02  
+   1280x1024     60.02  
+   1280x960      60.00  
+   1280x768      59.87  
+   1024x768      60.00  
+   800x600       60.32  
+Virtual-2 connected 1920x1080+1920+0 (normal left inverted right x axis y axis) 480mm x 270mm
+   5120x2160     50.00  
+   4096x2160     50.00  
+   3840x2160     60.00    59.94    50.00  
+   2560x1080     50.00  
+   2048x1152     60.00  
+   1920x1440     60.00  
+   1920x1200     59.88  
+   1920x1080     75.00*+  60.00    50.00  
+   1856x1392     59.99  
+   1792x1344     60.00  
+   1680x1050     59.95  
+   1600x1200     60.00  
+   1440x900      59.89  
+   1400x1050     59.98  
+   1360x768      60.02  
+   1280x1024     60.02  
+   1280x960      60.00  
+   1280x768      59.87  
+   1024x768      60.00  
+   800x600       60.32  
+Virtual-3 connected 1920x1080+3840+0 (normal left inverted right x axis y axis) 480mm x 270mm
+   5120x2160     50.00  
+   4096x2160     50.00  
+   3840x2160     60.00    59.94    50.00  
+   2560x1080     50.00  
+   2048x1152     60.00  
+   1920x1440     60.00  
+   1920x1200     59.88  
+   1920x1080     75.00*+  60.00    50.00  
+   1856x1392     59.99  
+   1792x1344     60.00  
+   1680x1050     59.95  
+   1600x1200     60.00  
+   1440x900      59.89  
+   1400x1050     59.98  
+   1360x768      60.02  
+   1280x1024     60.02  
+   1280x960      60.00  
+   1280x768      59.87  
+   1024x768      60.00  
+   800x600       60.32  
+### rc=0
+### wxrandr --backends
+  sway    unavailable  no sway or i3 IPC socket ($SWAYSOCK)
+  kwin    unavailable  the compositor does not advertise kde_output_management_v2
+* mutter  available    org.gnome.Mutter.DisplayConfig on the session bus
+  wlr     unavailable  the compositor does not advertise zwlr_output_manager_v1
+  x11     available    /usr/bin/xrandr
+### rc=0
+### wxrandr --print-backend --verbose
+mutter
+session: wayland
+chosen by: detection
+compositor: Mutter
+protocol: org.gnome.Mutter.DisplayConfig (D-Bus)
+available: yes
+### rc=0
+### python3 /tmp/fw-oracle.py gnome
+Virtual-1 0,0
+Virtual-2 1920,0
+Virtual-3 3840,0
+### rc=0
+### wxrandr --output Virtual-2 --pos 4000x0
+xrandr: GNOME's Mutter refused this layout: Logical monitors not adjacent (GNOME allows neither a gap nor an overlap between outputs; re-place the neighbours in the same command)
+### rc=1
+### wxrandr --gnome-overlap-status
+agreed
+shell: 46.0
+extension: running
+agreed on: 2026-09-08T00:05:37Z
+agreed for: GNOME Shell 46.0 (libmutter-14 build 9e23feb34618, MetaMonitorsConfig 72 bytes)
+agreed by: wxrandr --gnome-overlap-allow
+file: /home/test/.config/fuckwayland/overlap-consent.json
+### rc=0
+### wxrandr --dryrun --unsafe-gnome-overlap --output Virtual-2 --pos 1000x0
+xrandr: --unsafe-gnome-overlap: GNOME will not place these monitors, so they are going to be
+  placed by writing into the running gnome-shell instead of asking it.
+  What it does:         move Virtual-2 from +1920+0 to +1000+0
+                        by writing 8 bytes per monitor inside gnome-shell
+                        (GNOME Shell 46.0), through the fuckwayland-overlap@fuckwayland
+                        extension, and then asking Mutter to apply the result.
+  What it risks:        those 8 bytes go where this build of libmutter keeps a
+                        logical monitor's position.  The extension re-checks
+                        that this really is such a build before every write --
+                        struct size against the GType registry, a sentinel
+                        through Mutter's own setter, and every value it reads
+                        against what Mutter reports publicly -- and refuses if
+                        anything disagrees.  If all of that is wrong anyway,
+                        gnome-shell crashes, and on Wayland gnome-shell is the
+                        session: every program running in it goes with it.
+  What it saves:        nothing.  ~/.config/monitors.xml is never written on
+                        this path, so this layout does not survive a logout,
+                        and --persistent is refused together with this flag.
+  To undo:              wxrandr --output Virtual-1 --pos 0x0 --output Virtual-2 --pos 1920x0 --output Virtual-3 --pos 3840x0
+                        or log out and back in.
+  If the session dies:  gnome-shell is the session on Wayland, so you land at
+                        the login screen.  Log in again -- nothing was saved,
+                        so the layout is the one you started with.
+                        If a session will not start at all, switch to a text
+                        console with Ctrl+Alt+F3, log in and run
+                            gnome-extensions disable fuckwayland-overlap@fuckwayland
+                        (or delete whichever of these two is there:
+                            ~/.local/share/gnome-shell/extensions/fuckwayland-overlap@fuckwayland
+                            /usr/share/gnome-shell/extensions/fuckwayland-overlap@fuckwayland   <- from the .deb ),
+                        then Ctrl+Alt+F1 back to the login screen.
+xrandr: GNOME's rule this breaks: logical monitors not adjacent (an overlap counts, and so does a gap)
+xrandr: overlap check shell-version: GNOME Shell 46.0, libmutter-14.so.0 (build 9e23feb34618)
+xrandr: overlap check typelib: FwOverlap14, MetaMonitorsConfig 72 bytes as declared
+xrandr: overlap check sentinel: switch_config round-tripped at the declared offset
+xrandr: overlap check pending-dialog: nothing holds a modal grab, so GNOME is not asking "Keep changes?"
+xrandr: overlap check bounded-read: 3 logical monitors, every address range-checked
+xrandr: overlap check public-view: identical to Mutter's public view (global.display + get_monitor_for_connector on the requested names)
+xrandr: dryrun: nothing was written
+screen 0: 5760x1080 1520x285 mm  96.25dpi
+crtc 1:    1920x1080  75.00 +1000+0 "Virtual-2"
+### rc=0
+### ls -l ~/.config/monitors.xml ~/.config/monitors.xml.wxrandr-backup
+-rw-rw-r-- 1 test test 1931 Sep  8 00:06 /home/test/.config/monitors.xml
+-rw-rw-r-- 1 test test 1460 Sep  8 00:04 /home/test/.config/monitors.xml.wxrandr-backup
+### rc=0
+### gsettings get org.gnome.desktop.input-sources sources
+[('xkb', 'us'), ('xkb', 'de')]
+### rc=0
+### gsettings get org.gnome.desktop.input-sources mru-sources
+[('xkb', 'us'), ('xkb', 'de')]
+### rc=0
+### getfacl -p /dev/uinput
+# file: /dev/uinput
+# owner: root
+# group: root
+user::rw-
+user:test:rw-
+group::---
+mask::rw-
+other::---
+
+### rc=0
+### stat -c "%U %G %a" /dev/uinput
+root root 660
+### rc=0
+### ls /usr/lib/udev/rules.d/60-fuckwayland-uinput.rules
+/usr/lib/udev/rules.d/60-fuckwayland-uinput.rules
+### rc=0
+### end 2026-09-08T02:34:42+00:00
+rc=0
