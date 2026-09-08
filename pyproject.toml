@@ -6,6 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "fuckwayland"
 version = "0.4.0"
 description = "The X11 power tools (xdotool, wmctrl, xprop, xrandr) as drop-in clones for Wayland"
+license = {text = "BSD-2-Clause"}
 requires-python = ">=3.10"
 
 [project.scripts]
