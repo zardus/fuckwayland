@@ -30,7 +30,13 @@ the consent dialog: ``--gnome-overlap-status``, ``--gnome-overlap-allow`` and
 session can do — ``available`` (the extension is there, nothing agreed yet),
 ``agreed`` (a record already exists), ``unavailable``/unset (no route at all,
 which is what every other test sees).  ``FAKE_XRANDR_OVERLAP_ALLOW_FAIL`` makes
-``--gnome-overlap-allow`` fail with that message.
+``--gnome-overlap-allow`` fail with that message, and
+``FAKE_XRANDR_OVERLAP_WITHDRAW_ON_APPLY=1`` makes an overlapping apply succeed
+and *then* withdraw the agreement, which is what wxrandr does when the audit it
+runs on the extension's reply finds a build that is not the one that was agreed
+to: the record is deleted and one line says so.  The line is not written out
+here -- it comes from ``gnome_overlap.consent_drift()``, so it is wxrandr's own
+sentence and stays wxrandr's own sentence.
 """
 
 import json
@@ -42,7 +48,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, ROOT)
 
-from wxrandr import core
+from wxrandr import core, gnome_overlap
 
 DISCONNECTED = ("HDMI-2 disconnected "
                 "(normal left inverted right x axis y axis)")
@@ -293,7 +299,16 @@ def size_of(d):
 
 # -- the GNOME overlap agreement ---------------------------------------------
 
-OVERLAP_BUILD = {"shell": "50.1", "libmutter": 18, "struct_size": 128}
+#: what this simulated session records when it is asked to agree.  128 is not a
+#: MetaMonitorsConfig size any measured build has: the live GNOME 46.0 record
+#: (libmutter-14) is 72, and 80 is the plan's figure for libmutter-18, which is
+#: the generation this fake calls itself.
+OVERLAP_BUILD = {"shell": "50.1", "libmutter": 18, "struct_size": 80}
+
+#: what the checks "measure" on the apply that withdraws: the same generation
+#: with a different private layout, which is the one shape consent_drift() is
+#: there to catch.
+WITHDRAWN_FACTS = {"libmutter": OVERLAP_BUILD["libmutter"], "struct_size": 72}
 
 
 def consent_file():
@@ -354,6 +369,24 @@ def overlap_allow(backend):
     return 0
 
 
+def withdraw_after_apply():
+    """The post-apply audit, when FAKE_XRANDR_OVERLAP_WITHDRAW_ON_APPLY says so:
+    the layout is applied (rc 0) and the agreement is gone.  Exactly wxrandr's
+    order -- the record only ever decides how much is printed, never whether the
+    apply happens, so a withdrawal cannot un-apply anything."""
+    rec = consent_read()
+    if not rec:
+        return
+    drift = gnome_overlap.consent_drift(rec, WITHDRAWN_FACTS)
+    if not drift:
+        return
+    try:
+        os.unlink(consent_file())
+    except OSError:
+        pass
+    sys.stderr.write("xrandr: %s: %s" % (gnome_overlap.FLAG, drift))
+
+
 def main(argv):
     given = list(argv)          # what the log records: the flag included
     backend, argv = take_backend(argv)
@@ -403,6 +436,9 @@ def main(argv):
         sys.stderr.write(fail if fail.endswith("\n") else fail + "\n")
         return 1
     save(apply(load(), argv))
+    if (os.environ.get("FAKE_XRANDR_OVERLAP_WITHDRAW_ON_APPLY") not in (None, "", "0")
+            and "--unsafe-gnome-overlap" in given):
+        withdraw_after_apply()
     return 0
 
 

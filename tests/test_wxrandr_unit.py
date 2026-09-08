@@ -9,8 +9,10 @@ import io
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -1002,6 +1004,82 @@ class StateFile(unittest.TestCase):
         b.save()
         self.assertEqual(State("k1", path=path).primary, "OUT-1")
         self.assertEqual(State("k2", path=path).primary, "OUT-2")
+
+    #: holds LOCK_EX on the file it is given and says so, then sits on it
+    LOCK_HOLDER = (
+        "import fcntl, os, sys, time\n"
+        "fd = os.open(sys.argv[1], os.O_CREAT | os.O_RDWR, 0o600)\n"
+        "fcntl.flock(fd, fcntl.LOCK_EX)\n"
+        "sys.stdout.write('held\\n')\n"
+        "sys.stdout.flush()\n"
+        "time.sleep(120)\n")
+
+    #: one State.save(), in a process of its own so a wait can be timed out
+    SAVER = (
+        "import sys\n"
+        "sys.path.insert(0, sys.argv[1])\n"
+        "from wxrandr.core import State\n"
+        "st = State('k', path=sys.argv[2])\n"
+        "st.gamma()['HDMI-1'] = {'pid': 1, 'start': '?'}\n"
+        "st.save()\n"
+        "sys.stdout.write('saved\\n')\n")
+
+    def _lock_holder(self, lockpath):
+        p = subprocess.Popen([sys.executable, "-c", self.LOCK_HOLDER, lockpath],
+                             stdout=subprocess.PIPE)
+        self.addCleanup(self._stop, p)
+        self.assertEqual(p.stdout.readline(), b"held\n")
+        return p
+
+    def _stop(self, p):
+        if p.poll() is None:
+            p.kill()
+            p.wait(5)
+        p.stdout.close()
+
+    def _save_elsewhere(self, path, timeout):
+        return subprocess.run([sys.executable, "-c", self.SAVER, ROOT, path],
+                              capture_output=True, timeout=timeout)
+
+    def test_the_lock_is_taken_when_nobody_holds_it(self):
+        """The control the one below needs: the same subprocess, the same
+        `State.save()`, with the lock free -- it returns at once and the record
+        is on disk."""
+        path = self._tmp()
+        done = self._save_elsewhere(path, 10)
+        self.assertEqual((done.returncode, done.stdout), (0, b"saved\n"))
+        self.assertIn("HDMI-1", State("k", path=path).gamma())
+
+    @unittest.expectedFailure
+    def test_save_is_bounded_when_another_process_holds_the_lock(self):
+        """T49; no fix number covers it, so it is written to fail.
+
+        `State.save()` takes `LOCK_EX` on `<state>.lock` with a plain
+        `fcntl.flock`, which has no deadline: another process holding that lock
+        stops this one for as long as it holds it, with nothing printed and
+        nothing to interrupt but the command itself.  The lock is on a file in
+        the runtime directory, which with no `$XDG_RUNTIME_DIR` -- every `sudo`
+        run, and cron -- is a private directory or, failing that, shared /tmp
+        under a guessable name, so the holder need not be a wxrandr at all.
+
+        Every other wait in this tree is bounded (sway IPC 10 s, Mutter's
+        MonitorsChanged 5 s, KWin's apply 10 s, the gamma holder's start 10 s)
+        and the state file is a cache that is never load-bearing: the failure
+        this asks for is `LOCK_NB` with a retry and then carrying on without
+        the lock, exactly as an unopenable lock file is already handled two
+        lines further down.
+
+        The wait is 3 s and the saver is killed at the deadline, so this cannot
+        hang the suite -- it can only fail."""
+        path = self._tmp()
+        self._lock_holder(path + ".lock")
+        started = time.monotonic()
+        try:
+            done = self._save_elsewhere(path, 3.0)
+        except subprocess.TimeoutExpired:
+            self.fail("State.save() was still waiting for the lock after %.1fs"
+                      % (time.monotonic() - started))
+        self.assertEqual(done.returncode, 0, done.stderr)
 
     def test_corrupt_custom_mode_returns_none(self):
         st = mk_state()

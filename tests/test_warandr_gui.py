@@ -146,6 +146,10 @@ class GuiSession(XvfbCase):
     SLOW_QUERY = None        # seconds a *query* takes (tests/fixtures/
                              # slow_xrandr.py); None: the instant fake
     EXTRA_ENV = {}           # what this class needs the fake to pretend
+    CLI_ARGS = ()            # warandr's own options, for a window started the
+                             # way a hotkey or a .desktop entry starts one
+    CONSENT = None           # a GNOME overlap agreement already on disk before
+                             # the window opens (the fake's record shape)
 
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="warandr-gui-")
@@ -169,13 +173,24 @@ class GuiSession(XvfbCase):
             env["SLOW_QUERY"] = str(self.SLOW_QUERY)
         env.update(self.EXTRA_ENV)
         self.env = env
+        if self.CONSENT is not None:
+            # before the window opens: `--gnome-overlap-status` is asked once,
+            # on the startup worker thread, and a record written after that is a
+            # record this run never sees
+            with open(self.consent_file(), "w") as fh:
+                json.dump(self.CONSENT, fh)
         self.app_log = open(os.path.join(self.tmp, "app.log"), "w")
         self.launch()
+
+    def consent_file(self):
+        """Where the fake keeps the agreement: next to the apply log."""
+        return os.path.join(self.tmp, "consent.json")
 
     def launch(self):
         after = len(self.dumps())      # a relaunch must not match old dumps
         self.mark = after              # where this run's dumps start
-        self.app = subprocess.Popen([sys.executable, "-m", "warandr"],
+        self.app = subprocess.Popen([sys.executable, "-m", "warandr"]
+                                    + list(self.CLI_ARGS),
                                     env=self.env, stdout=self.app_log,
                                     stderr=subprocess.STDOUT)
         return self.wait_dump("layout",
@@ -219,10 +234,20 @@ class GuiSession(XvfbCase):
                     return d, i + 1      # the next wait starts after it
             if self.app.poll() is not None:
                 self.fail("warandr exited with %d:\n%s" % (
-                    self.app.returncode, open(self.app_log.name).read()))
+                    self.app.returncode, self.app_log_text()))
             time.sleep(0.05)
         self.fail("no %r dump within %ds; dumps=%r\napp log:\n%s" % (
-            kind, timeout, self.dumps()[-3:], open(self.app_log.name).read()))
+            kind, timeout, self.dumps()[-3:], self.app_log_text()))
+
+    def app_log_text(self):
+        """warandr's own stdout+stderr, for a failure message.  Read through a
+        context manager: an expectedFailure takes this path on every run, and a
+        dangling handle there is a ResourceWarning in the file's output."""
+        try:
+            with open(self.app_log.name) as fh:
+                return fh.read()
+        except OSError as e:
+            return "<log unreadable: %s>" % e
 
     def xdo(self, *args):
         subprocess.run(["xdotool"] + [str(a) for a in args], env=self.env,
@@ -680,14 +705,9 @@ class GuiDrive(GuiSession):
         self.assertIsNone(self.app.poll())
 
 
-class GuiOverlapConsent(GuiSession):
-    """The GNOME path, end to end, with the fake pretending to be a GNOME that
-    has the overlap extension: drag one output onto another, press Apply, get
-    the one dialog, tick the box, and never see it again.
-
-    The two halves this holds down are the two the feature is for: Apply on an
-    overlapping layout really does pass `--unsafe-gnome-overlap` (and passes it
-    to nothing else), and the second Apply asks nothing."""
+class GuiOverlapCase(GuiSession):
+    """A window on a fake GNOME that has the overlap extension, and the two
+    moves every test of it makes."""
 
     # WARANDR_BACKEND=wayland is what makes the fake a Wayland tool rather than
     # an X11 one; the fake then answers --print-backend with FAKE_XRANDR_AUTO_BACKEND
@@ -695,13 +715,10 @@ class GuiOverlapConsent(GuiSession):
                  "FAKE_XRANDR_AUTO_BACKEND": "mutter",
                  "FAKE_XRANDR_OVERLAP": "available"}
 
-    def consent(self):
-        return os.path.join(self.tmp, "consent.json")
-
-    def setUp(self):
-        super().setUp()
-        # the fake keeps its record next to the apply log
-        self.assertTrue(os.path.isdir(self.tmp))
+    #: the record `wxrandr --gnome-overlap-allow` writes, as the fake writes it
+    AGREEMENT = {"format": 1, "agreed": "2026-01-01T00:00:00Z",
+                 "how": "wxrandr --gnome-overlap-allow",
+                 "shell": "50.1", "libmutter": 18, "struct_size": 80}
 
     def gnome(self, after=0):
         return self.backend_dump(lambda d: d["name"] == "mutter"
@@ -713,6 +730,16 @@ class GuiOverlapConsent(GuiSession):
         lay = self.layout()
         self.drag(lay["boxes"]["DP-2"], *self.centre(lay["boxes"]["DP-1"]))
         return self.wait_dump("layout", lambda d: "320x180" in d["command"], after=n)
+
+
+class GuiOverlapConsent(GuiOverlapCase):
+    """The GNOME path, end to end, with the fake pretending to be a GNOME that
+    has the overlap extension: drag one output onto another, press Apply, get
+    the one dialog, tick the box, and never see it again.
+
+    The two halves this holds down are the two the feature is for: Apply on an
+    overlapping layout really does pass `--unsafe-gnome-overlap` (and passes it
+    to nothing else), and the second Apply asks nothing."""
 
     def test_the_dialog_the_box_and_then_never_again(self):
         d, n = self.gnome(after=self.mark)
@@ -790,6 +817,198 @@ class GuiOverlapConsent(GuiSession):
         applied, n = self.wait_dump("applied", after=n)
         self.assertEqual((applied["rc"], applied["overlap"]), (0, False))
         self.assertNotIn("--unsafe-gnome-overlap", self.calls()[-1])
+
+
+    def test_return_on_the_dialog_is_a_no(self):
+        """Cancel is the dialog's default response, so Return on a dialog nobody
+        read is a no -- and the box, which is a second and deliberate decision,
+        records nothing on its own.  `_ask_overlap` returns `(apply, remember)`
+        and only the first of them decides anything."""
+        d, n = self.gnome(after=self.mark)
+        lay, n = self.overlap_the_boxes(n)
+        before = len(self.calls())
+        self.click(lay["buttons"]["apply"])
+        dlg, n = self.wait_dump("overlap_dialog", after=n)
+        self.click(dlg["spots"]["check"])       # ticked -- and still not applied
+        self.xdo("key", "Return")
+        ans, n = self.wait_dump("overlap_answer", after=n)
+        self.assertEqual((ans["apply"], ans["remember"]), (False, True))
+        self.wait_dump("status", lambda d: d["text"] == "not applied", after=n)
+        self.assertEqual(len(self.calls()), before)
+        self.assertFalse(os.path.exists(self.consent_file()))
+        # the edit survives: the question was asked about a layout that is still
+        # there to be applied
+        self.assertIn("320x180", self.layout()["command"])
+
+
+class GuiOverlapApplyFails(GuiOverlapCase):
+    """The apply the user said yes to, with the box ticked, that the extension
+    refuses.
+
+    The agreement is written after the apply and only after a successful one
+    (warandr/gui.py: `if rc == 0 and remember`), which is the honest order: if
+    the write that fails were the one that ended the session, waking up having
+    agreed to something that never worked is the wrong state to wake up in."""
+
+    REFUSAL = ("xrandr: --unsafe-gnome-overlap: the overlap extension refused "
+               "(struct_size): MetaMonitorsConfig is 88 bytes, not 80")
+    EXTRA_ENV = dict(GuiOverlapCase.EXTRA_ENV, FAKE_XRANDR_FAIL=REFUSAL)
+
+    def test_a_refused_apply_records_nothing_and_keeps_the_edit(self):
+        """T55: a refused apply leaves nothing behind at all -- neither the
+        consent record nor a call that would have written one.
+
+        The refusal here is the real one the audit produces
+        (`struct_size`: MetaMonitorsConfig is 88 bytes, not 80 -- 80 is what
+        libmutter-14 on GNOME 46.0 measured, and a mismatch is what an upgraded
+        libmutter looks like from warandr's side).  So the assertion is on both
+        halves: `applied.agreed` is None because `allow_overlap()` was never
+        run, and the fake's argv log carries no `--gnome-overlap-allow`, which
+        is the command that would have written the record."""
+        before = len(self.calls())
+        d, n = self.gnome(after=self.mark)
+        lay, n = self.overlap_the_boxes(n)
+        self.click(lay["buttons"]["apply"])
+        dlg, n = self.wait_dump("overlap_dialog", after=n)
+        self.click(dlg["spots"]["check"])
+        self.click(dlg["spots"]["apply anyway"])
+        ans, n = self.wait_dump("overlap_answer", after=n)
+        self.assertEqual((ans["apply"], ans["remember"]), (True, True))
+        applied, n = self.wait_dump("applied", after=n)
+        self.assertEqual((applied["rc"], applied["overlap"]), (1, True))
+        self.assertIn(self.REFUSAL, applied["stderr"])
+        # `agreed` is None for exactly one reason: allow_overlap() was never run
+        self.assertIsNone(applied["agreed"])
+        self.assertFalse(os.path.exists(self.consent_file()))
+        # ...and no run of ours asked for the agreement to be written: the
+        # consent file's absence alone would also be satisfied by a fake that
+        # simply stopped writing it
+        self.assertEqual([c for c in self.calls()[before:]
+                          if "--gnome-overlap-allow" in c], [])
+        self.shot("warandr-11-overlap-refused")
+        # the modal error dialog carries the extension's own line; Return closes
+        # it, and the overlapping layout is still on the canvas
+        self.xdo("key", "Return")
+        lay, n = self.wait_dump("layout", lambda d: not d["busy"], after=n)
+        self.assertIn("320x180", lay["command"])
+        self.assertIn("--unsafe-gnome-overlap", lay["status"])
+        self.assertIsNone(self.app.poll())
+
+
+class GuiOverlapNeverAsks(GuiOverlapCase):
+    """`warandr --unsafe-gnome-overlap`: somebody who has already decided,
+    starting the window from a hotkey or a desktop entry where a dialog is the
+    whole interaction.
+
+    It waives the asking and nothing else: the flag still only goes on a layout
+    that really overlaps, and it deliberately records no agreement -- how a
+    program was started must not change what it leaves behind on disk
+    (warandr/randr.py, `overlap_never_ask`)."""
+
+    CLI_ARGS = ("--unsafe-gnome-overlap",)
+
+    def test_the_flag_applies_without_asking_and_records_nothing(self):
+        """T55: `warandr --unsafe-gnome-overlap` never shows the dialog, passes
+        the flag on every overlapping apply, and writes no consent file.
+
+        Twice over, because the state that would go wrong is a remembered one:
+        a first apply that quietly recorded an agreement would make the second
+        indistinguishable from a session where the user had been asked and had
+        said yes.  Measured on GNOME 46.0 (live-measurements.md): the record is
+        `~/.config/fuckwayland/gnome-overlap.json`, and nothing but the dialog's
+        `remember` box or `wxrandr --gnome-overlap-allow` ever writes it."""
+        d, n = self.gnome(after=self.mark)
+        self.assertEqual(d["overlap_state"], "available")   # nothing agreed to
+        lay, n = self.overlap_the_boxes(n)
+        mark = len(self.dumps())
+        self.click(lay["buttons"]["apply"])
+        applied, n = self.wait_dump("applied", after=mark)
+        self.assertEqual((applied["rc"], applied["overlap"]), (0, True))
+        self.assertIsNone(applied["agreed"])
+        self.assertEqual([e["kind"] for e in self.dumps()[mark:]
+                          if e["kind"] in ("overlap_dialog", "overlap_answer")], [])
+        self.assertIn("--unsafe-gnome-overlap", self.calls()[-1])
+        self.assertFalse(os.path.exists(self.consent_file()))
+        # and a second one is the same: no dialog, no record, the flag again
+        before, mark = len(self.calls()), len(self.dumps())
+        self.click(self.layout()["buttons"]["apply"])
+        self.wait_dump("applied", after=mark)
+        self.assertEqual([e["kind"] for e in self.dumps()[mark:]
+                          if e["kind"] in ("overlap_dialog", "overlap_answer")], [])
+        self.assertIn("--unsafe-gnome-overlap", self.calls()[before])
+        self.assertFalse(os.path.exists(self.consent_file()))
+
+
+class GuiOverlapWithdrawn(GuiOverlapCase):
+    """wxrandr withdraws the agreement under warandr's feet.
+
+    The audit wxrandr runs on the extension's reply
+    (`gnome_overlap.consent_drift`) compares the libmutter generation and the
+    MetaMonitorsConfig size that were agreed to against the ones the checks have
+    just measured; a difference deletes the record and prints one line.  The
+    fake does the same on `FAKE_XRANDR_OVERLAP_WITHDRAW_ON_APPLY=1`, with
+    wxrandr's own sentence, after an apply that succeeded.
+
+    Live (live-measurements.md, GNOME 46.0): the record holds
+    `{"agreed", "format", "how", "libmutter", "libmutter_build", "shell",
+    "struct_size"}` and an `apt upgrade` of libmutter is what really moves it,
+    so this is the ordinary end of an agreement rather than an exotic one."""
+
+    EXTRA_ENV = dict(GuiOverlapCase.EXTRA_ENV,
+                     FAKE_XRANDR_OVERLAP="agreed",
+                     FAKE_XRANDR_OVERLAP_WITHDRAW_ON_APPLY="1")
+    CONSENT = GuiOverlapCase.AGREEMENT
+
+    def first_apply(self):
+        """The agreed apply that withdraws the agreement: no dialog, rc 0, and
+        the record gone from disk when it returns."""
+        d, n = self.gnome(after=self.mark)
+        self.assertEqual(d["overlap_state"], "agreed")
+        lay, n = self.overlap_the_boxes(n)
+        mark = len(self.dumps())
+        self.click(lay["buttons"]["apply"])
+        applied, n = self.wait_dump("applied", after=mark)
+        self.assertEqual((applied["rc"], applied["overlap"]), (0, True))
+        self.assertEqual([e["kind"] for e in self.dumps()[mark:]
+                          if e["kind"] == "overlap_dialog"], [])
+        return applied, n
+
+    def test_the_agreed_apply_lands_and_the_agreement_goes(self):
+        """The withdrawal itself, before the question of what warandr does next.
+
+        An agreed session applies with `--unsafe-gnome-overlap` and no dialog;
+        wxrandr's audit then finds the extension's MetaMonitorsConfig is 72
+        bytes where 80 was agreed to (72 is what libmutter-14 on live GNOME
+        46.0 records, 80 what `OVERLAP_BUILD` in tests/fixtures/fake_xrandr.py
+        answers with), deletes the record and says so on stderr with rc 0.  The
+        apply is not undone -- the layout is already on the screen -- so what is
+        pinned is: it landed, the sentence is there, the file is gone."""
+        applied, _n = self.first_apply()
+        self.assertIn("the agreement has been withdrawn", applied["stderr"])
+        self.assertIn("MetaMonitorsConfig size 72, not 80", applied["stderr"])
+        self.assertIn("--unsafe-gnome-overlap", self.calls()[-1])
+        self.assertFalse(os.path.exists(self.consent_file()))
+
+    @unittest.expectedFailure
+    def test_the_next_apply_asks_again(self):
+        """Fix 26 (deferred by the brief), finding F2.1 -- warandr half.
+
+        `Backend.overlap_info` is filled once, on the startup worker thread
+        (`identify()` -> `read_overlap_status()`), and `Backend.apply()` never
+        re-reads it.  So the moment wxrandr withdraws the agreement warandr goes
+        on believing `agreed` for the rest of the session: the second Apply
+        passes `--unsafe-gnome-overlap` again with no dialog, on a GNOME that no
+        longer has anything recorded -- which is the one thing the dialog exists
+        to prevent.
+
+        The fix is to re-read `read_overlap_status()` after every overlapping
+        apply (or on the withdrawal line in stderr); when it lands this is what
+        it has to produce."""
+        _applied, n = self.first_apply()
+        mark = len(self.dumps())
+        self.click(self.layout()["buttons"]["apply"])
+        self.wait_dump("overlap_dialog", after=mark, timeout=10)
+        self.backend_dump(lambda d: d["overlap_state"] == "available", after=mark)
 
 
 class GuiOverlapRefused(GuiSession):

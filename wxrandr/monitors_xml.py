@@ -31,26 +31,76 @@ it stood before *this* apply is gone as soon as anything else writes one.  Ours 
 written once per persistent apply and by nothing else.
 
 Everything here is off the common path: a plain (temporary) apply never opens the file.
+
+Whose file, though, is not always the caller's.  Run from `ssh root@box` or from cron
+the process environment is root's -- `$HOME` is /root and `$XDG_CONFIG_HOME`, if it is
+set at all, is root's -- while the session being reconfigured belongs to somebody else,
+and Mutter reads that user's `~/.config/monitors.xml` and no other.  So `default_path()`
+takes a uid, and with one that is not ours it resolves that account's `pw_dir` instead
+of reading the environment.  The copy is then written into their home, and it has to
+end up owned by them: a root-owned file in a user's config directory is one they cannot
+replace and one their next `--persistent` cannot overwrite.  `keep_backup()` chowns it
+to the owner of the file it copied, and when it cannot it removes the copy and says so
+-- the one line this module prints, because it is also the only moment at which anyone
+knows a backup was wanted and is not there.
 """
 
 import os
+import pwd
 import xml.etree.ElementTree as ET
 
-from wxrandr.core import round_half_away
+from wxrandr.core import round_half_away, warn
 
 #: what Mutter reads, and the copy we keep beside it
 NAME = "monitors.xml"
 BACKUP_SUFFIX = ".wxrandr-backup"
 #: a saved configuration file is a few KB; anything huge is not one, and we do not slurp it
 MAX_BYTES = 1 << 20
+#: the copy could not be given to the account that will have to live with it, so it was
+#: not left behind at all: a root-owned file in their config directory is worse than none
+NO_BACKUP_NOTE = ("no copy of %s could be kept for uid %d (%s), so none was left "
+                  "behind; the file itself is untouched\n")
 
 LOGICAL, PHYSICAL = "logical", "physical"
 
 
-def default_path(env=None) -> str:
+def home_of(uid) -> str | None:
+    """`pw_dir` of that account, or None when there is no such account (or no passwd
+    database to ask, which is what a minimal container is)."""
+    try:
+        return pwd.getpwuid(uid).pw_dir or None
+    except (KeyError, OSError, TypeError, OverflowError):
+        return None
+
+
+def _owner(uid_path) -> tuple[int, int] | None:
+    """`(uid, gid)` that own `uid_path`, or None.  A function of its own so that the
+    chown branch below is reachable from a test that is not root.
+
+    Both halves, not the uid alone: root's primary group is root's, so a copy given only
+    the right uid lands as `them:root` in somebody else's `~/.config` -- readable, but
+    not the ownership of the file it was copied from, which is the whole point."""
+    try:
+        st = os.stat(uid_path)
+    except OSError:
+        return None
+    return st.st_uid, st.st_gid
+
+
+def default_path(env=None, uid=None) -> str:
     """`$XDG_CONFIG_HOME/monitors.xml`, else `~/.config/monitors.xml` -- the path Mutter
-    itself builds (it never looks anywhere else in a user's home)."""
+    itself builds (it never looks anywhere else in a user's home).
+
+    `uid` is the graphical session's owner (`session.session_uid()`).  When it is ours,
+    or unknown, the environment is that session's own and is read as before.  When it is
+    somebody else's the environment belongs to whoever ran the command -- root, over ssh
+    or under sudo -- and reading `$HOME` there would name root's file, which Mutter has
+    never opened and which `--persistent` would then have backed up instead of theirs."""
     env = os.environ if env is None else env
+    if uid is not None and uid != os.geteuid():
+        home = home_of(uid)
+        if home:
+            return os.path.join(home, ".config", NAME)
     base = env.get("XDG_CONFIG_HOME") or ""
     if not base.startswith("/"):
         base = os.path.join(env.get("HOME", ""), ".config")
@@ -208,10 +258,11 @@ def problems(configs, layout_mode=None):
 
 # -- reading it, and keeping a copy ------------------------------------------
 
-def snapshot(path=None, env=None):
+def snapshot(path=None, env=None, uid=None):
     """`(path, bytes)` of the saved configuration, or None when there is none to keep
-    (a fresh GNOME install has no file at all).  Reads; never writes."""
-    p = path or default_path(env)
+    (a fresh GNOME install has no file at all).  Reads; never writes.  `uid`: whose
+    file, see `default_path()`."""
+    p = path or default_path(env, uid)
     try:
         if os.path.getsize(p) > MAX_BYTES:
             return None
@@ -241,16 +292,32 @@ def describe(snap, layout_mode=None):
 
 def keep_backup(snap):
     """Write the bytes read before the apply to `<path>.wxrandr-backup` and return that
-    path (None when there was no file, or when the copy cannot be written -- a backup is
-    a courtesy and never a reason to fail an apply that Mutter has already accepted)."""
+    path (None when there was no file, or when the copy cannot be kept -- a backup is a
+    courtesy and never a reason to fail an apply that Mutter has already accepted).
+
+    The copy is given to whoever owns the file it was copied from, user and group both, so
+    that it matches that file rather than picking up the caller's own primary group.  That
+    matters only when the two accounts differ: root reconfiguring somebody else's session
+    would otherwise leave a root-owned file in their `~/.config`, which they cannot
+    replace and which their own next `--persistent` cannot overwrite either.  A chown we
+    are not allowed to make means the copy would be exactly that, so it is removed
+    instead and one line says so."""
     if not snap:
         return None
     p, data = snap
+    owner = _owner(p)
     backup = p + BACKUP_SUFFIX
     tmp = backup + ".tmp"
     try:
         with open(tmp, "wb") as f:
             f.write(data)
+        if owner is not None and owner[0] != os.geteuid():
+            try:
+                os.chown(tmp, owner[0], owner[1])
+            except OSError as e:
+                os.unlink(tmp)
+                warn(NO_BACKUP_NOTE % (p, owner[0], e))
+                return None
         os.replace(tmp, backup)
         return backup
     except OSError:

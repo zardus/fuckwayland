@@ -473,6 +473,134 @@ class EnvironmentX11(Stubbed):
         self.assertEqual((code, out), (0, "x11\n"))
 
 
+class DroppedOnTheHandover(Stubbed):
+    """What an X11 session does with the two options only we have.
+
+    Measured on both X11 images in the 0.4 retest: `wxrandr --persistent
+    --output Virtual-2 --below Virtual-1` came back as the real xrandr's
+    `unrecognized option '--persistent'`, exit 1, layout unchanged -- so the
+    option had to be stripped before the handover, which it now is
+    (`Lookahead.test_our_own_apply_options_are_stripped_too`).  Stripping it
+    silently is the other half of the same problem: a script that has been
+    asking for a persistent layout on an X11 box has never been getting one and
+    would never learn that from the output.
+
+    `--unsafe-gnome-overlap` is the opposite case and stays refused: X11 places
+    overlapping monitors by itself, so a user who typed it has misunderstood
+    something rather than asked for something unavailable."""
+
+    def handover(self, *argv):
+        """`main()` with a real argv, so `entry` is true and the handover is the
+        one a command line gets; `maybe_exec_real` is recorded rather than run,
+        because the real one would `execve` this process."""
+        seen = []
+
+        def record(tool, args=None, **kw):
+            seen.append((tool, list(args or []), kw))
+            return 0
+
+        out, err = io.StringIO(), io.StringIO()
+        real, passthrough.maybe_exec_real = passthrough.maybe_exec_real, record
+        saved_argv = list(sys.argv)
+        sys.argv = ["wxrandr"] + list(argv)
+        try:
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                try:
+                    code = cli.main()
+                except SystemExit as e:
+                    code = e.code if isinstance(e.code, int) else 0
+        finally:
+            passthrough.maybe_exec_real = real
+            sys.argv = saved_argv
+        return code, out.getvalue(), err.getvalue(), seen
+
+    def test_persistent_is_dropped_and_said_once(self):
+        code, out, err, seen = self.handover("--backend", "x11", "--persistent",
+                                             "--output", "DP-1", "--auto")
+        self.assertEqual((code, out), (0, ""))
+        # the real xrandr gets the command without our option, and nothing else
+        # about it changed
+        self.assertEqual(len(seen), 1, seen)
+        tool, args, kw = seen[0]
+        self.assertEqual((tool, args), ("xrandr", ["--output", "DP-1", "--auto"]))
+        self.assertEqual((kw["entry"], kw["force"]), (True, True))
+        # exactly one line, and it names the option and the session
+        lines = [ln for ln in err.splitlines() if ln.strip()]
+        self.assertEqual(len(lines), 1, err)
+        self.assertIn("--persistent", lines[0])
+        self.assertIn("X11", lines[0])
+        self.assertTrue(lines[0].startswith("xrandr: "), lines[0])
+
+    def test_an_ordinary_handover_says_nothing(self):
+        """The control: every command that does not carry one of our options
+        hands over in silence, which is the whole promise of the clone."""
+        code, out, err, seen = self.handover("--backend", "x11", "--output",
+                                             "DP-1", "--auto")
+        self.assertEqual((code, out, err), (0, "", ""))
+        self.assertEqual(seen[0][1], ["--output", "DP-1", "--auto"])
+
+    def test_the_overlap_flag_is_still_refused_rather_than_dropped(self):
+        code, out, err, seen = self.handover("--backend", "x11",
+                                             "--unsafe-gnome-overlap",
+                                             "--output", "DP-1", "--pos", "960x0")
+        self.assertEqual((code, out), (1, ""))
+        self.assertEqual(seen, [])              # nothing was handed over at all
+        self.assertIn("--unsafe-gnome-overlap only means anything on GNOME", err)
+        self.assertNotIn("--persistent", err)
+
+    def test_both_at_once_is_the_refusal_alone(self):
+        """The refusal is the whole answer, and the drop line is not said with
+        it.  Measured here: stderr is exactly the one refusal line and `seen` is
+        empty -- the refusal returns 1 before the PERSISTENT_FLAG branch is
+        reached, and nothing was handed over, so nothing was dropped either.
+        Saying both would name an option that never got as far as mattering."""
+        code, _out, err, seen = self.handover(
+            "--backend", "x11", "--persistent", "--unsafe-gnome-overlap",
+            "--output", "DP-1", "--pos", "960x0")
+        self.assertEqual(code, 1)
+        self.assertEqual(seen, [])
+        lines = [ln for ln in err.splitlines() if ln.strip()]
+        self.assertEqual(len(lines), 1, err)
+        self.assertIn("--unsafe-gnome-overlap only means anything on GNOME", lines[0])
+        self.assertNotIn("is dropped on X11", err)
+
+
+class ReadmeOnTheHandover(unittest.TestCase):
+    """The paragraph that promises the handover, against what it does.
+
+    F7.5(a): README said `execve` and argv *untouched*, and argv is not
+    untouched -- `scan_backend_argv` strips `--backend`, `--persistent` and
+    `--unsafe-gnome-overlap` before the original ever sees them, because the
+    original has never had any of the three and would answer `unrecognized
+    option` to the whole command."""
+
+    def readme(self):
+        with open(os.path.join(ROOT, "README.md"), encoding="utf-8") as f:
+            return f.read()
+
+    def sentences(self):
+        """Every sentence of README, unwrapped: the claim and the exception to
+        it have to be in the same one, or a reader meets the claim alone."""
+        out = []
+        for para in self.readme().split("\n\n"):
+            out.extend(" ".join(para.split()).split(". "))
+        return out
+
+    def test_untouched_argv_is_only_claimed_where_our_options_are_named(self):
+        claims = [s for s in self.sentences() if "argv untouched" in s]
+        self.assertTrue(claims, "the handover paragraph is gone from README")
+        for s in claims:
+            for flag in cli.OWN_APPLY_FLAGS:
+                self.assertIn(flag, s, s)
+
+    def test_the_readme_says_what_becomes_of_each_of_them(self):
+        """Not just that they are stripped: dropped and refused are different
+        outcomes and the two options get different ones."""
+        text = " ".join(self.readme().split())
+        self.assertIn("`--persistent` is dropped", text)
+        self.assertIn("`--unsafe-gnome-overlap` is refused", text)
+
+
 class X11Probe(unittest.TestCase):
     """The one probe with no compositor in it: which real xrandr `x11` is."""
 

@@ -12,6 +12,7 @@ as asked (X11, KWin and wlroots all take one and draw the shared region on
 both screens), and GNOME's refusal of it is relayed in GNOME's name."""
 
 import contextlib
+import gc
 import io
 import os
 import shutil
@@ -20,17 +21,20 @@ import struct
 import sys
 import tempfile
 import threading
+import time
 import unittest
+import warnings
+from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
-sys.path.insert(0, os.path.join(ROOT, "tests"))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from fwcommon import dbus_mini, session as wsession
 from fwcommon.dbus_mini import Bus, Message, Variant
 import test_dbus_mini as tdm
 from wl_fake import msg, wstr
-from wxrandr import cli, core, mutter
+from wxrandr import cli, core, monitors_xml, mutter
 from wxrandr.core import Mode, Stanza, State
 
 #: every refusal reaches the user in Mutter's name: we pass overlapping and
@@ -129,6 +133,12 @@ class FakeMutter:
         self.sticky_primary = False     # GNOME 50: old primary flag not cleared in place
         self.calls = []                 # every ApplyMonitorsConfig (serial, method, lms, props)
         self.persisted = False
+        # -- the three ways a real Mutter goes quiet (HostileMutter below).
+        # The healthy sequence, which _test_method reproduces, is MonitorsChanged
+        # then the method return; each of these drops one half of it.
+        self.emit_signal = True         # False: accept the apply, emit nothing
+        self.swallow_apply = False      # True: record the call, never reply
+        self.hangup_on_apply = False    # True: close the connection under it
         self._stale = {}                # (x, y) -> stale primary flag (sticky_primary)
         self.lock = threading.Lock()
 
@@ -336,13 +346,24 @@ class _MutterConn(tdm._Conn):
                 return
             serial, method, lms, props = m.args()
             svc.calls.append((serial, method, lms, props))
+            if svc.hangup_on_apply:
+                # gnome-shell has crashed with our call in its queue: the socket
+                # goes, and nothing on it is ever answered
+                self.closed = True
+                try:
+                    self.sock.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+                return
+            if svc.swallow_apply:
+                return          # taken, never answered: only our deadline ends it
             try:
                 with svc.lock:
                     changed = svc.apply(serial, method, lms, props)
             except MutterError as e:
                 self.send(Message.error(m, e.name, e.message))
                 return
-            if changed:  # mutter emits the signal before completing the call
+            if changed and svc.emit_signal:  # mutter emits it before completing the call
                 for c in self.bus.connections():
                     if any("MonitorsChanged" in r or "type='signal'" in r
                            for r in c.matches):
@@ -1212,7 +1233,7 @@ class Apply(MutterCase):
                               " 1: +eDP-1 1920/344x1080/194+0+0  eDP-1\n"
                               " 2: +HDMI-1 1280/376x1024/301+4480+0  HDMI-1\n")
         code, out, _ = self.run_cli()
-        self.assertEqual([l.split()[0] for l in out.splitlines() if "connected" in l],
+        self.assertEqual([ln.split()[0] for ln in out.splitlines() if "connected" in ln],
                          ["eDP-1", "DP-1", "HDMI-1"])  # the -q output order stays
 
     def test_sticky_primary_flags_resolved_via_get_resources(self):
@@ -1408,6 +1429,157 @@ class Apply(MutterCase):
                                (1920, 0, 1.0, 0, False, [("DP-1", "2560x1600@59.972", {})])])
 
 
+# ---------------------------------------------------------------- hostile mutter
+
+@contextlib.contextmanager
+def call_timeout(seconds):
+    """Bound every `Bus.call` in the block.
+
+    wxrandr never passes a timeout of its own -- `_call_apply` calls
+    `bus.call(...)` and takes dbus_mini's 25 s default -- so the only seam a
+    test has for "the shell took the call and never answered" is the default
+    itself.  Everything else on the mock answers in microseconds, so bounding
+    every call rather than only the apply changes nothing but the wait."""
+    real = Bus.call
+
+    def bounded(self, *a, **kw):
+        # `timeout` is Bus.call's seventh positional parameter and some callers
+        # pass it there, so overwrite that slot rather than adding a keyword
+        if len(a) >= 7:
+            a = a[:6] + (seconds,) + a[7:]
+        else:
+            kw["timeout"] = seconds
+        return real(self, *a, **kw)
+
+    with mock.patch.object(Bus, "call", bounded):
+        yield
+
+
+class HostileMutter(MutterCase):
+    """The DisplayConfig service, alive on the bus, that does not finish what it
+    started: it accepts an apply and emits no MonitorsChanged, or takes the call
+    and never answers it, or hangs up under it.
+
+    None of the three is hypothetical.  The healthy sequence, which
+    `_MutterConn._test_method` reproduces, is MonitorsChanged first and the
+    method return after it; each of these drops a different half of it -- a
+    shell wedged in its own event loop, a reply that never comes back, a shell
+    that has just died.  On Wayland gnome-shell *is* the session, so all three
+    are things a user meets.
+
+    What is held down here is only what wxrandr controls: the run comes back, it
+    comes back bounded, it says one thing, and it does not hand the bus socket
+    to the garbage collector."""
+
+    def fixture(self):
+        return three_monitors()
+
+    def wait_dropped(self, timeout=5.0):
+        """True once the mock is holding no client connection at all."""
+        deadline = time.monotonic() + timeout
+        while self.mock.conns and time.monotonic() < deadline:
+            time.sleep(0.05)
+        return not self.mock.conns
+
+    def state_bytes(self):
+        try:
+            with open(self.state_path, "rb") as f:
+                return f.read()
+        except OSError:
+            return None
+
+    def test_an_accepted_apply_whose_signal_never_comes_still_renders(self):
+        """`emit_signal=False`: Mutter applied the layout and said nothing about
+        it.  wxrandr waits MONITORS_CHANGED_TIMEOUT (5.0 in wxrandr/mutter.py,
+        patched to 0.5 here) and re-reads anyway, so the run ends 0 with a
+        rendered snapshot rather than hanging on a signal that is not coming."""
+        self.svc.emit_signal = False
+        started = time.monotonic()
+        with mock.patch.object(mutter, "MONITORS_CHANGED_TIMEOUT", 0.5):
+            code, out, err = self.run_cli("--output", "HDMI-1", "--off")
+        wall = time.monotonic() - started
+        self.assertEqual((code, out, err), (0, "", ""))
+        self.assertEqual(len(self.applied()), 1)
+        # the apply really did land, and the post-apply re-read saw it: HDMI-1
+        # is out of the mock's logical monitors and off in what a query renders
+        self.assertEqual([lm[5][0][0] for lm in self.lms()], ["eDP-1", "DP-1"])
+        out = self.run_cli("--query")[1]
+        self.assertIn("\nHDMI-1 connected (normal", out)
+        self.assertIn("eDP-1 connected primary 1920x1080+0+0", out)
+        # the wait is that timeout and nothing longer
+        self.assertGreater(wall, 0.4, wall)
+        self.assertLess(wall, 3.0, wall)
+
+    def test_a_swallowed_apply_is_one_line_and_leaves_the_state_file_alone(self):
+        """`swallow_apply=True`: the call is in the mock's log and no reply will
+        ever come.  dbus_mini raises NoReply at the deadline (25 s by default,
+        bounded to 1.0 here), which reaches the user as one line naming the
+        method that went unanswered -- and the state file, which is written at
+        the end of a run that finished, is byte-identical to what --query
+        left."""
+        self.assertEqual(self.run_cli("--output", "HDMI-1", "--off")[0], 0)
+        before = self.state_bytes()             # the file an ordinary run leaves
+        self.assertIsNotNone(before)
+        self.svc.swallow_apply = True
+        started = time.monotonic()
+        with call_timeout(1.0):
+            code, out, err = self.run_cli("--output", "HDMI-1",
+                                          "--mode", "1280x1024", "--pos", "4480x0")
+        wall = time.monotonic() - started
+        self.assertEqual(code, 1)
+        self.assertEqual(out, "")
+        self.assertEqual(err.count("xrandr: "), 1, err)
+        self.assertIn("no reply to ApplyMonitorsConfig within 1.0s", err)
+        self.assertLess(wall, 3.0, wall)
+        # the mock has the second call; its layout is untouched, and so is our file
+        self.assertEqual(len(self.svc.calls), 2)
+        self.assertEqual([lm[5][0][0] for lm in self.lms()], ["eDP-1", "DP-1"])
+        self.assertEqual(self.state_bytes(), before)
+        # ...and the bus socket went back with it: the mock is holding the
+        # connection open (it never answered), so it drops only when our end
+        # closes -- which is cli.Session.close() running in its `finally`.
+        # `self.opened` still holds the MutterOutputs, so nothing here is the
+        # garbage collector's doing.
+        self.assertTrue(self.wait_dropped(), self.mock.conns)
+
+    def test_a_compositor_that_hangs_up_under_the_apply_leaks_no_socket(self):
+        """`hangup_on_apply=True`: gnome-shell is gone, mid-call.  One line, exit
+        1, and Session.close() still runs in its `finally`.
+
+        The peer going away does not close our end: dbus_mini's `_recv_chunk`
+        raises `Disconnected("bus closed the connection")` on the empty read and
+        leaves `Bus.sock` exactly where it was, so the only thing that can turn
+        it into None is `Bus.close()` -- which is why the assertion is on the
+        socket the session was holding and not on the mock's connection count
+        (the mock hung up itself, so that count would fall either way) nor on a
+        ResourceWarning (`self.opened` keeps the MutterOutputs alive, so an
+        unclosed socket would never be finalised inside the test)."""
+        self.svc.hangup_on_apply = True
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            with call_timeout(2.0):
+                code, out, err = self.run_cli("--output", "HDMI-1", "--off")
+            gc.collect()
+        self.assertEqual(code, 1)
+        self.assertEqual(out, "")
+        self.assertEqual(err.count("xrandr: "), 1, err)
+        self.assertIn("bus closed the connection", err)
+        self.assertEqual([str(w.message) for w in caught
+                          if issubclass(w.category, ResourceWarning)], [])
+        self.assertEqual(len(self.svc.calls), 1)
+        # the session's own bus, taken from the MutterOutputs run_cli built: our
+        # end is closed, and it was closed by us
+        self.assertIsNone(self.opened[-1].bus.sock)
+        self.assertTrue(self.wait_dropped(), self.mock.conns)
+
+    def test_the_three_faults_are_not_the_healthy_path(self):
+        """The control the three above need: same fixture, same command, a mock
+        that answers and emits -- and the run says nothing at all."""
+        code, out, err = self.run_cli("--output", "HDMI-1", "--off")
+        self.assertEqual((code, out, err), (0, "", ""))
+        self.assertEqual(len(self.applied()), 1)
+
+
 # ---------------------------------------------------------------- backend selection
 
 class SavedConfigurationFile(MutterCase):
@@ -1542,6 +1714,196 @@ class SavedConfigurationFile(MutterCase):
         self.assertEqual(code, 0)
         self.assertEqual(self.applied()[-1][1], 2)
         self.assertNotIn("wxrandr-backup", err)
+
+
+class _Pw:
+    """Just the field `pwd.getpwuid` is consulted for."""
+
+    def __init__(self, pw_dir):
+        self.pw_dir = pw_dir
+
+
+class SavedConfigurationFileAsAnotherUid(MutterCase):
+    """`--persistent` run by root against somebody else's session.
+
+    `ssh root@box wxrandr --persistent ...` and the same from cron are the
+    documented ways to drive a session that is not the caller's -- fwcommon's
+    session discovery exists for exactly that, and finds the Wayland socket, the
+    bus and the X cookie of the session's own uid.  The saved display
+    configuration was the one thing left reading the *process* environment: as
+    root `$HOME` is /root, so the file read, judged and copied was root's
+    `~/.config/monitors.xml`, which Mutter has never opened, while the file the
+    confirmed apply was about to rewrite -- the session user's -- was neither
+    read nor kept (F2.3).
+
+    Both homes are seeded here, with files that disagree: the session user's is
+    `monitors-gnome46-scaled.xml`, which Mutter's reader discards in logical
+    layout mode (the mode this fixture is in), and root's is
+    `monitors-gnome50.xml`, which it accepts.  So the sentence the run prints
+    names which file it really opened, and nobody has to trust a path.
+    """
+
+    def fixture(self):
+        return three_monitors()
+
+    def setUp(self):
+        super().setUp()
+        self.root_home = os.path.join(self.tmp, "root")
+        self.user_home = os.path.join(self.tmp, "sessionuser")
+        self.root_cfg = os.path.join(self.root_home, ".config")
+        self.user_cfg = os.path.join(self.user_home, ".config")
+        for d in (self.root_cfg, self.user_cfg):
+            os.makedirs(d)
+        self.root_path = os.path.join(self.root_cfg, "monitors.xml")
+        self.user_path = os.path.join(self.user_cfg, "monitors.xml")
+        self.root_bytes = self.seed(self.root_path, "monitors-gnome50.xml")
+        self.user_bytes = self.seed(self.user_path, "monitors-gnome46-scaled.xml")
+        # the environment of whoever typed the command, which is root's and not
+        # the session's: MutterCase pointed both at self.tmp
+        os.environ["XDG_CONFIG_HOME"] = self.root_cfg
+        self._home = os.environ.get("HOME")
+        os.environ["HOME"] = self.root_home
+        self.addCleanup(self._restore_home)
+        self.other = os.geteuid() + 1
+        self.other_gid = os.getegid() + 7       # deliberately not our own group
+
+    def _restore_home(self):
+        if self._home is None:
+            os.environ.pop("HOME", None)
+        else:
+            os.environ["HOME"] = self._home
+
+    def seed(self, path, fixture):
+        with open(os.path.join(ROOT, "tests", "fixtures", fixture), "rb") as f:
+            data = f.read()
+        with open(path, "wb") as f:
+            f.write(data)
+        return data
+
+    @contextlib.contextmanager
+    def session_of(self, uid):
+        """That uid owns the graphical session, and its home is `tmp/sessionuser`."""
+        with mock.patch("fwcommon.session.session_uid", return_value=uid), \
+                mock.patch.object(monitors_xml.pwd, "getpwuid",
+                                  lambda u: _Pw(self.user_home) if u == self.other
+                                  else (_ for _ in ()).throw(KeyError(u))):
+            yield
+
+    def config_dir(self, d):
+        return sorted(f for f in os.listdir(d) if f.startswith("monitors"))
+
+    def read(self, path):
+        with open(path, "rb") as f:
+            return f.read()
+
+    def test_it_is_the_session_users_file_that_is_read_and_copied(self):
+        """F2.3, the whole of it in one run: as root for somebody else's
+        session, `--persistent` reads, judges and copies *their*
+        `~/.config/monitors.xml` and never touches root's.
+
+        Measured on GNOME 46.0 (live-measurements.md): a confirmed persistent
+        apply makes Mutter rewrite that file whole, so the copy beside it --
+        `monitors.xml.wxrandr-backup` -- is the only remaining record of the
+        other layouts the user had saved.  Written to the wrong home it records
+        root's file and protects nothing."""
+        with self.session_of(self.other):
+            code, _out, err = self.run_cli("--persistent", "--output", "HDMI-1",
+                                           "--mode", "1024x768")
+        self.assertEqual(code, 0)
+        self.assertEqual(self.applied()[-1][1], 2)          # method 2 reached Mutter
+        # the judgement is about their file, not root's -- root's is a clean
+        # GNOME 50 file and would have produced no sentence at all
+        self.assertIn("GNOME has already discarded %s" % self.user_path, err)
+        self.assertIn("logical monitors not adjacent", err)
+        self.assertNotIn(self.root_path, err)
+        # the copy is next to their file, holds their bytes, and root's home is
+        # exactly as it was
+        self.assertEqual(self.config_dir(self.user_cfg),
+                         ["monitors.xml", "monitors.xml.wxrandr-backup"])
+        self.assertEqual(self.read(self.user_path + ".wxrandr-backup"),
+                         self.user_bytes)
+        self.assertEqual(self.config_dir(self.root_cfg), ["monitors.xml"])
+        self.assertEqual(self.read(self.root_path), self.root_bytes)
+        self.assertIn("kept in %s.wxrandr-backup" % self.user_path, err)
+
+    def test_a_copy_that_cannot_be_given_to_them_is_not_left_behind(self):
+        """The other half of the same problem: a copy root can write and they
+        cannot replace is a file in their config directory that their own next
+        `--persistent` will fail to overwrite.  `_owner` is patched rather than
+        the file really being theirs, because a test runner that is not root
+        cannot chown one -- and cannot be allowed to chown one either."""
+        with self.session_of(self.other), \
+                mock.patch.object(monitors_xml, "_owner",
+                                  lambda p: (self.other, self.other_gid)):
+            code, _out, err = self.run_cli("--persistent", "--output", "HDMI-1",
+                                           "--mode", "1024x768")
+        self.assertEqual(code, 0)                    # never a reason to fail the apply
+        self.assertEqual(self.applied()[-1][1], 2)
+        self.assertEqual(self.config_dir(self.user_cfg), ["monitors.xml"])
+        self.assertIn("no copy of %s could be kept for uid %d"
+                      % (self.user_path, self.other), err)
+        self.assertNotIn("kept in", err)
+        self.assertEqual(self.read(self.user_path), self.user_bytes)
+
+    def test_the_copy_gets_their_group_and_not_the_callers(self):
+        """The chown is `(uid, gid)` of the file it copied, not `(uid, -1)`.
+
+        root's primary group is root's, so a copy given only the right uid lands
+        as `them:root` in their `~/.config`: readable, and not the ownership of
+        the file it was copied from -- which is what the copy is for, since it
+        is what they will have to move back over `monitors.xml` themselves.
+        `os.chown` is recorded rather than made: this runner is not root, and a
+        test that could really chown would be a test that could change a file
+        outside its own directory."""
+        chowns = []
+        with self.session_of(self.other), \
+                mock.patch.object(monitors_xml, "_owner",
+                                  lambda p: (self.other, self.other_gid)), \
+                mock.patch.object(monitors_xml.os, "chown",
+                                  lambda p, u, g: chowns.append((p, u, g))):
+            code, _out, err = self.run_cli("--persistent", "--output", "HDMI-1",
+                                           "--mode", "1024x768")
+        self.assertEqual(code, 0)
+        self.assertEqual(len(chowns), 1, chowns)
+        path, uid, gid = chowns[0]
+        self.assertEqual((uid, gid), (self.other, self.other_gid))
+        self.assertEqual(path, self.user_path + ".wxrandr-backup.tmp")
+        # and, the chown having "worked", the copy is kept and said so
+        self.assertIn("kept in %s.wxrandr-backup" % self.user_path, err)
+        self.assertNotIn("no copy of", err)
+        self.assertEqual(self.read(self.user_path + ".wxrandr-backup"),
+                         self.user_bytes)
+
+    def test_our_own_session_still_reads_the_environment(self):
+        """Nothing changes for the ordinary run, which is every run but these:
+        the session's uid is ours, so `$XDG_CONFIG_HOME` is that session's own
+        and is what is read -- root's file here, and the clean one, so no
+        discarded-file sentence and the copy lands beside it."""
+        with self.session_of(os.geteuid()):
+            code, _out, err = self.run_cli("--persistent", "--output", "HDMI-1",
+                                           "--mode", "1024x768")
+        self.assertEqual(code, 0)
+        self.assertNotIn("GNOME has already discarded", err)
+        self.assertEqual(self.config_dir(self.root_cfg),
+                         ["monitors.xml", "monitors.xml.wxrandr-backup"])
+        self.assertEqual(self.read(self.root_path + ".wxrandr-backup"),
+                         self.root_bytes)
+        self.assertEqual(self.config_dir(self.user_cfg), ["monitors.xml"])
+
+    def test_an_account_that_no_longer_exists_falls_back_to_the_environment(self):
+        """A uid with no passwd entry (a session whose user has been deleted, or
+        a container with no passwd database) leaves `default_path` where it has
+        always been rather than building a path out of nothing."""
+        with mock.patch("fwcommon.session.session_uid", return_value=self.other), \
+                mock.patch.object(monitors_xml.pwd, "getpwuid",
+                                  side_effect=KeyError(self.other)):
+            code, _out, err = self.run_cli("--persistent", "--output", "HDMI-1",
+                                           "--mode", "1024x768")
+        self.assertEqual(code, 0)
+        self.assertNotIn("GNOME has already discarded", err)
+        self.assertEqual(self.config_dir(self.root_cfg),
+                         ["monitors.xml", "monitors.xml.wxrandr-backup"])
+        self.assertEqual(self.config_dir(self.user_cfg), ["monitors.xml"])
 
 
 class LayoutModeRot(MutterCase):

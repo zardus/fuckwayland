@@ -35,7 +35,6 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FIXTURES = os.path.join(ROOT, "tests", "fixtures")
 sys.path.insert(0, ROOT)
 
-from wxrandr import cli, core
 
 
 HELP_LINE = "Try 'xrandr --help' for more information.\n"

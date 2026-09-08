@@ -21,8 +21,11 @@ from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from wl_fake import wstr
+from fwcommon import procs
+from wxrandr import core
 from wxrandr import gamma as gammamod
 from wxrandr.core import State
 
@@ -51,6 +54,7 @@ class MockCompositor(threading.Thread):
         self.ramps = []              # every ramp received, in order
         self.acquires = 0
         self.refusals = 0
+        self.clients = []            # every accepted connection, for close()
         self.stop = False
         self.gamma_size = GAMMA_SIZE  # advertised LUT size (override to test)
 
@@ -60,16 +64,30 @@ class MockCompositor(threading.Thread):
                 conn, _ = self.srv.accept()
             except OSError:
                 return
+            self.clients.append(conn)
             threading.Thread(target=self._serve, args=(conn,),
                              daemon=True).start()
 
     def close(self):
+        """Stop listening *and* drop every client, which is what a compositor
+        exiting looks like from the other end: closing only the listening socket
+        leaves an established connection established, and the gamma holder --
+        whose whole job is to keep one -- would never notice."""
         self.stop = True
         try:
             self.srv.shutdown(socket.SHUT_RDWR)
         except OSError:
             pass
         self.srv.close()
+        for conn in self.clients:
+            try:
+                conn.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            try:
+                conn.close()
+            except OSError:
+                pass
 
     # -- wire helpers --------------------------------------------------------
 
@@ -297,6 +315,60 @@ class GammaHolderTest(unittest.TestCase):
         # an explicit failure exits the holder; no orphan, so no record
         self.mock.gamma_size = 10_000_000
         self.set_gamma(0.5)
+        self.assertNotIn("HEADLESS-1", self.state.gamma())
+
+
+    def test_11_a_holder_whose_compositor_died_exits_by_itself(self):
+        """The gamma control dies with the client connection, so a holder whose
+        compositor has gone is holding nothing -- and a process holding nothing
+        for ever is the orphan fwcommon.procs exists to prevent.  It ends itself:
+        `holder_main`'s dispatch loop sees the connection close and returns,
+        and `spawn_detached`'s grandchild `os._exit(0)`s after it.
+
+        Measured on a live holder here: its open fds are 0/1/2 on /dev/null and
+        two sockets, nothing else -- so nothing but the connection keeps it
+        alive, and nothing but the connection has to end for it to go."""
+        self.assertIsNone(self.set_gamma(0.5))
+        pid = self.state.gamma()["HEADLESS-1"]["pid"]
+        self.assertTrue(wait_for(lambda: self.mock.ramps))
+        self.assertTrue(_alive(pid))
+        self.mock.close()                    # the compositor exits
+        self.assertTrue(wait_for(lambda: not _alive(pid), 8.0),
+                        "holder %d outlived its compositor" % pid)
+
+    def test_12_a_dead_holders_record_is_signalled_by_nothing(self):
+        """What is left after test_11: a record naming a process that is gone.
+
+        Two things follow from it and neither may guess.  `stop_holder` must
+        signal nothing at all -- the pid is free to be reused, and killing
+        whatever has it next is the one thing worse than leaving a holder --
+        and `--verbose` must stop reporting the gamma that holder set, because
+        the compositor restored the neutral ramp when the connection closed and
+        0.50 would be a lie about the screen in front of the user."""
+        self.assertIsNone(self.set_gamma(0.5))
+        rec = dict(self.state.gamma()["HEADLESS-1"])
+        pid = rec["pid"]
+        self.mock.close()
+        self.assertTrue(wait_for(lambda: not _alive(pid), 8.0))
+
+        # the record is still there, and the render is judged on it
+        out = core.OutputState(name="HEADLESS-1", active=True, ident=0x42)
+        lines = core.render_verbose_block(out, self.state, 0)
+        self.assertIn("\tGamma:      1.0:1.0:1.0", lines)
+        self.assertIn("\tBrightness: 1.0", lines)
+        # ...and with the holder alive it is the holder's numbers, so the line
+        # above is a fallback and not a constant
+        self.state.gamma()["HEADLESS-1"] = dict(rec, pid=os.getpid(),
+                                                start=procs.proc_starttime(os.getpid()))
+        live = core.render_verbose_block(out, self.state, 0)
+        self.assertIn("\tBrightness: 0.50", live)
+
+        self.state.gamma()["HEADLESS-1"] = rec
+        killed = []
+        with mock.patch.object(gammamod.procs.os, "kill",
+                               lambda p, s: killed.append((p, s))):
+            self.assertFalse(gammamod.stop_holder(self.state, "HEADLESS-1"))
+        self.assertEqual(killed, [])
         self.assertNotIn("HEADLESS-1", self.state.gamma())
 
 

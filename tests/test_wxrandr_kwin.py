@@ -25,10 +25,13 @@ import struct
 import sys
 import tempfile
 import threading
+import time
 import unittest
+from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from fwcommon import session as wsession
 from fwcommon.wayland_mini import Cursor
@@ -483,6 +486,15 @@ class _Client(threading.Thread):
                                % h["name"])
                     return
             svc.heads = [pend[h["gname"]] for h in svc.heads]
+        if svc.swallow_apply:
+            # KWin took the configuration, applied it -- and therefore saved it,
+            # which is the only thing it ever does with one -- and then never
+            # sent `applied` or `failed`.  The layout on the screen has moved
+            # and the client has nothing to go on but its own deadline.
+            self.refresh()
+            for c in list(svc.clients):
+                c.send_order()
+            return
         self.send(msg(cid, 0))                       # applied
         self.refresh()
         for c in list(svc.clients):
@@ -514,6 +526,10 @@ class KwinOutputServer:
         self.applied = []         # request lists that reached `apply`
         self.primary_requested = None
         self.fail_next = None     # reason string for the next apply
+        #: True: every apply lands (and is therefore saved) and is never
+        #: answered -- the compositor half of a wedged apply, which only the
+        #: client's own APPLY_TIMEOUT ends.  See HostileKwin.
+        self.swallow_apply = False
         self.invalidate_once = False
         self.withhold_done = None  # output name whose `done` never comes
         self.clients = []
@@ -2133,6 +2149,77 @@ class Mirroring(KwinCase):
         code, _out, err = self.run_cli(*line.split()[1:])
         self.assertEqual((code, self.strip_save(err)), (0, ""))
         self.assertEqual((self.svc.layout(), self.svc.mirrors()), before)
+
+
+class HostileKwin(KwinCase):
+    """KWin takes the configuration, applies it -- and never answers.
+
+    `_send` waits `kwin.APPLY_TIMEOUT` (10.0 in wxrandr/kwin.py, patched to 1.0
+    here) for `applied` or `failed` and then gives up.  The compositor half of
+    that is `KwinOutputServer.swallow_apply`, which folds the requests into the
+    fake's heads -- KWin has no temporary mode, so a layout it applies is a
+    layout it has already written to kscreen's configuration -- and sends
+    neither event.
+
+    Measured on Plasma 6.6/KWin 6.6.6 (resolute-kde, live-measurements.md): an
+    ordinary `wxrandr --off/--auto` prints KWin's "applies and saves this layout
+    immediately" notice plus the exact restore command line.  Those two lines
+    are what a user has instead of an undo, and `_warn_saved()` is reached only
+    after `_send()` returns."""
+
+    def swallowed(self, *argv, timeout=1.0):
+        self.svc.swallow_apply = True
+        started = time.monotonic()
+        with mock.patch.object(kwin, "APPLY_TIMEOUT", timeout):
+            code, out, err = self.run_cli(*argv)
+        return code, out, err, time.monotonic() - started
+
+    def test_a_swallowed_apply_ends_on_our_own_deadline(self):
+        """The deadline is ours, not KWin's: the compositor here has taken the
+        configuration and will never send `applied` or `failed`, and the only
+        thing that ends the wait is `kwin.APPLY_TIMEOUT` (10.0 in
+        wxrandr/kwin.py; 1.0 here, so the wall clock lands in 0.9-3.0 s).
+
+        The screen moved anyway, which is the fact that makes this worth a test:
+        measured on Plasma 6.6/KWin 6.6.6 (live-measurements.md), KWin has no
+        temporary mode -- a layout it applies is one it has already written to
+        kscreen's configuration -- so `svc.applied` holds the request and DP-1
+        is really off while the user is being told nothing came back."""
+        before = (self.svc.layout(), self.svc.primary)
+        code, out, err, wall = self.swallowed("--output", "DP-1", "--off")
+        self.assertEqual((code, out), (1, ""))
+        self.assertEqual(err, "xrandr: timed out waiting for the compositor to "
+                              "apply the output configuration\n")
+        self.assertLess(wall, 3.0, wall)
+        self.assertGreater(wall, 0.9, wall)
+        # the request did reach the compositor, and the screen really did move
+        self.assertEqual(len(self.svc.applied), 1)
+        self.assertNotEqual((self.svc.layout(), self.svc.primary), before)
+        self.assertFalse(self.svc.by_name("DP-1")["enabled"])
+
+    @unittest.expectedFailure
+    def test_a_swallowed_apply_still_offers_the_way_back(self):
+        """No fix number covers this one, so it is written to fail.
+
+        T25 asks for the two save/restore lines plus the `xrandr:` line on a
+        swallowed apply, and today `_warn_saved()` is never reached: `_send()`
+        raises before it, so the run that moved the screen prints no way back to
+        where it was.  The tension it sits in is the K3 rule already pinned by
+        `Apply.test_a_failed_apply_claims_nothing_was_saved` -- a *refused*
+        apply must not claim KWin saved anything -- and a swallowed one is the
+        case where nobody knows which of the two happened.
+
+        When it lands, this is the whole of it: the notice, a restore line, and
+        a restore line that really is the inverse."""
+        before = (self.svc.layout(), self.svc.primary)
+        _code, _out, err, _wall = self.swallowed("--output", "DP-1", "--off")
+        self.assertIn("KWin applies and saves", err)
+        line = self.restore_line(err)
+        self.assertIsNotNone(line, err)
+        self.svc.swallow_apply = False
+        code, _out, err = self.run_cli(*line.split()[1:])
+        self.assertEqual((code, self.strip_save(err)), (0, ""))
+        self.assertEqual((self.svc.layout(), self.svc.primary), before)
 
 
 class Detection(unittest.TestCase):
