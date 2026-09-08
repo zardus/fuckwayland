@@ -1,0 +1,14 @@
+# Step files of vm/live-smoke.d/ that have no recording in this directory yet:
+# one token per line, the step file's own name without .sh.  A file is in this
+# list or it has a <flavor>-...-replay.txt here, never both and never neither --
+# tests/test_live_smoke.py (R31) is what says so, and vm/live-smoke.d/
+# selftest-offline.sh repeats the check in the shell.
+#
+# A recording is made by booting that flavor's golden once and running
+# vm/live-smoke.d/guest-capture.sh in it; on this host that is one VM at a time,
+# which is why the list is not empty.  The batch that first runs a flavor
+# deletes its own line here in the same commit that adds the recording.
+kde
+kde-x11
+sway
+xfce

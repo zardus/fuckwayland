@@ -11,6 +11,17 @@
 # ORDERING one: `wxrandr --listmonitors` lists Virtual-3, Virtual-2, Virtual-1
 # (sway's get_outputs order) where xrandr would list in output order.  Harmless,
 # and a parity nit for scripts that index monitors by position.
+#
+# The same file, unchanged, is what fedora44-sway (sway 1.11 on Fedora 44),
+# arch-sway (1:1.12) and nixos-sway (1.12) run.  All six tools were measured
+# identical on all three before any of those flavors existed -- the protocol
+# path is a compositor property and none of these distros moves a socket, a
+# global or a version string [recon2/fedora 3.1, recon2/arch 3.1, recon2/nixos].
+# What does differ is what is INSTALLED beside sway: Arch's archive carries
+# xdotool 4.20260303.1, the exact version the parity oracle compares against,
+# and Fedora's carries 3.20211022.1 like Ubuntu's [recon2/arch 2, recon2/fedora 7].
+# Neither changes a check here; both are why arch-sway is the flavor the
+# parity job runs on.
 
 SMOKE_PHASES="busrec install windows wm input display root nodialog"
 EDITOR_CLASS=foot

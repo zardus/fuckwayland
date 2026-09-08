@@ -16,7 +16,11 @@ deliberate break (`FAKE_VMCTL_OVERRIDE`) show exactly which line goes red.
 
 It is a test double for the SMOKE, never a substitute for the rig: it knows only
 what the capture recorded, `vm/live-smoke.d/selftest-offline.sh` is its only
-caller, and no measurement in this repository may rest on it.
+caller, and no measurement in this repository may rest on it.  It is deliberately
+distro-blind: the driver decides what to install from the flavor's
+`# vmctl-distro:` header and this answers `scp` with a bare 0 whatever the file
+was, so replaying a Fedora or Arch recording needs no rpm and no .pkg.tar.zst on
+the host.
 
 Transcript format (guest-capture.sh writes it, an override file uses it too):
 
@@ -163,11 +167,19 @@ def main(argv):
     if sub == "scp":
         return 0
     if sub == "shot":
-        # `shot <name> --all <out>` -> two heads, so that a step that reads the
-        # file list finds something; the bytes are a marker, not a screenshot.
+        # Two shapes, and they write different files.  `shot <name> --all <out>`
+        # is the per-phase screenshot and writes one file per head, `<out>-N.png`.
+        # `shot <name> <head> <file>` is what common.sh's head_dark() takes to
+        # `identify`, and it writes the file it was NAMED -- writing `<file>-0.png`
+        # instead left head_dark reading a path that was never created, so the
+        # flat-head check answered "not flat" whatever the recording said.
         out = rest[-1]
-        for i in (0, 1):
-            with open("%s-%d.png" % (out, i), "w", encoding="utf-8") as fh:
+        if "--all" in rest:
+            for i in (0, 1):
+                with open("%s-%d.png" % (out, i), "w", encoding="utf-8") as fh:
+                    fh.write("fake-vmctl screenshot placeholder\n")
+        else:
+            with open(out, "w", encoding="utf-8") as fh:
                 fh.write("fake-vmctl screenshot placeholder\n")
         return 0
     if sub in ("user", "ssh"):

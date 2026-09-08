@@ -81,11 +81,11 @@ EXPECTED = ["--output", "DP-1", "--primary", "--mode", "1920x1080",
             "--output", "HDMI-2", "--off"]
 ARANDR_MENU = ["Active", "Primary", "Resolution", "Orientation",
                "Refresh rate", "Reflection", "Mirror of"]
-BACKEND_MENU = ["Automatic", "X11 (xrandr)", "sway", "wlroots (wlr)",
-                "GNOME (mutter)", "KDE (kwin)"]
+BACKEND_MENU = ["Automatic", "X11 (xrandr)", "sway", "Hyprland (hypr)", "wlroots (wlr)",
+                "GNOME (mutter)", "Cinnamon (muffin)", "KDE (kwin)"]
 # what tests/fixtures/fake_xrandr.py simulates for `--backends`
-FAKE_AVAILABLE = {"sway": False, "kwin": False, "mutter": True,
-                  "wlr": False, "x11": True}
+FAKE_AVAILABLE = {"sway": False, "hypr": False, "kwin": False, "mutter": True,
+                  "cinnamon": False, "wlr": False, "x11": True}
 
 
 def _base_env(tmp, display):
@@ -537,8 +537,8 @@ class GuiDrive(GuiSession):
                          {lbl: lbl == "Automatic" for lbl in BACKEND_MENU})
         self.assertEqual(
             {lbl: menu["sensitive"][lbl] for lbl in BACKEND_MENU},
-            {"Automatic": True, "X11 (xrandr)": True, "sway": False,
-             "wlroots (wlr)": False, "GNOME (mutter)": True,
+            {"Automatic": True, "X11 (xrandr)": True, "sway": False, "Hyprland (hypr)": False,
+             "wlroots (wlr)": False, "GNOME (mutter)": True, "Cinnamon (muffin)": False,
              "KDE (kwin)": False})
         # a Wayland driver only gets the model, so the indicator's popup has
         # to report one: it is popped at the pointer, like the canvas menus
@@ -583,8 +583,8 @@ class GuiDrive(GuiSession):
                          {lbl: lbl == "Automatic" for lbl in BACKEND_MENU})
         self.assertEqual(
             {lbl: menu["sensitive"][lbl] for lbl in BACKEND_MENU},
-            {"Automatic": True, "X11 (xrandr)": True, "sway": False,
-             "wlroots (wlr)": False, "GNOME (mutter)": True,
+            {"Automatic": True, "X11 (xrandr)": True, "sway": False, "Hyprland (hypr)": False,
+             "wlroots (wlr)": False, "GNOME (mutter)": True, "Cinnamon (muffin)": False,
              "KDE (kwin)": False})
         self.assertEqual(menu["tooltips"]["sway"],
                          "not available in this session: no sway or i3 IPC "
@@ -1316,7 +1316,7 @@ class BackendCli(unittest.TestCase):
         p = self.warandr("--backend", "banana", "--print-backend")
         self.assertEqual((p.returncode, p.stdout), (1, ""))
         self.assertEqual(p.stderr, "warandr: unknown backend 'banana' "
-                         "(valid: auto, x11, sway, wlr, mutter, kwin)\n")
+                         "(valid: auto, x11, sway, hypr, wlr, mutter, cinnamon, kwin)\n")
         self.assertNotIn("Traceback", p.stderr)
 
     def test_help_lists_the_new_options(self):

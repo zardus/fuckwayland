@@ -16,14 +16,24 @@
 #     --reuse         reuse the existing instance and whatever is installed in
 #                     it; skips start --fresh and the install phase.  This is
 #                     the iteration mode -- gnome46/gnome50/kde66/sway1 already
-#                     carry a .deb -- and NOT the mode a release is measured in
-#     --deb           install release/fuckwayland_0.4.0_all.deb and nothing
-#                     else (the packaging axis).  The default deploys the
-#                     WORKING TREE over the .deb: scripts/build-pyz.sh into
-#                     /usr/local/bin the way repro/deploy-to-vm.sh does, plus
-#                     gnome/fuckwayland-bridge@fuckwayland over the package's
-#                     copy, because the tree carries fixes the shipped .deb
-#                     does not (b7a60f0's maximize pair among them)
+#                     carry a package -- and NOT the mode a release is measured
+#                     in
+#     --pkg           install the DISTRIBUTION PACKAGE and nothing else (the
+#                     packaging axis).  Which package is decided by the flavor's
+#                     `# vmctl-distro:` header, never by this script's own idea
+#                     of what the guest is:
+#                       ubuntu  release/fuckwayland_<ver>_all.deb
+#                       fedora  $LIVE_SMOKE_RPMS/*.rpm -- default dist/, where
+#                               scripts/build-rpm.sh leaves the three noarch
+#                               rpms, and where the CI `rpm` job's artifact is
+#                               unpacked
+#                       arch    $LIVE_SMOKE_PKG -- default
+#                               dist/fuckwayland-<ver>-1-any.pkg.tar.zst
+#                       nixos   nothing is copied in: the package IS the image,
+#                               and phase install asserts the store path and the
+#                               specialisation instead
+#     --deb           the older spelling of --pkg.  Kept because every note,
+#                     log and habit in this tree predates Fedora and Arch
 #     --heads N       monitors (default 2; the display and overlap phases need
 #                     two, the layout phases do not care)
 #     --cpus N        vCPUs (default 2)   } this host runs seven other agents
@@ -35,12 +45,18 @@
 #                     scale axis: 1.0 first, then 2 on the same instance)
 #     --keep          leave the instance running at the end (default: stop it,
 #                     because the memory rule on this host is ONE VM at a time)
-#     --remove        after the phases, `apt-get remove -y fuckwayland` and
-#                     check that every piece of it went: the files, the
-#                     autostart symlink, the stamp, both extensions, and the
-#                     grant on /dev/uinput.  Only meaningful with --deb: the
-#                     default mode installs the working tree over the package
-#                     into /usr/local/bin, which apt does not own
+#     --remove        after the phases, remove the package with the flavor's own
+#                     package manager and check that every piece of it went: the
+#                     files, the autostart symlink, the stamp, both extensions,
+#                     and the grant on /dev/uinput.  Only meaningful with --pkg:
+#                     the default mode installs the working tree over the
+#                     package into /usr/local/bin, which no package manager owns
+#
+# The default mode (neither --pkg nor --deb) deploys the WORKING TREE over the
+# package: scripts/build-pyz.sh into /usr/local/bin the way repro/deploy-to-vm.sh
+# does, plus gnome/fuckwayland-bridge@fuckwayland over the package's copy,
+# because the tree carries fixes the shipped package does not (b7a60f0's
+# maximize pair among them).
 #
 # Results land in vm/live-smoke.out/<flavor>-<date>.log with a screenshot of
 # every head per phase next to it in <flavor>-<date>-shots/.
@@ -52,10 +68,29 @@ REPO=$(dirname "$HERE")
 # exercise these phases with no VM at all.  Nothing but that self-test may set it.
 VM=${LIVE_SMOKE_VMCTL:-$HERE/vmctl}
 STEPS=$HERE/live-smoke.d
-DEB=$REPO/release/fuckwayland_0.4.0_all.deb
+# One version, read where fwcommon keeps it, so that the .deb name and the
+# NixOS store-path assertion cannot drift from the tree they are measuring.
+VERSION=$(sed -n 's/^VERSION = "\(.*\)"$/\1/p' "$REPO/fwcommon/__init__.py" | head -1)
+DEB=$REPO/release/fuckwayland_${VERSION}_all.deb
+#: The two directories the non-Debian packages come out of.  dist/ is where
+#: scripts/build-rpm.sh and scripts/build-pkgbuild.sh put them (their own
+#: --help says so) and where CI's artifacts are unpacked.
+LIVE_SMOKE_RPMS=${LIVE_SMOKE_RPMS:-$REPO/dist}
+LIVE_SMOKE_PKG=${LIVE_SMOKE_PKG:-$REPO/dist/fuckwayland-${VERSION}-1-any.pkg.tar.zst}
 
+# The usage block is the comment above, printed without its `# `.  Read by line
+# CONTENT and not by line NUMBER: every previous edit to this header moved the
+# `sed -n '2,47p'` that used to print it and nobody noticed until it printed
+# half the code.
+usage() { awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; }
+
+# -h/--help is answered BEFORE the flavor is read: it is the one argument that
+# is not a flavor, and taking $1 first made `live-smoke.sh --help` print "no
+# flavor --help (vm/flavors/--help.yaml)" and exit 2, with the -h arm of the
+# option loop below unreachable.
+case ${1:-} in -h|--help) usage; exit 0 ;; esac
 FLAVOR=${1:-}
-[ -n "$FLAVOR" ] || { sed -n '2,47p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+[ -n "$FLAVOR" ] || { usage; exit 2; }
 shift
 NAME=""; MODE=tree; REUSE=0; HEADS=2; CPUS=2; MEM=3G; KEEP=0; SCALE=0; REMOVE=0
 ONLY=""; SKIP=""; LIST=0
@@ -63,7 +98,11 @@ while [ $# -gt 0 ]; do
     case $1 in
         --name)   NAME=$2; shift 2 ;;
         --reuse)  REUSE=1; shift ;;
-        --deb)    MODE=deb; shift ;;
+        # One mode, two spellings: --deb is what the hand smoke and every note
+        # in vm/live-smoke.out/ says, and it now means "the package this
+        # flavor's distro installs", which on every Ubuntu flavor is still a
+        # .deb.  No count here on purpose -- vm/flavors/ grows every batch.
+        --pkg|--deb) MODE=pkg; shift ;;
         --heads)  HEADS=$2; shift 2 ;;
         --cpus)   CPUS=$2; shift 2 ;;
         --mem)    MEM=$2; shift 2 ;;
@@ -73,17 +112,140 @@ while [ $# -gt 0 ]; do
         --scale)  SCALE=1; shift ;;
         --keep)   KEEP=1; shift ;;
         --remove) REMOVE=1; shift ;;
-        -h|--help) sed -n '2,47p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) usage; exit 0 ;;
         *) echo "live-smoke.sh: unknown option $1" >&2; exit 2 ;;
     esac
 done
 NAME=${NAME:-$FLAVOR-smoke}
 [ -f "$HERE/flavors/$FLAVOR.yaml" ] || { echo "no flavor $FLAVOR (vm/flavors/$FLAVOR.yaml)" >&2; exit 2; }
-# The desktop, from the flavor's own `# vmctl-desktop:` header -- the same
-# lookup vm/selftest.sh does, so a new flavor needs no edit here.
+# The desktop and the distro, from the flavor's own headers -- the same two
+# `sed -n 's/^#[[:space:]]*vmctl-<key>:...'` lookups vmctl, selftest.sh and
+# ci-golden.sh do, so a new flavor needs no edit here.
 DESKTOP=$(sed -n 's/^#[[:space:]]*vmctl-desktop:[[:space:]]*//p' "$HERE/flavors/$FLAVOR.yaml" | head -1)
 DESKTOP=${DESKTOP:-gnome}
+DISTRO=$(sed -n 's/^#[[:space:]]*vmctl-distro:[[:space:]]*//p' "$HERE/flavors/$FLAVOR.yaml" | head -1)
+DISTRO=${DISTRO:-ubuntu}
 [ -f "$STEPS/$DESKTOP.sh" ] || { echo "no step file $STEPS/$DESKTOP.sh for desktop $DESKTOP" >&2; exit 2; }
+
+# ------------------------------------------------------- the package axis
+# Four packagings, one procedure.  Each of the four functions below answers for
+# the flavor's `# vmctl-distro:` and nothing else looks at $DISTRO, so adding a
+# distro is four arms and no new branch anywhere in the phases.
+# tests/test_live_smoke.py (R14) slices all four and runs them.
+
+# The host-side files to copy in, space separated; empty on NixOS, where there
+# is nothing to copy: the module is already in the image (vm/nixos/common.nix).
+pkg_files() {
+    case "$DISTRO" in
+    ubuntu) echo "$DEB" ;;
+    # The three noarch rpms of one build, whichever names they carry: the
+    # subpackages are named after the extensions, so the names are a glob --
+    # but the VERSION is pinned the way the deb and the pkg arms pin theirs.
+    # scripts/build-rpm.sh copies every RPMS/noarch/*.rpm into dist/ and never
+    # clears it, so a dist/ that still holds the previous build would otherwise
+    # hand `dnf install` two versions of each name and fail.
+    fedora) ls "$LIVE_SMOKE_RPMS"/*-"$VERSION"-*.rpm 2>/dev/null | tr '\n' ' ' || true ;;
+    arch)   echo "$LIVE_SMOKE_PKG" ;;
+    nixos)  echo "" ;;
+    esac
+}
+
+# The root command that installs what pkg_files copied into /tmp.
+pkg_install_cmd() {
+    case "$DISTRO" in
+    ubuntu) echo "cd /tmp && DEBIAN_FRONTEND=noninteractive apt-get install -y ./fw.deb 2>&1" ;;
+    # The bridge subpackage is named EXPLICITLY: its `Supplements: gnome-shell`
+    # fires only where gnome-shell is installed, and fedora44-sway has none
+    # [packaging/rpm/fuckwayland.spec].  The overlap subpackage rides along the
+    # same way.
+    fedora) echo "cd /tmp && dnf install -y ./fuckwayland-*.rpm \
+./gnome-shell-extension-fuckwayland-bridge-*.rpm ./gnome-shell-extension-fuckwayland-overlap-*.rpm 2>&1" ;;
+    arch)   echo "cd /tmp && pacman -U --noconfirm ./fuckwayland-*.pkg.tar.zst 2>&1" ;;
+    # Nothing is installed on NixOS: switching INTO the default specialisation
+    # is the install, and the image boots into it already.
+    nixos)  echo "" ;;
+    esac
+}
+
+# The root command that takes it away again.
+pkg_remove_cmd() {
+    case "$DISTRO" in
+    ubuntu) echo "DEBIAN_FRONTEND=noninteractive apt-get remove -y fuckwayland 2>&1" ;;
+    # The subpackages go with it through their `Requires: fuckwayland = %{version}`.
+    fedora) echo "dnf remove -y fuckwayland 2>&1" ;;
+    arch)   echo "pacman -R --noconfirm fuckwayland 2>&1" ;;
+    # The offline, in-guest analogue of a removal: the other specialisation is
+    # the same system with programs.fuckwayland off, and switch-to-configuration
+    # reloads the udev rules and swaps the system path in one step -- no
+    # network, no rebuild [vm/nixos/common.nix, plan B 1.4].
+    nixos)  echo "/run/current-system/specialisation/without-fuckwayland/bin/switch-to-configuration test 2>&1" ;;
+    esac
+}
+
+# Every path the packaging owned, one per line: what `ls -d` must find nothing
+# of after the removal.  The libexec path is the one line that differs between
+# packagings -- /usr/lib on dpkg and pacman, /usr/libexec on rpm (Fedora's
+# guidelines), the system profile on NixOS -- and it is why this is a table.
+pkg_left_behind() {
+    local ext=/usr/share/gnome-shell/extensions
+    case "$DISTRO" in
+    ubuntu|arch) echo "/usr/lib/fuckwayland" ;;
+    fedora)      echo "/usr/libexec/fuckwayland" ;;
+    nixos)       ext=/run/current-system/sw/share/gnome-shell/extensions ;;
+    esac
+    case "$DISTRO" in
+    nixos) : ;;
+    *) echo "/var/lib/fuckwayland"
+       echo "/etc/xdg/autostart/fuckwayland-enable-bridge.desktop" ;;
+    esac
+    echo "$ext/fuckwayland-bridge@fuckwayland"
+    echo "$ext/fuckwayland-overlap@fuckwayland"
+}
+
+# Copy what pkg_files names into the guest's /tmp, under the names the install
+# command above expects.  A FAIL and a nonzero status when a package that
+# should be there is not, so the caller says it once and goes on.
+pkg_deploy() {
+    local f n=0
+    for f in $(pkg_files); do
+        [ -f "$f" ] || { fail "no package at $f (scripts/build-deb.sh, build-rpm.sh or build-pkgbuild.sh first)"
+                         return 1; }
+        case "$f" in
+        *.deb) "$VM" scp "$NAME" "$f" "$NAME:/tmp/fw.deb" >/dev/null ;;
+        *)     "$VM" scp "$NAME" "$f" "$NAME:/tmp/$(basename "$f")" >/dev/null ;;
+        esac
+        n=$((n + 1))
+    done
+    if [ "$DISTRO" != nixos ] && [ "$n" = 0 ]; then
+        fail "no package for distro $DISTRO (LIVE_SMOKE_RPMS=$LIVE_SMOKE_RPMS, LIVE_SMOKE_PKG=$LIVE_SMOKE_PKG)"
+        return 1
+    fi
+    return 0
+}
+
+# The first-install banner, as an extended regex, or empty where the packaging
+# deliberately prints none.  dpkg's postinst and pacman's .install carry the
+# same paragraph, byte for byte, and its loudest line is this one; the rpm
+# carries no banner at all -- Fedora discourages chatty scriptlets and the spec
+# ships README.Fedora in %doc instead [recon2/pkg-rpm 292, packaging/rpm/
+# fuckwayland.spec], so phase_install checks for that file there.
+pkg_banner_re() {
+    case "$DISTRO" in
+    ubuntu|arch) echo "LOG OUT AND BACK IN ONCE" ;;
+    *)           echo "" ;;
+    esac
+}
+
+# The two phases that belong to a DISTRO rather than to a desktop, appended to
+# whatever the step file asked for so that no step file has to know what it is
+# running on (plan B 2.1).  `--phases` and `--skip` still win over both.
+distro_phases() {
+    case "$DISTRO" in
+    fedora) echo "selinux pkgverify" ;;
+    arch)   echo "pkgverify" ;;
+    *)      echo "" ;;
+    esac
+}
 
 # ---------------------------------------------------------------- output
 # `--list-phases` answers before any of this: it is a question about the step
@@ -93,7 +255,7 @@ if [ "$LIST" = 1 ]; then
     . "$STEPS/common.sh"
     # shellcheck source=/dev/null
     . "$STEPS/$DESKTOP.sh"
-    echo "$FLAVOR ($DESKTOP): $SMOKE_PHASES"
+    echo "$FLAVOR ($DESKTOP, $DISTRO): $(echo "$SMOKE_PHASES $(distro_phases)" | xargs)"
     exit 0
 fi
 STAMP=$(date +%Y%m%d-%H%M%S)
@@ -150,14 +312,15 @@ shot()   { "$VM" shot "$NAME" --all "$SHOTDIR/$1" >/dev/null 2>&1 && note "shots
 # shellcheck source=/dev/null
 . "$STEPS/$DESKTOP.sh"
 
-run_phases=$SMOKE_PHASES
+run_phases=$(echo "$SMOKE_PHASES $(distro_phases)" | xargs)
 [ -n "$ONLY" ] && run_phases=$(echo "$ONLY" | tr ',' ' ')
 for s in $(echo "$SKIP" | tr ',' ' '); do
     run_phases=$(echo "$run_phases" | tr ' ' '\n' | grep -vx "$s" | tr '\n' ' ')
 done
 
-echo "live-smoke $FLAVOR ($DESKTOP) instance $NAME, $(if [ $REUSE = 1 ]; then echo reuse; else echo fresh; fi),"\
-     "$(if [ $MODE = deb ]; then echo "$DEB only"; else echo 'working tree over the .deb'; fi)"
+echo "live-smoke $FLAVOR ($DESKTOP, $DISTRO) instance $NAME," \
+     "$(if [ $REUSE = 1 ]; then echo reuse; else echo fresh; fi)," \
+     "$(if [ $MODE = pkg ]; then echo "$(pkg_files) only"; else echo 'working tree over the package'; fi)"
 echo "phases: $run_phases"
 echo "log:    $LOG"
 
@@ -228,63 +391,109 @@ done
 PHASE=-
 
 # ------------------------------------------------------- the removal, last
-# `apt remove` is the other half of the packaging claim and the half nobody
-# ever runs: README.Debian says removing the package puts /dev/uinput back to
+# Removing the package is the other half of the packaging claim and the half
+# nobody ever runs: README.Debian says removing it puts /dev/uinput back to
 # root:root 0600 with no ACL, and until this existed that sentence had been
 # checked by reading debian/fuckwayland.postrm.  It runs after every phase
 # because it destroys the installation the phases measure, and only under
-# --deb: the default mode puts the tree's zipapps in /usr/local/bin, which
-# dpkg does not own and apt will not take away, so a removal there would
-# report files left behind that were never the package's.
+# --pkg: the default mode puts the tree's zipapps in /usr/local/bin, which no
+# package manager owns and none will take away, so a removal there would report
+# files left behind that were never the package's.
 #
 # What it asserts is what the hand smoke measured on resolute-gnome after
-# `apt-get remove -y fuckwayland`: nothing of ours under /usr/lib/fuckwayland,
-# no autostart symlink, no /var/lib/fuckwayland stamp, neither extension
-# directory, /dev/uinput back to root:root 0600 with no ACL entry and no
-# uaccess tag -- and, because the remove drops the stamp, a re-install printing
-# the first-install banner all over again.
+# `apt-get remove -y fuckwayland`: nothing of ours under the packaging's own
+# libexec directory, no autostart entry, no /var/lib/fuckwayland stamp, neither
+# extension directory, /dev/uinput back to root:root 0600 with no ACL entry and
+# no uaccess tag -- and, because the remove drops the stamp, a re-install
+# printing the first-install banner all over again.  The four packagings differ
+# in exactly two of those: which paths they owned (pkg_left_behind) and whether
+# they print a banner at all (pkg_banner_re).  The /dev/uinput half is
+# identical everywhere and is the point: the rpm's %postun and pacman's
+# post_remove run debian's revoke sequence token for token
+# [recon2/pkg-rpm, recon2/pkg-arch].
 phase_remove() {
-    local out st=0
-    out=$(root "DEBIAN_FRONTEND=noninteractive apt-get remove -y fuckwayland 2>&1") || st=$?
-    ok "apt-get remove -y fuckwayland" "$st"
+    local out st=0 cmd defsys=""
+    # NixOS only: the system we are about to LEAVE, resolved before we leave it.
+    # Activation ends in `ln -sfn "$(readlink -f "$systemConfig")"
+    # /run/current-system` and runs that line for `test` exactly as for `switch`
+    # [nixpkgs nixos/modules/system/activation/activation-script.nix:79, read in
+    # the local store 2026-09-08], so the moment the switch into
+    # without-fuckwayland lands, /run/current-system IS that child -- and a
+    # child carries no `specialisation/` of its own, which is the very fact
+    # phase_install asserts.  Switching "back" through /run/current-system would
+    # re-activate the child and leave the tools off PATH.  /run/booted-system is
+    # the fallback because stage 2 sets it once and activation never touches it.
+    if [ "$DISTRO" = nixos ]; then
+        defsys=$(guest 'readlink -f /run/current-system' | tr -d ' \r' || true)
+        [ -n "$defsys" ] || defsys=/run/booted-system
+        note "the default system to switch back into is $defsys"
+    fi
+    cmd=$(pkg_remove_cmd)
+    out=$(root "$cmd") || st=$?
+    ok "$cmd" "$st"
+    # Every `$( ... )` below ends in `|| true`, and that is not decoration:
+    # `root` hands back the guest command's own status, `ls -d` with nothing to
+    # list exits 2, `grep -l` with no match exits 1, and `command -v` exits 1
+    # for a name that is gone -- which is the PASSING case for all three.  Under
+    # the driver's `set -euo pipefail` the assignment would then abort the phase
+    # before its own `same` ran, so a clean removal used to be reported as a
+    # phase that "returned 1" with none of its six checks printed.
     local left
-    left=$(root "ls -d /usr/lib/fuckwayland /var/lib/fuckwayland \
-                       /etc/xdg/autostart/fuckwayland-enable-bridge.desktop \
-                       /usr/share/gnome-shell/extensions/fuckwayland-bridge@fuckwayland \
-                       /usr/share/gnome-shell/extensions/fuckwayland-overlap@fuckwayland \
-                       2>/dev/null | tr '\n' ' '")
+    left=$(root "ls -d $(pkg_left_behind | tr '\n' ' ') 2>/dev/null | tr '\n' ' '" || true)
     same "every path the package owned is gone" "" "$(printf '%s' "$left" | tr -d ' \r')"
-    # The six names go with it: usr/bin is dpkg's, so `command -v` finding one
-    # afterwards is a leftover (or a pip install nobody mentioned).
+    # The six names go with it: /usr/bin is the package manager's, so
+    # `command -v` finding one afterwards is a leftover (or a pip install
+    # nobody mentioned).
     same "no tool of ours is on PATH any more" "" \
          "$(guest 'for t in wdotool wwmctl wxprop wxrandr warandr wmirror; do command -v $t; done 2>/dev/null' \
-              | tr -d ' \n\r')"
-    # The node: postrm removes the ACL entry rather than masking it, because
-    # udev's uaccess builtin only ever ADDS entries and a left-over one would
-    # make the next install a no-op and leave input broken.
+              | tr -d ' \n\r' || true)"
+    # The node: the removal scriptlet removes the ACL entry rather than masking
+    # it, because udev's uaccess builtin only ever ADDS entries and a left-over
+    # one would make the next install a no-op and leave input broken.
     same "/dev/uinput is back to root:root 0600" "root:root 600" \
-         "$(root "stat -c '%U:%G %a' /dev/uinput 2>/dev/null" | tr -d '\r')"
+         "$(root "stat -c '%U:%G %a' /dev/uinput 2>/dev/null" | tr -d '\r' || true)"
     wantnot "no ACL entry is left on /dev/uinput" "^user:[^:]+:" \
             "$(root 'getfacl -p /dev/uinput 2>/dev/null' || true)"
     same "no uaccess tag is left for the node" "" \
-         "$(root "grep -l uinput /run/udev/tags/uaccess/* 2>/dev/null" | tr -d ' \n\r')"
+         "$(root "grep -l uinput /run/udev/tags/uaccess/* 2>/dev/null" | tr -d ' \n\r' || true)"
     # dh_python3 byte-compiles into dist-packages and nowhere else; a
-    # __pycache__ under /usr/lib/fuckwayland or /usr/bin is py3compile having
+    # __pycache__ under the libexec directory or /usr/bin is py3compile having
     # been pointed at the wrong tree, and it outlives the remove because dpkg
-    # does not own it.
-    same "py3compile left no __pycache__ outside dist-packages" "" \
-         "$(root "find /usr/lib/fuckwayland /usr/bin -name __pycache__ 2>/dev/null" | tr -d ' \n\r')"
+    # does not own it.  %pyproject_save_files and the PKGBUILD's `python -m
+    # installer` have the same failure mode, so the check is not Debian's alone.
+    same "byte-compilation left no __pycache__ outside dist-packages" "" \
+         "$(root "find $(pkg_left_behind | head -1) /usr/bin -name __pycache__ 2>/dev/null" \
+              | tr -d ' \n\r' || true)"
+    # Putting it back.  On NixOS that is the same switch in the other direction,
+    # through the store path captured at the top of the phase and NOT through
+    # /run/current-system, which the removal has just repointed at the child.
+    # There is no banner and no package to copy either, so this arm returns
+    # before pkg_deploy; without it the phase would run `root ""`, get 0, and
+    # call that a re-install.
+    if [ "$DISTRO" = nixos ]; then
+        st=0; out=$(root "$defsys/bin/switch-to-configuration test 2>&1") || st=$?
+        ok "switching back into the default specialisation" "$st"
+        want "the tools are on PATH again" "/run/current-system/sw/bin/wdotool" \
+             "$(guest 'command -v wdotool' | tr -d ' \r' || true)"
+        return 0
+    fi
     # A remove takes the stamp with it, so the next install is a first install
-    # and owes the user the relogin sentence again.
-    "$VM" scp "$NAME" "$DEB" "$NAME:/tmp/fw.deb" >/dev/null
-    out=$(root "cd /tmp && apt-get install -y ./fw.deb 2>&1") || true
-    want "installing again prints the first-install banner again" \
-         "LOG OUT AND BACK IN ONCE" "$out"
+    # and owes the user the relogin sentence again -- where the packaging prints
+    # one at all.
+    pkg_deploy || return 0
+    st=0; out=$(root "$(pkg_install_cmd)") || st=$?
+    ok "installing again" "$st"
+    local banner; banner=$(pkg_banner_re)
+    if [ -n "$banner" ]; then
+        want "installing again prints the first-install banner again" "$banner" "$out"
+    else
+        note "($DISTRO's packaging prints no banner; the rpm's advice went into README.Fedora, nothing to re-read)"
+    fi
 }
 
 if [ "$REMOVE" = 1 ]; then
-    if [ "$MODE" != deb ]; then
-        note "--remove needs --deb (the tree's zipapps in /usr/local/bin are not dpkg's); skipped"
+    if [ "$MODE" != pkg ]; then
+        note "--remove needs --pkg (the tree's zipapps in /usr/local/bin belong to no package manager); skipped"
     else
         PHASE=remove
         step "phase remove"

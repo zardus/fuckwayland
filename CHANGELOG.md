@@ -161,7 +161,7 @@ by using the tools on one rather than by reading them.
   that `Shell.WM.complete_display_change` is a no-op with nothing pending -- had
   claimed with no evidence behind it. The dialog's own buttons still work afterwards.
   Nothing needed fixing, and `gnome/README.md` no longer lists this as never exercised.
-- **3174 tests**, up from 2262, the new ones being the daemon's two ways of ending,
+- **4146 tests**, up from 2262, the new ones being the daemon's two ways of ending,
   the chord the layout cannot produce, the pin carried on the request, the guards
   around the saved display configuration, every refusal of the overlap route
   classified and then re-run with the forcing option to see which of them it changes,

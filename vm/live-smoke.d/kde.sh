@@ -12,8 +12,37 @@
 # There is no bridge, no overlap route and no monitors.xml here, so those phases
 # are simply not in the list; `kwin` is this desktop's own extra phase (T60).
 
-SMOKE_PHASES="busrec install windows wm input display kwin root nodialog"
+# `dm` is the one phase that is here for a distro rather than for Plasma:
+# Fedora 44 replaced SDDM with plasma-login-manager in every KDE variant, and
+# vm/build-image.sh's dm_plasma writes one autologin file or the other by which
+# one the packages created.  Which one actually seated the session is a thing
+# only the guest can say.
+SMOKE_PHASES="busrec install dm windows wm input display kwin root nodialog"
 EDITOR_CLASS=kate
+
+# The greeter that logged the session in, from logind's own record of it.
+# The regex is a PREFIX and not `^sddm$` on purpose: what was measured is
+# `Service=sddm-autologin` on the SDDM-autologin guest of the openbox recon
+# [recon2/openbox 97, `loginctl show-session 1` -> Service=sddm-autologin
+# Type=x11], because autologin's PAM service carries the suffix.  No live-smoke
+# log in vm/live-smoke.out/ carries a Service line at all -- the three noble-kde
+# runs predate this phase -- so Ubuntu's Plasma being seated by sddm is a `want`
+# on that recon and on nothing else.  Fedora 44 is seated by plasmalogin.service
+# instead, whose autologin keys were read out of the plasma-login-manager rpm's
+# /etc/plasmalogin.conf template and never run [recon2/fedora 5], so that half
+# is an `xwant` until the first fedora44-kde golden builds and says XPASS.
+phase_dm() {
+    local svc
+    svc=$(guest 'loginctl show-session "${XDG_SESSION_ID:-auto}" -p Service --value 2>/dev/null' \
+            | tr -d ' \r' || true)
+    note "logind says this session's Service is '${svc:-<empty>}'"
+    if [ "$DISTRO" = fedora ]; then
+        xwant "plasma-login-manager seated the session (until fedora44-kde builds once)" \
+              "^plasmalogin" "$svc"
+    else
+        want "sddm seated the session" "^sddm" "$svc"
+    fi
+}
 
 # Kate needs a document or it opens on nothing and swallows the typing: `-n`
 # forces a new instance so a second start does not attach to the first.

@@ -15,10 +15,14 @@ reads the fd — no protocol extension, no privileges, nothing to install.
 
 *Which* of that keymap's groups is active is the one thing the protocol keeps
 from us: `wl_keyboard.modifiers` carries it and reaches only the window with
-keyboard focus. sway sends it anyway; KWin answers the same question on the
-session bus (see `KwinLayouts`) and GNOME publishes it as a setting the portal
-serves (see `GnomeInputSources`); everywhere else the group is inferred, and
-`Snapshot.group_known` says which of the two happened.
+keyboard focus. sway sends it anyway, and so does COSMIC on a protocol of its
+own (`zcosmic_keyboard_layout_manager_v1`, whose `group` event says in the XML
+that it arrives with no focused window). The rest are asked outright: KWin on
+the session bus (`KwinLayouts`), GNOME through the portal that serves its
+setting (`GnomeInputSources`), Hyprland and Wayfire over the same IPC sockets
+their window backends use (`HyprLayouts`, `WayfireLayouts`) and Cinnamon
+through `org.Cinnamon.Eval` (`CinnamonInputSources`). Everywhere else the
+group is inferred, and `Snapshot.group_known` says which of the two happened.
 
     snap = fetch()                               # text + active group
     if not active_group_is_plain_us(snap.text, snap.group):
@@ -29,7 +33,10 @@ Layout of this module:
   * fetch()                      Wayland: keymap text + active group
   * kwin_group()                 KDE: the active group, off the session bus
   * gnome_group()                GNOME: the active group, from its setting
-  * desktop_group()              both of those, tried in turn
+  * hypr_group()                 Hyprland: the active group, per input device
+  * wayfire_group()              Wayfire: the active group, off its IPC
+  * cinnamon_group()             Cinnamon: the active group, from its setting
+  * desktop_group()              all five of those, tried in turn
   * parse()                      keymap text -> Keymap (keycodes/types/groups)
   * build()                      Keymap + group -> ReverseMap
   * ReverseMap.lookup_char()     char -> [(evdev keycode, modifier mask)]
@@ -47,6 +54,7 @@ Env overrides (see README):
   WDOTOOL_XKB_GROUP=<n>        pin the active group (1-based)
 """
 
+import json
 import os
 import re
 import signal
@@ -129,9 +137,10 @@ def fetch(timeout: float = 2.0, mods_wait: float = 0.08, keymap: str | None = No
     `mods_wait` is how long to keep dispatching after the keymap arrives in the hope of a
     `wl_keyboard.modifiers` event carrying the active group. Mutter (and wlroots, and KWin) only send that event
     to the client that holds keyboard focus, which a headless injector never does -- so the wait usually expires
-    and the group has to be inferred; see `choose_group`. On KDE and on GNOME it does not have to be inferred:
-    where the inference would be a guess, the desktop is asked outright (`desktop_group`), and the answer is a
-    group as known as the one sway puts on the wire.
+    and the group has to be inferred; see `choose_group`. On the five desktops `desktop_group` can ask
+    (Hyprland, Wayfire, KWin, GNOME Shell, Cinnamon) it does not have to be inferred: where the inference
+    would be a guess, the desktop is asked outright, and the answer is a group as known as the one sway --
+    and COSMIC, over `zcosmic_keyboard_layout_v1` -- puts on the wire.
 
     `keymap` and `group` are what --keymap/--group pass; each falls back to WDOTOOL_XKB_KEYMAP /
     WDOTOOL_XKB_GROUP when the caller says nothing.
@@ -156,10 +165,10 @@ def fetch(timeout: float = 2.0, mods_wait: float = 0.08, keymap: str | None = No
     if group is None:
         group, known = choose_group(text, None)
         if not known:
-            # The keymap alone cannot say which of its groups is live. KDE and
-            # GNOME each publish exactly that, so ask before settling for
-            # group 1 -- and only here, so the sessions that already know the
-            # answer never open a bus.
+            # The keymap alone cannot say which of its groups is live. The
+            # five desktops `desktop_group` asks each publish exactly that, so
+            # ask before settling for group 1 -- and only here, so the sessions
+            # that already know the answer never open a socket or a bus.
             told = desktop_group(text)
             if told is not None:
                 return Snapshot(text, told[0], "wayland + " + told[1], True, mods_seen)
@@ -232,6 +241,16 @@ def _fetch_wayland(timeout: float, mods_wait: float):
         if state["text"] is None:
             raise XkbError("the compositor sent no keymap")
         # The group only matters when there is more than one to choose from.
+        if state["group"] is None and group_count(state["text"]) > 1:
+            # Guarded exactly as the modifiers wait below is, and for the same reason: the keymap is
+            # already read, and a cosmic-comp that refuses `get_keyboard_layout` (a `wl_display.error`
+            # on a keyboard it does not like, a version quibble, a socket that times out) must leave the
+            # caller its guess rather than throw away an answer we have. Nothing about typing may depend
+            # on this working (B13).
+            try:
+                _cosmic_group(conn, kb, state)
+            except (OSError, RuntimeError, ValueError, IndexError, struct.error):
+                pass
         if state["group"] is None and mods_wait > 0 and group_count(state["text"]) > 1:
             try:
                 conn.dispatch(mods_wait)
@@ -242,6 +261,43 @@ def _fetch_wayland(timeout: float, mods_wait: float):
         raise XkbError(f"wayland keymap read failed: {e}") from None
     finally:
         conn.close()
+
+
+#: COSMIC's way of saying what wl_keyboard.modifiers will not say to an
+#: unfocused client. cosmic-comp advertised it at version 1 among its 53
+#: globals [M recon2/cosmic.md §4, globals.txt].
+COSMIC_LAYOUT_MANAGER = "zcosmic_keyboard_layout_manager_v1"
+
+
+def _cosmic_group(conn, kb: int, state: dict):
+    """Take COSMIC's active group off the wire, into `state["group"]`. Silent when it is not offered.
+
+    `zcosmic_keyboard_layout_manager_v1.get_keyboard_layout(new_id, wl_keyboard)` makes a
+    `zcosmic_keyboard_layout_v1` whose `group` event carries the active index, 0-based as on
+    `wl_keyboard.modifiers` -- and the protocol says in as many words that it is "received even when the
+    client has no focused window", which is the whole difference and the reason COSMIC needs no bus, no
+    portal and no reader below [R recon2/cosmic/cosmic-keyboard-layout-unstable-v1.xml; the plan's A 1.4].
+
+    One extra round trip, on a session that advertises the interface and has more than one group to choose
+    between; nothing to close (the objects live as long as the connection, which ends with this function's
+    caller). Whether cosmic-comp really sends the event to a client that has never been focused is not
+    measured, so a group that does not arrive leaves `state` alone and the caller guesses as before -- and
+    so does a compositor that refuses the request outright, which is why the caller wraps this call: the
+    keymap is already read by then, and a `wl_display.error` on this round trip may not cost us that.
+    """
+    found = conn.find_global(COSMIC_LAYOUT_MANAGER)   # the registry is already cached: no round trip
+    if found is None:
+        return
+    mgr = conn.bind(found[0], COSMIC_LAYOUT_MANAGER, min(found[1], 1))
+    layout = conn.alloc()
+
+    def layout_handler(op, cur, fds):
+        if op == 0:  # group(group)
+            state["group"] = cur.u32() + 1  # wire is 0-based, keymap 1-based
+
+    conn.on(layout, layout_handler)
+    conn.send(mgr, 0, [("u", layout), ("u", kb)])  # get_keyboard_layout(id, keyboard)
+    conn.roundtrip()
 
 
 def _read_keymap_fd(fd: int, size: int) -> str:
@@ -859,7 +915,8 @@ def choose_group(text: str, from_modifiers=None) -> tuple:
         with one German source, and group 1 is right.
 
     "Assumed" is where `fetch()` goes and asks the desktop (`desktop_group`),
-    so on KDE and on GNOME this function's second case is a fallback rather
+    so on the five desktops that reader can ask -- Hyprland, Wayfire, KWin,
+    GNOME Shell, Cinnamon -- this function's second case is a fallback rather
     than the answer. It stays the answer everywhere else.
 
     Deliberately regex-only: choosing a group must not need the parser, or
@@ -1443,6 +1500,412 @@ def gnome_group(text: str):
 
 
 # ---------------------------------------------------------------------------
+# The three desktops that answer over an IPC of their own
+#
+# KWin's reader above dials a bus and GNOME's dials a bus and forks; these
+# three are cheaper than either, and none of them needs anything installed.
+#
+#   * Hyprland keeps XKB state PER DEVICE and publishes all of it on
+#     `j/devices`: every keyboard row carries `layout`, `active_layout_index`
+#     and `active_keymap` [M recon2/hyprland.md §2]. Which row to read is the
+#     whole question -- see `_hypr_keyboard`.
+#   * Wayfire answers `wayfire/get-keyboard-state` with
+#     `{"possible-layouts": [...], "layout": ..., "layout-index": 0}`, the
+#     same 0-based index into the configured list that KWin's getLayout gives
+#     [M recon2/wayfire.md §2.7]. It is the reader that closes a measured
+#     defect: with `xkb_layout = us,de` Wayfire sends no
+#     `wl_keyboard.modifiers` before focus, so `choose_group` guessed group 1
+#     -- harmless on the virtual-keyboard path (wdotool uploads its own
+#     keymap and `zyx` typed correctly) and wrong on the uinput one, which is
+#     the compositor's keymap.
+#   * Cinnamon keeps the answer in `org.cinnamon.desktop.input-sources`, whose
+#     keys are `sources`, `current`, `show-all-sources` and `xkb-options` and
+#     which has NO `mru-sources` [M recon2/cinnamon.md §2.2, `gsettings
+#     list-keys`]. So unlike GNOME the live index really is `current`, and the
+#     route to it is `org.Cinnamon.Eval` reading Gio.Settings -- no portal, no
+#     fork-and-drop (Eval identifies nobody), one read-only program.
+#
+# Every one of them is best effort in exactly the way the other two are: the
+# answer has to fit the keymap that was just read or it is not an answer, a
+# failure returns None and leaves the caller with its guess and its notice,
+# and a desktop that is not here is remembered as absent so the process asks
+# once and never again.
+
+#: monotonic seconds before a reader that failed is asked again. The same ten
+#: as KWIN_RETRY_AFTER: a compositor restarting takes about that long to be
+#: back, and nothing here is worth retrying faster.
+DESKTOP_RETRY_AFTER = 10.0
+
+
+class _IpcLayouts:
+    """What the three readers below share: ask, clamp against the keymap, never raise.
+
+    `KwinLayouts`'s contract with the bus ceremony taken out. A subclass implements `_index()`, which
+    returns the 0-based index of the active layout, or None; it sets `self.absent` itself when what it
+    found was "there is no such desktop here", which is permanent, and raises for everything else, which
+    is not. The lock is `KwinLayouts`'s: the daemon asks from inside its own lock, a client asks once and
+    exits, and one connection or socket per process is the point of the module-level readers below.
+    """
+
+    def __init__(self):
+        self.absent = False      # nothing to talk to here; stop asking
+        self.retry_at = 0.0      # monotonic deadline of the failure backoff
+        self.asked = 0           # answers received, for the tests
+        self._lock = threading.Lock()
+
+    def group(self, text: str):
+        """The active group (1-based) or None.
+
+        `text` is the keymap the index has to fit: an index past its last group is not an answer but a
+        race with a layout list that was edited a moment ago, and the caller's own guess is the better
+        one -- the same rule `KwinLayouts.group` states, for the same reason."""
+        with self._lock:
+            try:
+                idx = self._ask()
+                if idx is None:
+                    return None
+                n = int(idx) + 1
+                return n if 1 <= n <= group_count(text) else None
+            except Exception:
+                # Nothing about typing may depend on this working (B13).
+                return None
+
+    def close(self):
+        """Nothing is held open: the two socket readers connect per question (Hyprland's protocol is one
+        connection per request anyway, and Wayfire's socket costs microseconds), and `CinnamonInputSources`
+        overrides this to drop the bus it keeps."""
+
+    # -- the backoff
+
+    def _failed(self):
+        self.retry_at = time.monotonic() + DESKTOP_RETRY_AFTER
+
+    def _index(self):
+        raise NotImplementedError
+
+    def _ask(self):
+        """The 0-based index the desktop reports, or None. Never raises."""
+        if self.absent or time.monotonic() < self.retry_at:
+            return None
+        try:
+            idx = self._index()
+        except Exception:
+            # A socket that went away, a compositor that answered nonsense, a bus that hung up: none of
+            # them is permanent, and none of them may reach the caller.
+            self._failed()
+            return None
+        if idx is None:
+            return None
+        self.asked += 1
+        return idx
+
+
+#: The keyboards Hyprland lists that are OURS, by the names it gives them: the
+#: `zwp_virtual_keyboard_v1` device wdotool creates, and the one Hyprland names
+#: after the creating client's comm (`hl-virtual-keyboard-python3.14` in the
+#: recording). Their index is never the session's answer -- Hyprland keeps
+#: layout state per device, so switching the physical keyboard to German left
+#: the injected one on US and typing stayed correct, and switching the injected
+#: one broke typing outright [M recon2/hyprland.md §3].
+HYPR_INJECTED = ("wdotool-virtual-keyboard", "hl-virtual-keyboard")
+
+#: The reader's own deadline on Hyprland's socket, and the same number
+#: KWIN_TIMEOUT, GNOME_TIMEOUT and CINNAMON_TIMEOUT carry, for the same reason:
+#: it bounds a wedge, not a round trip (`hyprctl -j devices` answers in
+#: milliseconds). hypr_ipc's own IPC_TIMEOUT is 10.0, which is the right number
+#: for a `dispatch` a user is waiting on and the wrong one inside `fetch()`,
+#: where the daemon holds its lock and every `type` waits behind it.
+HYPR_TIMEOUT = 2.0
+
+#: A device name that means "a thing a user types on". `power-button` is a
+#: keyboard to libinput and to `j/devices`, carries the session's `us,de` and
+#: its own index 0, and never switches; the recorded session's real keyboard is
+#: `at-translated-set-2-keyboard`, which is the row that was on index 1 after a
+#: `switchxkblayout` [M recon2/hyprland.md §2, fixtures/hypr/devices.json].
+_HYPR_TYPING_RE = re.compile(r"keyboard|keybd|kbd", re.I)
+
+
+def _hypr_injected(name) -> bool:
+    """Is this one of the virtual keyboards wdotool itself put there?"""
+    return any(str(name or "").startswith(p) for p in HYPR_INJECTED)
+
+
+def _hypr_keyboard(devices):
+    """The keyboard row whose `active_layout_index` is the session's answer, or None.
+
+    Three rules, in order, and the first two exist because of what the recorded `j/devices` holds: four
+    keyboards, `main: true` on `wdotool-virtual-keyboard` and index 1 on the physical
+    `at-translated-set-2-keyboard` [M recon2/hyprland.md §2].
+
+      * never one of ours (`HYPR_INJECTED`): its index is the injected device's own, and reading it would
+        be reading back the state we set;
+      * `main: true` among what is left -- Hyprland's own word for the session's keyboard;
+      * else a name that looks like a keyboard, and only then the first row, so that `power-button`
+        (a keyboard to libinput, and one that has never switched a layout in its life) does not answer
+        for the keyboard beside it.
+
+    What comes back therefore describes the PHYSICAL keyboard. On the virtual-keyboard path that is
+    exactly right and also moot (wdotool uploads its own keymap and never consults this). On the
+    /dev/uinput path wdotool's device is a fresh keyboard to Hyprland with layout state of its own, and
+    whether Hyprland starts it on the session's group or on group 1 is unmeasured -- nothing in recon ran
+    `wdotool type` over uinput after a `switchxkblayout` on the physical keyboard. Batch 12's
+    resolute-hypr / arch-hypr smoke is where that gets settled.
+    """
+    kbs = devices.get("keyboards") if isinstance(devices, dict) else None
+    if not isinstance(kbs, list):
+        return None
+    real = [k for k in kbs if isinstance(k, dict) and not _hypr_injected(k.get("name"))]
+    for k in real:
+        if k.get("main") is True:
+            return k
+    for k in real:
+        if _HYPR_TYPING_RE.search(str(k.get("name") or "")):
+            return k
+    return real[0] if real else None
+
+
+class HyprLayouts(_IpcLayouts):
+    """Hyprland's active layout, off `j/devices` on its own IPC socket.
+
+    No bus and no protocol extension: the socket is `$XDG_RUNTIME_DIR/hypr/<sig>/.socket.sock` and the
+    request is the one `hyprctl -j devices` sends. A session with no such socket is not Hyprland and never
+    will be, which is the `absent` case; a socket that is there and does not answer is the backoff's.
+    """
+
+    def __init__(self, sockpath=None):
+        self.sockpath = sockpath   # None: found the way the backend finds it
+        super().__init__()
+
+    def _index(self):
+        from fwcommon import session
+        from wdotool.hypr_ipc import HyprIPC
+
+        path = self.sockpath or session.find_hypr_socket()
+        if not path:
+            # No Hyprland here. If it has answered us before this is a restart mid-session, and then the
+            # backoff is what covers it -- the same distinction KwinLayouts._connect draws about a bus
+            # name, and it has to arm the backoff for the sentence to be true.
+            self.absent = not self.asked
+            self._failed()
+            return None
+        dev = _hypr_keyboard(HyprIPC(path, timeout=HYPR_TIMEOUT).json("devices"))
+        if dev is None:
+            return None
+        idx = dev.get("active_layout_index")
+        return idx if isinstance(idx, int) and not isinstance(idx, bool) else None
+
+
+#: The one method this reader sends. Its sibling `wayfire/set-keyboard-state` is
+#: NEVER sent: it recompiles the keymap as the selected layout duplicated --
+#: after one call `possible-layouts` read `["English (US)", "English (US)"]` and
+#: the German layout was gone until restart [M recon2/wayfire.md §2.7]. That is
+#: also the shape this reader has to survive reading, and does: the index still
+#: names a group of the keymap the compositor just handed us.
+WAYFIRE_STATE_METHOD = "wayfire/get-keyboard-state"
+
+
+class WayfireLayouts(_IpcLayouts):
+    """Wayfire's active layout, off `wayfire/get-keyboard-state` on its JSON IPC socket.
+
+    The method needs `plugins = ipc ipc-rules` and not the window backend's whole set (measured on this
+    box: that configuration answers 23 methods and this is one of them); a Wayfire with no `ipc` plugin at
+    all has no socket, which is the `absent` case. A Wayfire that has the socket and not the method says
+    `No such method found!`, which is a fact about a config line rather than about this moment, so it is
+    remembered too.
+
+    One deadline is wrong here and cannot be fixed from this file: `_WayfireIPC` has no timeout knob and
+    fixes itself at backend_wayfire.IPC_TIMEOUT (10.0 s), where every other reader in this module bounds a
+    wedged desktop at 2.0 s -- and these readers run from `fetch()` inside the daemon's lock, so a wedged
+    Wayfire stalls every `type` for the difference. Requested of batch 6 (`_WayfireIPC.__init__(self,
+    sockpath, timeout=IPC_TIMEOUT)`, and requests-batch-6.md); this reader passes 2.0 the moment it lands.
+    """
+
+    def __init__(self, sockpath=None):
+        self.sockpath = sockpath
+        super().__init__()
+
+    def _index(self):
+        from fwcommon import session
+        from fwcommon.errors import CmdError
+        from wdotool.backend_wayfire import _WayfireIPC
+
+        path = self.sockpath or session.find_wayfire_socket()
+        if not path:
+            self.absent = not self.asked
+            self._failed()       # a Wayfire that has answered before and is gone: back off, as KWin does
+            return None
+        ipc = _WayfireIPC(path)
+        try:
+            state = ipc.call(WAYFIRE_STATE_METHOD)
+        except CmdError as e:
+            # `.no_method` is what `_error_line` sets for exactly this reply, and what the backend's own
+            # api gate reads; matching the sentence in the text would also match a handler error quoting it.
+            if getattr(e, "no_method", False):
+                self.absent = True
+                return None
+            raise
+        finally:
+            ipc.close()
+        idx = state.get("layout-index") if isinstance(state, dict) else None
+        return idx if isinstance(idx, int) and not isinstance(idx, bool) else None
+
+
+CINNAMON_BUS_NAME = "org.Cinnamon"
+CINNAMON_PATH = "/org/Cinnamon"
+CINNAMON_IFACE = "org.Cinnamon"
+#: The schema the program below reads. Named here for the reader of this file
+#: and for the tests; the program itself spells it out, because a constant
+#: formatted into an `Eval` string is the shape this module may not have.
+CINNAMON_SCHEMA = "org.cinnamon.desktop.input-sources"
+CINNAMON_TIMEOUT = 2.0     # the Eval round trip is ~9 ms with a gdbus spawn in it [M cinnamon.md §2.2]
+
+#: The whole program, and it is read-only: `current` (the live index, since this
+#: schema has no `mru-sources`) and `sources` unpacked from its GVariant. There
+#: is no interpolation and there never may be -- `org.Cinnamon.Eval` runs
+#: whatever arrives, and a window title reaching a script would be arbitrary
+#: code execution in the user's session (the rule wdotool/cinnamon_js.py states
+#: at length). Nothing here writes: no `set_`, no `set_uint`, no `set_value`.
+CINNAMON_SCRIPT = (
+    "JSON.stringify((s => [s.get_uint('current'), s.get_value('sources').deep_unpack()])"
+    "(new imports.gi.Gio.Settings({schema_id: 'org.cinnamon.desktop.input-sources'})))"
+)
+
+#: The same list KWin's reader keys on, and for the same reason: an error name
+#: that describes the session rather than the moment.
+_CINNAMON_FATAL = _KWIN_FATAL
+
+
+def _cinnamon_index(current, sources):
+    """The 0-based index of the active input source, or None where the setting names no keymap group.
+
+    Two refusals, both because the setting then describes no single live layout: an index that is not in
+    `sources` (the list was edited under us -- the same race GnomeInputSources refuses on an `mru-sources`
+    head), and a source that is not an `xkb` one, since an IBus engine is not a group of the keymap we
+    just read. Cinnamon's own list is `[('xkb', 'us'), ...]`, `current` a 0-based index into it
+    [M recon2/cinnamon.md §2.2]."""
+    if not isinstance(current, int) or isinstance(current, bool):
+        return None
+    if not isinstance(sources, (list, tuple)) or not 0 <= current < len(sources):
+        return None
+    src = sources[current]
+    if not (isinstance(src, (list, tuple)) and len(src) == 2 and src[0] == "xkb"):
+        return None
+    return current
+
+
+class CinnamonInputSources(_IpcLayouts):
+    """Cinnamon's active layout, read out of GSettings through `org.Cinnamon.Eval`.
+
+    Shaped like `KwinLayouts`: the bus is dialled lazily from the one place the group would otherwise be a
+    guess, `NameHasOwner` on `org.Cinnamon` comes before anything else so that a GNOME or KDE box is one
+    round trip away from a permanent no (and so that nothing is ever *started* by the ask), failure is
+    silence, and a bus that refuses is not re-dialled for DESKTOP_RETRY_AFTER seconds.
+
+    Unlike GNOME's reader there is no fork-and-drop-privileges dance: Eval identifies nobody, so a root
+    daemon gets the same answer the session user does [M recon2/cinnamon.md §2.2].
+    """
+
+    def __init__(self, address=None):
+        self.address = address   # None: the graphical session's bus
+        self.bus = None
+        super().__init__()
+
+    def close(self):
+        with self._lock:
+            self._drop()
+
+    def _drop(self):
+        bus, self.bus = self.bus, None
+        if bus is not None:
+            try:
+                bus.close()
+            except Exception:
+                pass
+
+    def _connect(self):
+        """The session bus, with Cinnamon on it, or None."""
+        if self.bus is not None:
+            return self.bus
+        from fwcommon.dbus_mini import Bus
+        try:
+            bus = Bus(self.address, timeout=CINNAMON_TIMEOUT)
+        except Exception:
+            return None          # no session bus (yet): the backoff catches it
+        try:
+            if not bus.name_has_owner(CINNAMON_BUS_NAME):
+                bus.close()
+                self.absent = not self.asked
+                return None
+        except Exception:
+            bus.close()          # ours to close, or the next command opens a second one on top of it
+            return None
+        self.bus = bus
+        return bus
+
+    def _index(self):
+        from fwcommon.dbus_mini import DBusError
+
+        bus = self._connect()
+        if bus is None:
+            self._failed()
+            return None
+        try:
+            out = bus.call(CINNAMON_BUS_NAME, CINNAMON_PATH, CINNAMON_IFACE, "Eval", "s",
+                           (CINNAMON_SCRIPT,), timeout=CINNAMON_TIMEOUT)
+        except DBusError as e:
+            self._drop()
+            if any(getattr(e, "name", "").endswith(w) for w in _CINNAMON_FATAL):
+                self.absent = True
+                return None
+            raise
+        except Exception:
+            self._drop()         # a socket that went away: the connection is not reusable
+            raise
+        if len(out) != 2 or not out[0]:
+            return None          # `(false, text)`: the program threw, and the text is Cinnamon's own
+        # Eval is `JSON.stringify(eval(code))` around a program that already answers a JSON string, so
+        # what comes back is encoded twice -- backend_cinnamon._json decodes the same two layers.
+        cur, sources = json.loads(json.loads(out[1]))
+        return _cinnamon_index(cur, sources)
+
+
+_hypr = None
+_wayfire = None
+_cinnamon = None
+_ipc_readers_lock = threading.Lock()
+
+
+def hypr_group(text: str):
+    """The active group Hyprland's `j/devices` names, or None where nothing answers."""
+    global _hypr
+    with _ipc_readers_lock:
+        if _hypr is None:
+            _hypr = HyprLayouts()
+        reader = _hypr
+    return reader.group(text)
+
+
+def wayfire_group(text: str):
+    """The active group Wayfire's keyboard state names, or None where nothing answers."""
+    global _wayfire
+    with _ipc_readers_lock:
+        if _wayfire is None:
+            _wayfire = WayfireLayouts()
+        reader = _wayfire
+    return reader.group(text)
+
+
+def cinnamon_group(text: str):
+    """The active group Cinnamon's input-sources setting names, or None where nothing answers."""
+    global _cinnamon
+    with _ipc_readers_lock:
+        if _cinnamon is None:
+            _cinnamon = CinnamonInputSources()
+        reader = _cinnamon
+    return reader.group(text)
+
+
+# ---------------------------------------------------------------------------
 # the desktops, in turn
 
 
@@ -1450,12 +1913,25 @@ def desktop_group(text: str):
     """(group, who said so) -- the active group read from the desktop, or
     None where no desktop answers.
 
-    The two readers are independent and each is its own gate: the first
-    command of a GNOME session asks KWin, finds nothing owning `org.kde.KWin`
-    and never asks again, and the first command of a KDE session does the
-    same to GNOME Shell. So the loop costs one round trip per session, once,
-    and after that only the desktop that answers is spoken to."""
-    for ask, who in ((kwin_group, "kwin"), (gnome_group, "gnome input-sources")):
+    Five readers, each its own gate: the first command of a GNOME session asks
+    Hyprland and Wayfire for a socket that is not there, asks KWin for a bus
+    name nobody owns, gets its answer from the portal, and never asks any of
+    the other four again -- every reader remembers a permanent no. So the loop
+    costs one probe per reader per process, once, and after that only the
+    desktop that answers is spoken to.
+
+    Sockets before buses, which is the cheap end first: `find_hypr_socket()`
+    and `find_wayfire_socket()` are a scandir of $XDG_RUNTIME_DIR where a bus
+    reader pays a connect, an EXTERNAL auth and a GetNameOwner. The three bus
+    readers keep detection's own order (KWin, GNOME Shell, Cinnamon: see
+    backend_detect's docstring for why none of the three can shadow another).
+    COSMIC is not here at all -- its group arrives on the wire in
+    `_fetch_wayland`, the way sway's does."""
+    for ask, who in ((hypr_group, "hyprland devices"),
+                     (wayfire_group, "wayfire"),
+                     (kwin_group, "kwin"),
+                     (gnome_group, "gnome input-sources"),
+                     (cinnamon_group, "cinnamon input-sources")):
         told = ask(text)
         if told is not None:
             return told, who

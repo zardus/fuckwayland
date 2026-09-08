@@ -32,9 +32,11 @@ sys.path.insert(0, ROOT)
 # does not.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import wl_fake
 from fwcommon import dbus_mini
+from fwcommon import session as fw_session
 from fwcommon.dbus_mini import ERR, Bus, DBusError, Variant
-from support import RecorderDev, env
+from support import FakeHypr, FakeWayfire, RecorderDev, env, fixture_json
 from test_dbus_mini import MockBus
 from wdotool import cli, daemon, keymap, keys_cmds, xkbmap
 
@@ -62,16 +64,22 @@ def rmap(name: str, group: int = 1) -> xkbmap.ReverseMap:
 
 
 def setUpModule():
-    """No test in this file may open the *developer's* session bus. Both
-    desktop readers are module-level connections made on first use (see
-    xkbmap.KwinLayouts and xkbmap.GnomeInputSources); park ones that have
-    already given up in their place, and let TestTheActiveGroupFromKwin and
-    TestTheActiveGroupFromGnome below hand out readers pointed at a mock bus
-    instead."""
-    xkbmap._kwin = xkbmap.KwinLayouts()
-    xkbmap._kwin.absent = True
-    xkbmap._gnome = xkbmap.GnomeInputSources()
-    xkbmap._gnome.absent = True
+    """No test in this file may open the *developer's* session bus, or the
+    compositor this box is actually running. All five desktop readers are
+    module-level objects made on first use (KwinLayouts, GnomeInputSources,
+    HyprLayouts, WayfireLayouts, CinnamonInputSources); park ones that have
+    already given up in their place, and let the classes below hand out
+    readers pointed at a mock bus or a fake socket instead.
+
+    The two socket readers matter as much as the bus ones here: this box has
+    wayfire installed, so an unparked WayfireLayouts would scan the runtime
+    dir of whoever is running the suite."""
+    for name, make in (("_kwin", xkbmap.KwinLayouts), ("_gnome", xkbmap.GnomeInputSources),
+                       ("_hypr", xkbmap.HyprLayouts), ("_wayfire", xkbmap.WayfireLayouts),
+                       ("_cinnamon", xkbmap.CinnamonInputSources)):
+        reader = make()
+        reader.absent = True
+        setattr(xkbmap, name, reader)
 
 
 def make_daemon():
@@ -2654,6 +2662,613 @@ class TestTheForkedReaderReallyDropsToTheSessionUid(unittest.TestCase):
         _got, child = self.child_report()
         self.assertLessEqual(len([fd for fd in child["fds"] if fd > 2]), 2,
                              child["fds"])
+
+
+# ---------------------------------------------------------------------------
+# The three desktops that answer over an IPC of their own, and COSMIC's wire
+
+
+#: The recorded `hyprctl -j devices` [M recon2/hyprland.md §2], and one keyboard
+#: row out of it to build variants from: `layout: "us,de"`,
+#: `options: "grp:alt_shift_toggle"`, the shape every row in it has.
+HYPR_DEVICES = fixture_json("hypr", "devices.json")
+HYPR_KB = HYPR_DEVICES["keyboards"][1]
+
+
+def hypr_devices(*rows):
+    """A `j/devices` answer whose keyboards are these `(name, active_layout_index, main)`, each in the byte
+    shape of the recorded physical keyboard's row."""
+    kbs = []
+    for name, idx, main in rows:
+        kb = dict(HYPR_KB)
+        kb.update(name=name, active_layout_index=idx, main=main,
+                  active_keymap="German" if idx else "English (US)")
+        kbs.append(kb)
+    return dict(HYPR_DEVICES, keyboards=kbs)
+
+
+class TestTheActiveGroupFromHyprland(unittest.TestCase):
+    """U39: `HyprLayouts` over the recorded `j/devices`.
+
+    Hyprland keeps XKB state per device, and the recording is the trap [M recon2/hyprland.md §2, §3]: four
+    keyboards on one `us,de` session, `main: true` on wdotool's own `wdotool-virtual-keyboard` (index 0),
+    index 1 on the physical `at-translated-set-2-keyboard`, and a `power-button` that is a keyboard to
+    libinput and has never switched a layout. Reading the wrong row is not a cosmetic error: switching the
+    *injected* device's layout is what broke typing outright in the VM (`wdotool type 'echo zy > /tmp/C'`
+    created no file, the `>` and `/` having moved with the layout), and its index is the one this reader
+    must never take.
+
+    `kde_us_de` is the keymap throughout: no Hyprland keymap was recorded, and this is the two-group
+    `us, de` in that order, which is what `pc_us_de_2_inet(evdev)` compiles to [M hyprland.md §3]."""
+
+    def reader(self, mode="ok", **kw):
+        srv = FakeHypr(mode, **kw)
+        self.addCleanup(srv.close)
+        self.srv = srv
+        return xkbmap.HyprLayouts(srv.path)
+
+    def test_the_physical_keyboards_index_is_the_answer(self):
+        """The recorded devices.json, unedited: index 1 on `at-translated-set-2-keyboard` is group 2."""
+        self.assertEqual(self.reader().group(text("kde_us_de")), 2)
+
+    def test_the_injected_keyboard_is_never_the_answer(self):
+        """It carries `main: true` in the recording, and its index is the one we set ourselves."""
+        r = self.reader(payloads={"devices": hypr_devices(
+            ("at-translated-set-2-keyboard", 0, False),
+            ("wdotool-virtual-keyboard", 1, True),
+            ("hl-virtual-keyboard-python3.14", 1, False))})
+        self.assertEqual(r.group(text("kde_us_de")), 1)
+
+    def test_main_true_wins_over_the_first_non_virtual_device(self):
+        r = self.reader(payloads={"devices": hypr_devices(
+            ("at-translated-set-2-keyboard", 0, False),
+            ("usb-usb-keyboard", 1, True))})
+        self.assertEqual(r.group(text("kde_us_de")), 2)
+
+    def test_the_power_button_does_not_answer_for_the_keyboard_beside_it(self):
+        """`power-button` is first in the recorded list and is a keyboard to libinput; it carries the
+        session's `us,de` and its own index 0, which is not the session's answer."""
+        r = self.reader(payloads={"devices": hypr_devices(
+            ("power-button", 0, False), ("at-translated-set-2-keyboard", 1, False))})
+        self.assertEqual(r.group(text("kde_us_de")), 2)
+        self.assertEqual(xkbmap._hypr_keyboard(hypr_devices(("power-button", 0, False)))["name"],
+                         "power-button", "with nothing better, the one row there is answers")
+
+    def test_an_index_past_the_keymaps_last_group_is_not_an_answer(self):
+        """Two groups in the keymap we just read and a third layout in the device's list is a layout list
+        edited under us; the caller's guess is the better answer, exactly as it is for KWin."""
+        r = self.reader(payloads={"devices": hypr_devices(("at-translated-set-2-keyboard", 2, False))})
+        self.assertIsNone(r.group(text("kde_us_de")))
+        self.assertEqual(r.group(text("kde_us_de_fr")), 3)   # and three groups take it
+
+    def test_the_reader_only_ever_reads(self):
+        """The landmine: `switchxkblayout` is a dispatcher this reader must never send -- reading the
+        session's layout may not change it. `j/devices` is the whole conversation."""
+        r = self.reader()
+        r.group(text("kde_us_de"))
+        r.group(text("kde_us_de"))
+        self.assertEqual(self.srv.requests, ["j/devices", "j/devices"])
+
+    def test_a_socket_that_is_not_there_is_remembered(self):
+        calls = []
+
+        def no_socket():
+            calls.append(1)
+            return None
+
+        r = xkbmap.HyprLayouts()
+        with mock.patch.object(fw_session, "find_hypr_socket", no_socket):
+            self.assertIsNone(r.group(text("kde_us_de")))
+            self.assertIsNone(r.group(text("kde_us_de")))
+        self.assertTrue(r.absent)
+        self.assertEqual(len(calls), 1, "the second command looked again")
+
+    def test_a_hyprland_that_goes_away_mid_session_backs_off_rather_than_rescanning(self):
+        """A socket that was there and is gone is a restart, not "no Hyprland here", so `absent` stays
+        false -- and then only the backoff keeps every command of the next few seconds from walking
+        $XDG_RUNTIME_DIR again."""
+        r = self.reader()
+        self.assertEqual(r.group(text("kde_us_de")), 2)
+        r.sockpath = None
+        with mock.patch.object(fw_session, "find_hypr_socket", lambda: None):
+            self.assertIsNone(r.group(text("kde_us_de")))
+        self.assertFalse(r.absent)
+        self.assertGreater(r.retry_at, 0.0)
+
+    def test_a_wedged_hyprland_is_bounded_by_this_modules_deadline_not_the_backends(self):
+        """These readers run from `fetch()`, which the daemon calls holding its lock, so the deadline that
+        matters is the one every `type` waits behind. hypr_ipc.IPC_TIMEOUT is 10 s -- the right number for
+        a `dispatch` a user is waiting on -- and HYPR_TIMEOUT is the 2 s KWIN_TIMEOUT, GNOME_TIMEOUT and
+        CINNAMON_TIMEOUT all carry. Driven at 0.3 s here so the test is not a wait."""
+        r = self.reader("wedged")
+        with mock.patch.object(xkbmap, "HYPR_TIMEOUT", 0.3):
+            started = time.monotonic()
+            self.assertIsNone(r.group(text("kde_us_de")))
+            waited = time.monotonic() - started
+        self.assertLess(waited, 3.0, "hypr_ipc's own 10 s default was used instead (%.1fs)" % waited)
+        self.assertGreater(r.retry_at, 0.0)
+
+    def test_a_compositor_that_answers_nothing_leaves_the_guess(self):
+        for mode in ("gone", "badjson", "short"):
+            r = self.reader(mode)
+            self.assertIsNone(r.group(text("kde_us_de")), mode)
+            self.assertFalse(r.absent, mode)          # not permanent: it is there, it misbehaved
+            self.assertGreater(r.retry_at, 0.0, mode)
+
+
+
+#: The recorded `wayfire/get-keyboard-state` of the one-layout session
+#: (tests/fixtures/wayfire/), and the two shapes recon recorded around it
+#: [M recon2/wayfire.md §2.7].
+WF_US = fixture_json("wayfire", "wayfire_get-keyboard-state.json")
+WF_US_DE = {"possible-layouts": ["English (US)", "German"],
+            "layout": "English (US)", "layout-index": 0}
+#: what `wayfire/set-keyboard-state {"layout-index":1}` left behind: the
+#: selected layout DUPLICATED, the other one gone until restart
+WF_CORRUPT = {"possible-layouts": ["English (US)", "English (US)"],
+              "layout": "English (US)", "layout-index": 0}
+
+
+class WayfireSetLandmine(FakeWayfire):
+    """FakeWayfire that records any attempt to WRITE the keyboard state.
+
+    `wayfire/set-keyboard-state` is not a thing this reader is allowed to try: one call recompiled the
+    keymap as the selected layout duplicated and the German layout was gone until the compositor restarted
+    [M recon2/wayfire.md §2.7]. The double answers it as the live socket would, so a reader that called it
+    would pass every other assertion -- `self.forbidden` is what fails the test."""
+
+    def __init__(self, *a, **kw):
+        self.forbidden = []
+        FakeWayfire.__init__(self, *a, **kw)
+
+    def reply_for(self, method, data):
+        if method.endswith("set-keyboard-state"):
+            self.forbidden.append(data)
+            return {"result": "ok"}
+        return FakeWayfire.reply_for(self, method, data)
+
+
+class WayfireQuotingTheSentence(FakeWayfire):
+    """A handler error whose text happens to quote `No such method found!`.
+
+    The point is which field the reader keys on. `backend_wayfire._error_line` sets `.no_method` only for
+    the `{"error": "No such method found!", "method": ...}` reply, and a substring test against the
+    message would read this one -- a live plugin that raised -- as "the method is not there" and stop
+    asking for the rest of the process."""
+
+    def reply_for(self, method, data):
+        return {"error": 'Error during execution of the handler for method "%s": No such method found!'
+                         % method}
+
+
+class TestTheActiveGroupFromWayfire(unittest.TestCase):
+    """U07: `WayfireLayouts` over the recorded `wayfire/get-keyboard-state`.
+
+    The defect it closes is measured: on `[input] xkb_layout = us,de` Wayfire sends no
+    `wl_keyboard.modifiers` before focus, so `choose_group` guessed group 1 -- harmless on the
+    virtual-keyboard path (wdotool uploads its own keymap and `zyx` typed correctly) and wrong on the
+    uinput path, which types through the compositor's keymap [M recon2/wayfire.md §2.7]."""
+
+    def reader(self, answer=None, cls=WayfireSetLandmine, mode="ok"):
+        answers = {xkbmap.WAYFIRE_STATE_METHOD: answer} if answer is not None else None
+        srv = cls(mode, answers=answers)
+        self.addCleanup(srv.close)
+        self.srv = srv
+        return xkbmap.WayfireLayouts(srv.path)
+
+    def test_the_three_recorded_states_answer_one_two_one(self):
+        # `us` is the two-identical-groups keymap `pc_us_us_2` compiles to, which is what the corrupted
+        # session was left holding; `kde_us` is one group and `kde_us_de` is `us, de` in that order.
+        cases = ((WF_US, "kde_us", 1),                                  # one layout, index 0
+                 (dict(WF_US_DE, **{"layout-index": 1, "layout": "German"}), "kde_us_de", 2),
+                 (WF_CORRUPT, "us", 1))                                 # the set-keyboard-state wreckage
+        for state, keymap_name, want in cases:
+            r = self.reader(state)
+            self.assertEqual(r.group(text(keymap_name)), want, state)
+
+    def test_the_recorded_us_de_session_before_any_switch_is_group_one(self):
+        self.assertEqual(self.reader(WF_US_DE).group(text("kde_us_de")), 1)
+
+    def test_the_reader_never_writes_the_keyboard_state(self):
+        r = self.reader(WF_US_DE)
+        for _ in range(3):
+            r.group(text("kde_us_de"))
+        self.assertEqual(self.srv.forbidden, [])
+        self.assertEqual({m for m, _ in self.srv.calls}, {xkbmap.WAYFIRE_STATE_METHOD})
+
+    def test_an_index_past_the_keymaps_last_group_is_not_an_answer(self):
+        r = self.reader(dict(WF_US_DE, **{"layout-index": 2}))
+        self.assertIsNone(r.group(text("kde_us_de")))
+
+    def test_a_socket_that_is_not_there_is_remembered(self):
+        calls = []
+
+        def no_socket():
+            calls.append(1)
+            return None
+
+        r = xkbmap.WayfireLayouts()
+        with mock.patch.object(fw_session, "find_wayfire_socket", no_socket):
+            self.assertIsNone(r.group(text("kde_us_de")))
+            self.assertIsNone(r.group(text("kde_us_de")))
+        self.assertTrue(r.absent)
+        self.assertEqual(len(calls), 1, "the second command looked again")
+
+    def test_a_wayfire_that_goes_away_mid_session_backs_off_rather_than_rescanning(self):
+        """Same restart as Hyprland's: `absent` stays false, and the backoff is what keeps the next few
+        seconds of commands out of $XDG_RUNTIME_DIR."""
+        r = self.reader(WF_US_DE)
+        self.assertEqual(r.group(text("kde_us_de")), 1)
+        r.sockpath = None
+        with mock.patch.object(fw_session, "find_wayfire_socket", lambda: None):
+            self.assertIsNone(r.group(text("kde_us_de")))
+        self.assertFalse(r.absent)
+        self.assertGreater(r.retry_at, 0.0)
+
+    def test_a_wayfire_without_the_method_is_remembered_too(self):
+        """`No such method found!` is a fact about this session's `plugins` line, not about this moment:
+        a Wayfire with no `ipc-rules` will not grow the method while it runs."""
+        r = self.reader(cls=FakeWayfire, mode="nomethod")
+        self.assertIsNone(r.group(text("kde_us_de")))
+        self.assertTrue(r.absent)
+        self.assertIsNone(r.group(text("kde_us_de")))
+        self.assertEqual(len(self.srv.calls), 1)
+
+    def test_an_error_reply_leaves_the_guess_and_is_retried(self):
+        r = self.reader(cls=FakeWayfire, mode="handler-error")
+        self.assertIsNone(r.group(text("kde_us_de")))
+        self.assertFalse(r.absent)
+        self.assertGreater(r.retry_at, 0.0)
+
+    def test_a_handler_error_that_quotes_the_sentence_is_not_the_method_being_gone(self):
+        """`.no_method` is the field, not the words: `_error_line` sets it for the one reply shape that
+        means "the plugin behind that method is not loaded", and only that shape is permanent."""
+        r = self.reader(cls=WayfireQuotingTheSentence)
+        self.assertIsNone(r.group(text("kde_us_de")))
+        self.assertFalse(r.absent, "a handler that raised is not a config line")
+        self.assertGreater(r.retry_at, 0.0)
+
+
+class CinnamonEval(_FakeService):
+    """`org.Cinnamon` answering `Eval` for the input-sources read, and nothing else.
+
+    Cinnamon's Eval is `JSON.stringify(eval(code))` [M recon2/cinnamon.md §2.2, cinnamonDBus.js], so a
+    program that answers its own JSON string comes back encoded twice -- which is what this replays, and
+    what the reader has to decode. `answer`: "ok", "throw" (the `(false, <message and stack>)` shape a
+    program that raised comes back as), or "notjson"."""
+
+    def __init__(self, address, current=0, sources=(("xkb", "us"), ("xkb", "de")), answer="ok"):
+        self.current = current
+        self.sources = [list(s) for s in sources]
+        self.answer = answer
+        self.scripts = []          # every program that arrived, for the landmine
+        _FakeService.__init__(self, address, xkbmap.CINNAMON_BUS_NAME)
+
+    def dispatch(self, m):
+        if m.path != xkbmap.CINNAMON_PATH or m.interface != xkbmap.CINNAMON_IFACE:
+            return _FakeService.dispatch(self, m)
+        if m.member != "Eval":
+            raise DBusError(ERR + "UnknownMethod", "no %s" % m.member)
+        import json as _json
+
+        self.scripts.append(m.args()[0])
+        if self.answer == "throw":
+            return "bs", (False, "TypeError: s.get_uint is not a function\n@<input>:1:20")
+        if self.answer == "notjson":
+            return "bs", (True, "undefined")
+        inner = _json.dumps([self.current, self.sources])
+        return "bs", (True, _json.dumps(inner))
+
+
+class TestTheActiveGroupFromCinnamon(unittest.TestCase):
+    """U26: `CinnamonInputSources` over `org.Cinnamon.Eval`.
+
+    Cinnamon's schema is `org.cinnamon.desktop.input-sources` with `sources`, `current`,
+    `show-all-sources` and `xkb-options` and **no `mru-sources`** [M recon2/cinnamon.md §2.2,
+    `gsettings list-keys`], so unlike GNOME the live index really is `current` and the whole mapping is
+    `current + 1`. What is refused is what describes no single live layout."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.mock = MockBus()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.mock.close()
+
+    def setUp(self):
+        self.addCleanup(setattr, xkbmap, "_cinnamon", xkbmap._cinnamon)
+        self.reader = xkbmap._cinnamon = xkbmap.CinnamonInputSources(self.mock.address)
+        self.addCleanup(self.reader.close)
+
+    def service(self, **kw):
+        svc = CinnamonEval(self.mock.address, **kw)
+        self.addCleanup(svc.close, self.mock)
+        return svc
+
+    def test_current_is_the_live_index(self):
+        svc = self.service()
+        self.assertEqual(self.reader.group(text("kde_us_de")), 1)
+        svc.current = 1
+        self.assertEqual(self.reader.group(text("kde_us_de")), 2)
+
+    def test_an_index_past_the_end_of_sources_is_not_an_answer(self):
+        """The list was edited under us: `current` names a source that is not there any more, and the
+        caller's guess is the better answer -- GnomeInputSources refuses the same race."""
+        self.service(current=3)
+        self.assertIsNone(self.reader.group(text("kde_us_de")))
+
+    def test_a_non_xkb_source_is_refused(self):
+        """An IBus engine is not a group of the keymap we just read."""
+        self.service(current=1, sources=(("xkb", "us"), ("ibus", "libpinyin")))
+        self.assertIsNone(self.reader.group(text("kde_us_de")))
+        self.assertEqual(xkbmap._cinnamon_index(0, [["xkb", "us"], ["ibus", "libpinyin"]]), 0)
+
+    def test_an_index_past_the_keymaps_last_group_is_not_an_answer(self):
+        self.service(current=2, sources=(("xkb", "us"), ("xkb", "de"), ("xkb", "fr")))
+        self.assertIsNone(self.reader.group(text("kde_us_de")))
+        self.assertEqual(self.reader.group(text("kde_us_de_fr")), 3)
+
+    def test_a_program_that_threw_leaves_the_guess(self):
+        self.service(answer="throw")
+        self.assertIsNone(self.reader.group(text("kde_us_de")))
+
+    def test_an_answer_that_is_not_json_leaves_the_guess_and_is_retried(self):
+        """`(true, 'undefined')` is what Eval answers for a program whose value `JSON.stringify` cannot
+        encode -- the shape a Cinnamon whose schema lost a key would return. The decode raises inside
+        `_index`, which is not a fact about the session: the guess stands and the backoff is armed rather
+        than `absent` being set."""
+        self.service(answer="notjson")
+        self.assertIsNone(self.reader.group(text("kde_us_de")))
+        self.assertFalse(self.reader.absent)
+        self.assertGreater(self.reader.retry_at, 0.0)
+
+    def test_a_bus_with_no_cinnamon_on_it_is_remembered(self):
+        """No `org.Cinnamon`: not a Cinnamon session, which is permanent. NameHasOwner and no Eval, so
+        nothing is started by the asking either."""
+        self.assertIsNone(self.reader.group(text("kde_us_de")))
+        self.assertTrue(self.reader.absent)
+        svc = self.service()                       # Cinnamon arrives afterwards; we do not go back
+        self.assertIsNone(self.reader.group(text("kde_us_de")))
+        self.assertEqual(svc.scripts, [])
+
+    #: The program the plan spells out for this reader, written here so that this file pins the bytes
+    #: that reach `org.Cinnamon.Eval` rather than reading them back out of the constant that sends them
+    #: [the plan's A 1.3; M recon2/cinnamon.md §2.2 for the two keys it reads].
+    PROGRAM = ("JSON.stringify((s => [s.get_uint('current'), s.get_value('sources').deep_unpack()])"
+               "(new imports.gi.Gio.Settings({schema_id: 'org.cinnamon.desktop.input-sources'})))")
+
+    def test_the_program_is_read_only_and_is_the_only_one_sent(self):
+        """The interpolation rule, at the one place this module talks to an `eval()`: exactly one program
+        goes out, it is the one written above, and it writes nothing. Reordering it, widening it to a
+        second Eval or growing a `set_` all fail here."""
+        svc = self.service()
+        self.reader.group(text("kde_us_de"))
+        self.assertEqual(svc.scripts, [self.PROGRAM])
+        self.assertNotIn("set_", self.PROGRAM)
+        self.assertNotIn("%", xkbmap.CINNAMON_SCRIPT, "the constant is a literal, not a format string")
+
+    def test_the_snapshot_says_who_answered(self):
+        self.service(current=1)
+        self.addCleanup(setattr, xkbmap, "_fetch_wayland", xkbmap._fetch_wayland)
+        xkbmap._fetch_wayland = fake_wayland("kde_us_de")
+        with env(WDOTOOL_XKB_KEYMAP=None, WDOTOOL_XKB_GROUP=None, WDOTOOL_LAYOUT=None):
+            snap = xkbmap.fetch()
+        self.assertEqual((snap.group, snap.group_known, snap.source),
+                         (2, True, "wayland + cinnamon input-sources"))
+
+
+class CosmicWithKeyboard(wl_fake.CosmicCompositor):
+    """The shared COSMIC fake, plus the seat and the keymap descriptor a `fetch()` needs.
+
+    `wl_fake.Server` answers binds and nothing else, so the two events every real compositor sends a fresh
+    client are packed here by hand, like everything else in that module: `wl_seat.capabilities` with the
+    keyboard bit, and `wl_keyboard.keymap(XKB_V1, fd, size)` with the keymap on a descriptor. The layout
+    manager itself is the shared fake's -- it advertises `zcosmic_keyboard_layout_manager_v1` at version 1
+    among cosmic-comp's recorded globals and sends `group` on `get_keyboard_layout`
+    [M recon2/cosmic.md §4]. What is recorded here is the request's *arguments*, because the one thing a
+    reader can get wrong on the wire is handing it the wl_seat where the protocol asks for the
+    wl_keyboard [R recon2/cosmic/cosmic-keyboard-layout-unstable-v1.xml]."""
+
+    PREFIX = "wdotool-cosmic-kbd-"
+    #: WL_SEAT_CAPABILITY_KEYBOARD
+    KEYBOARD = 2
+
+    def __init__(self, keymap_path, **kw):
+        self.keymap_path = keymap_path
+        self.kb_oid = None
+        self.layout_args = []      # (new_id, object) of every get_keyboard_layout
+        super().__init__(**kw)
+
+    def on_bind(self, conn, state, name, iface, version, new_id):
+        super().on_bind(conn, state, name, iface, version, new_id)
+        if iface == "wl_seat":
+            self._send(conn, new_id, 0, struct.pack("<I", self.KEYBOARD))   # capabilities
+
+    def on_request(self, conn, state, oid, opcode, body, fds):
+        if oid == self.seat_oid and opcode == 1:            # wl_seat.get_keyboard(id)
+            self.kb_oid = struct.unpack_from("<I", body)[0]
+            self._send_keymap(conn, self.kb_oid)
+            return
+        if self.kbd_mgr is not None and oid == self.kbd_mgr and opcode == 0:
+            self.layout_args.append(struct.unpack_from("<II", body))
+        super().on_request(conn, state, oid, opcode, body, fds)
+
+    def _send_keymap(self, conn, kb):
+        fd = os.open(self.keymap_path, os.O_RDONLY)
+        try:
+            size = os.fstat(fd).st_size
+            wire = wl_fake.msg(kb, 0, struct.pack("<II", 1, size))   # keymap(XKB_V1, fd, size)
+            conn.sendmsg([wire], [(socket.SOL_SOCKET, socket.SCM_RIGHTS, struct.pack("i", fd))])
+        except OSError:
+            pass
+        finally:
+            os.close(fd)
+
+
+class CosmicRefusingTheLayout(CosmicWithKeyboard):
+    """cosmic-comp answering `get_keyboard_layout` with `wl_display.error`, then serving on.
+
+    Not measured -- the nested rig never drove this request -- but it is the shape a compositor uses to
+    say no to a request it dislikes (a `wl_keyboard` it does not recognise, a version quibble), and it is
+    fatal to the connection: `WlConn` marks itself dead and every later call raises. The keymap has
+    already been read by then, and losing it would take `type` on COSMIC from "types with the guess" to
+    "refuses outright"."""
+
+    def on_request(self, conn, state, oid, opcode, body, fds):
+        if self.kbd_mgr is not None and oid == self.kbd_mgr and opcode == 0:
+            self.layout_args.append(struct.unpack_from("<II", body))
+            text = b"invalid keyboard\0"
+            # wl_display.error(object_id, code, message)
+            self._send(conn, 1, 0, struct.pack("<III", oid, 0, len(text))
+                       + text + b"\0" * ((-len(text)) % 4))
+            return
+        super().on_request(conn, state, oid, opcode, body, fds)
+
+
+class CosmicWedgedOnTheLayout(CosmicWithKeyboard):
+    """cosmic-comp that stops answering at `get_keyboard_layout` -- the sync after it never comes back.
+
+    The other half of the same claim: a round trip that runs into `conn.sock.settimeout(timeout)` instead
+    of into an error. `_request` is what is overridden, not `on_request`: `wl_fake.Server` answers
+    `wl_display.sync` itself, above the subclass hook, so a fake that only stops handling requests still
+    completes every round trip and proves nothing. `fetch(timeout=...)` bounds the wait, and what is left
+    of the fetch must still be the keymap."""
+
+    wedged = False
+
+    def _request(self, conn, state, fds, oid, opcode, body):
+        if self.kbd_mgr is not None and oid == self.kbd_mgr and opcode == 0:
+            self.layout_args.append(struct.unpack_from("<II", body))
+            self.wedged = True
+            return                 # and the wl_display.sync behind it goes unanswered too
+        if self.wedged:
+            return
+        super()._request(conn, state, fds, oid, opcode, body)
+
+
+class TestTheActiveGroupOnTheCosmicWire(unittest.TestCase):
+    """U29: COSMIC's group arrives on the wire, the way sway's does -- no bus, no portal, no reader.
+
+    cosmic-comp publishes `zcosmic_keyboard_layout_manager_v1`, whose `group` event the XML says is
+    "received even when the client has no focused window" -- which is the single sentence that separates it
+    from `wl_keyboard.modifiers` and from every desktop `desktop_group()` has to ask
+    [R recon2/cosmic/cosmic-keyboard-layout-unstable-v1.xml, advertised at version 1 among the 53 recorded
+    globals [M cosmic.md §4]]. No COSMIC keymap was recorded, so the keymap on the descriptor here is the
+    two-group `us, de` from the fixtures; what is being proved is the wire, not the keymap."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.dir = tempfile.mkdtemp(prefix="wdotool-cosmic-keymap-")
+        cls.maps = {}
+        for name in ("kde_us_de", "kde_us"):
+            path = os.path.join(cls.dir, name + ".xkb")
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(text(name))
+            cls.maps[name] = path
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.dir, ignore_errors=True)
+
+    def fetch(self, keymap="kde_us_de", cls=CosmicWithKeyboard, timeout=2.0, **kw):
+        comp = cls(self.maps[keymap], **kw)
+        self.addCleanup(comp.close)
+        with env(XDG_RUNTIME_DIR=comp.dir, WAYLAND_DISPLAY=os.path.basename(comp.path),
+                 SWAYSOCK=None, I3SOCK=None, WDOTOOL_XKB_KEYMAP=None,
+                 WDOTOOL_XKB_GROUP=None, WDOTOOL_LAYOUT=None):
+            return comp, xkbmap.fetch(timeout=timeout, mods_wait=0.05)
+
+    def test_the_group_event_is_the_known_group(self):
+        comp, snap = self.fetch(layout_group=1)
+        self.assertEqual((snap.group, snap.group_known), (2, True))
+        self.assertEqual(snap.source, "wayland")        # it came off the wire, like sway's
+        self.assertFalse(snap.mods_seen, "no wl_keyboard.modifiers reached an unfocused client")
+
+    def test_the_layout_object_is_made_on_the_keyboard_not_the_seat(self):
+        comp, _snap = self.fetch(layout_group=0)
+        self.assertEqual(len(comp.layout_args), 1)
+        new_id, obj = comp.layout_args[0]
+        self.assertEqual(obj, comp.kb_oid)
+        self.assertNotEqual(obj, comp.seat_oid)
+        self.assertEqual(comp.kbd_layouts, [new_id])
+
+    def test_a_group_that_never_arrives_leaves_the_guess(self):
+        """Whether cosmic-comp sends the event to a client that has never held focus is not measured, so
+        the reader is written for both: no event, and the guess and its notice stand."""
+        _comp, snap = self.fetch(layout_group=None)
+        self.assertEqual((snap.group, snap.group_known), (1, False))
+
+    def test_a_compositor_that_refuses_the_request_still_yields_its_keymap(self):
+        """The guard: `_cosmic_group` runs inside the same `try` that turns a wire failure into XkbError,
+        so an unguarded refusal would throw away a keymap that was already read and make `type` and `key`
+        fail outright on COSMIC, where the guess had been typing. Nothing about typing may depend on this
+        working (B13)."""
+        comp, snap = self.fetch(cls=CosmicRefusingTheLayout, layout_group=1)
+        self.assertEqual((snap.group, snap.group_known), (1, False))
+        self.assertEqual(snap.text, text("kde_us_de"))
+        self.assertEqual(len(comp.layout_args), 1, "the request really was sent and really was refused")
+
+    def test_a_compositor_that_never_answers_the_request_still_yields_its_keymap(self):
+        """The same claim through the timeout rather than through an error."""
+        started = time.monotonic()
+        comp, snap = self.fetch(cls=CosmicWedgedOnTheLayout, layout_group=1, timeout=0.4)
+        self.assertEqual((snap.group, snap.group_known), (1, False))
+        self.assertEqual(snap.text, text("kde_us_de"))
+        self.assertTrue(comp.wedged, "the request reached the compositor and was swallowed")
+        self.assertLess(time.monotonic() - started, 5.0, "the socket deadline bounded it")
+
+    def test_one_group_is_not_worth_a_round_trip(self):
+        """The group only matters when there is more than one to choose from, which is the rule the
+        modifiers wait already follows."""
+        comp, snap = self.fetch(keymap="kde_us", layout_group=1)
+        self.assertEqual((snap.group, snap.group_known), (1, True))
+        self.assertEqual(comp.layout_args, [])
+        self.assertNotIn((xkbmap.COSMIC_LAYOUT_MANAGER, 1), comp.binds)
+
+
+class TestTheFiveReadersInTurn(unittest.TestCase):
+    """`desktop_group()`: the sockets before the buses, and the first answer wins.
+
+    The cost of asking is the whole reason for the order -- `find_hypr_socket()` and
+    `find_wayfire_socket()` are a scandir of $XDG_RUNTIME_DIR where a bus reader pays a connect, an
+    EXTERNAL auth and a GetNameOwner -- and each reader's own `absent` is what keeps the loop to one probe
+    per reader per process."""
+
+    NAMES = ("hypr_group", "wayfire_group", "kwin_group", "gnome_group", "cinnamon_group")
+
+    def readers(self, *answers):
+        seen = []
+        for name, answer in zip(self.NAMES, answers):
+            self.addCleanup(setattr, xkbmap, name, getattr(xkbmap, name))
+
+            def ask(_text, name=name, answer=answer):
+                seen.append(name)
+                return answer
+
+            setattr(xkbmap, name, ask)
+        return seen
+
+    def test_every_reader_is_asked_once_sockets_first(self):
+        seen = self.readers(None, None, None, None, None)
+        self.assertIsNone(xkbmap.desktop_group(text("kde_us_de")))
+        self.assertEqual(seen, list(self.NAMES))
+
+    def test_the_first_answer_wins_and_the_rest_are_never_asked(self):
+        seen = self.readers(None, 2, 1, 1, 1)
+        self.assertEqual(xkbmap.desktop_group(text("kde_us_de")), (2, "wayfire"))
+        self.assertEqual(seen, ["hypr_group", "wayfire_group"])
+
+    def test_each_desktop_names_itself(self):
+        """The name goes into `Snapshot.source` as `wayland + <who>`, which is what
+        `wdotool __keymap` prints and what a bug report has to be able to name."""
+        want = ("hyprland devices", "wayfire", "kwin", "gnome input-sources", "cinnamon input-sources")
+        for i, who in enumerate(want):
+            with contextlib.ExitStack() as stack:
+                for j, name in enumerate(self.NAMES):
+                    stack.enter_context(mock.patch.object(
+                        xkbmap, name, lambda _t, answer=(2 if i == j else None): answer))
+                self.assertEqual(xkbmap.desktop_group(text("kde_us_de")), (2, who))
 
 
 if __name__ == "__main__":

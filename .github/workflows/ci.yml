@@ -38,7 +38,9 @@ jobs:
       - id: list
         run: |
           files=$(for f in tests/test_*.py; do basename "$f" .py; done | jq -R . | jq -sc .)
-          flavors=$(for f in vm/flavors/*.yaml; do basename "$f" .yaml; done | jq -R . | jq -sc .)
+          # the rig runs the flavors whose yaml says `# vmctl-ci: push`; `on-demand` ones (ISO installs,
+          # the foreign distros while their fetch rules land) are built by hand or by workflow_dispatch
+          flavors=$(for f in vm/flavors/*.yaml; do grep -q '^# vmctl-ci: push' "$f" && basename "$f" .yaml; done | jq -R . | jq -sc .)
           key=$(sha256sum .github/ci/Dockerfile | cut -c1-12)
           { echo "files=$files"; echo "flavors=$flavors"; echo "image_key=$key"; } >> "$GITHUB_OUTPUT"
 

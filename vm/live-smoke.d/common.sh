@@ -1,8 +1,10 @@
 # live-smoke.d/common.sh -- the phases that are the same on every desktop.
 #
 # Sourced by vm/live-smoke.sh, which owns the helpers used here (pass/fail/
-# want/same/guest/root/shot) and the variables NAME/FLAVOR/DESKTOP/MODE/REPO/
-# VM/DEB/HEADS/SCALE.  A desktop step file is sourced AFTER this one and
+# want/same/xwant/guest/root/shot), the package axis (pkg_files, pkg_deploy,
+# pkg_install_cmd, pkg_remove_cmd, pkg_left_behind, pkg_banner_re -- one arm per
+# `# vmctl-distro:`) and the variables NAME/FLAVOR/DESKTOP/DISTRO/MODE/REPO/VM/
+# DEB/VERSION/HEADS/SCALE.  A desktop step file is sourced AFTER this one and
 # overrides any function below by redefining it; the hooks it must define are:
 #
 #   SMOKE_PHASES     the ordered default phase list for that desktop
@@ -215,17 +217,41 @@ phase_install() {
         guest "wdotool --version; wxrandr --version" | sed 's/^/     /' || true
         return 0
     fi
-    [ -f "$DEB" ] || { fail "no $DEB (scripts/build-deb.sh first)"; return 1; }
-    "$VM" scp "$NAME" "$DEB" "$NAME:/tmp/fw.deb" >/dev/null
-    local out st=0
-    out=$(root "cd /tmp && apt-get install -y ./fw.deb 2>&1" ) || st=$?
-    ok "apt-get install ./fw.deb" "$st"
-    # The postinst banner is printed on a FIRST install only (the stamp
-    # /var/lib/fuckwayland/installed decides), which a --fresh instance is.
-    want "the first-install banner names the relogin and /dev/uinput" \
-         "LOG OUT AND BACK IN ONCE" "$out"
+    # NixOS installs nothing: the module is baked into the image, and what the
+    # phase owes instead is proof that the running system is the one with it on
+    # (vm/nixos/common.nix bakes two specialisations, and `--remove` switches
+    # into the other).  A store path with the version in its name is what
+    # `programs.fuckwayland.enable` put on PATH; the without-fuckwayland
+    # specialisation directory exists only under the DEFAULT system, because a
+    # specialisation has no specialisations of its own.
+    if [ "$DISTRO" = nixos ]; then
+        want "wdotool is a /nix/store path carrying $VERSION" \
+             "^/nix/store/[a-z0-9]+-fuckwayland-$VERSION/" \
+             "$(guest 'readlink -f $(command -v wdotool)' | tr -d ' \r' || true)"
+        same "/run/current-system is the default specialisation, not without-fuckwayland" "yes" \
+             "$(guest 'test -d /run/current-system/specialisation/without-fuckwayland && echo yes || echo no' \
+                  | tr -d ' \r' || true)"
+        return 0
+    fi
+    pkg_deploy || return 1
+    local out st=0 cmd
+    cmd=$(pkg_install_cmd)
+    out=$(root "$cmd") || st=$?
+    ok "$cmd" "$st"
+    # The postinst/scriptlet banner is printed on a FIRST install only (the
+    # stamp /var/lib/fuckwayland/installed decides), which a --fresh instance
+    # is.  dpkg and pacman print the same paragraph; the rpm prints nothing at
+    # all on purpose, and what it owes instead is README.Fedora in %doc
+    # [recon2/pkg-rpm 292].
+    local banner; banner=$(pkg_banner_re)
+    if [ -n "$banner" ]; then
+        want "the first-install banner names the relogin and /dev/uinput" "$banner" "$out"
+    elif [ "$DISTRO" = fedora ]; then
+        want "no banner, but the rpm ships README.Fedora where the advice went" "README.Fedora" \
+             "$(root 'rpm -ql fuckwayland 2>/dev/null | grep -i readme' || true)"
+    fi
     if [ "$MODE" = tree ]; then
-        step "deploying the WORKING TREE over the package (the tree carries fixes the .deb does not)"
+        step "deploying the WORKING TREE over the package (the tree carries fixes the package does not)"
         ( cd "$REPO" && sh scripts/build-pyz.sh >/dev/null )
         local t
         for t in $SMOKE_TOOLS; do
@@ -242,9 +268,72 @@ phase_install() {
     root "( sleep 1; reboot ) >/dev/null 2>&1 &" >/dev/null 2>&1 || true
     sleep 8
     wait_session >/dev/null || { fail "no session after the install reboot"; return 1; }
-    sleep 15        # debian/enable-bridge runs from /etc/xdg/autostart; ~12 s on 46/50
+    sleep 15        # packaging/common/enable-bridge runs from /etc/xdg/autostart; ~12 s on 46/50
     after_reboot
     pass "reboot into a session with the package installed"
+}
+
+# The two distro phases.  live-smoke.sh appends them to the step file's own
+# SMOKE_PHASES for the distros that name them (distro_phases), so no desktop
+# step file carries a distro branch.
+
+# Fedora runs SELinux Enforcing out of the box, and nothing in the recon tripped
+# it: the tools and the daemon are unconfined_t, `install-bridge.sh --udev` and
+# the rpm's %post write into /etc/udev/rules.d with the right label, and the
+# uinput node keeps its own event_device_t [recon2/fedora 2, recon2/pkg-rpm].
+# That is a negative claim about a whole run, so this is the phase that would
+# say so if an AVC ever appeared.  The three names are the only processes of
+# ours that touch a labelled object: the tools run as `python3` under their
+# zipapp names, the daemon execs `wdotool`, and the scriptlets run `udevadm`.
+phase_selinux() {
+    local mode avc
+    # `|| true` on both: `getenforce` is not installed off Fedora and `grep -c`
+    # exits 1 when it counts zero -- which is the PASSING case -- and either
+    # status would abort the phase under the driver's `set -e` before its own
+    # `same` ran.
+    mode=$(root 'getenforce 2>/dev/null' | tr -d ' \r' || true)
+    same "SELinux is Enforcing (the state every Fedora measurement was taken in)" "Enforcing" "$mode"
+    avc=$(root "journalctl -b _TRANSPORT=audit --no-pager 2>/dev/null \
+                | grep -c 'AVC.*comm=\"\\(wdotool\\|python3\\|udevadm\\)\"'" | tr -d ' \r' || true)
+    same "no SELinux denial for wdotool, python3 or udevadm in this boot" "0" "${avc:-0}"
+    note "audit lines this boot: $(root 'journalctl -b _TRANSPORT=audit --no-pager 2>/dev/null | wc -l' \
+             | tr -d ' \r' || true)"
+}
+
+# `rpm -V` and `pacman -Qkk` compare every installed file against the package's
+# own record of it.  Both print NOTHING when everything agrees, so the assertion
+# is emptiness -- which also means the phase has to notice a package that is not
+# installed at all rather than call that a pass.
+phase_pkgverify() {
+    local cmd out
+    case "$DISTRO" in
+    fedora) cmd="rpm -V fuckwayland" ;;
+    arch)   cmd="pacman -Qkk fuckwayland" ;;
+    *)      note "no package verifier for distro $DISTRO"; return 0 ;;
+    esac
+    # Tree mode is not a weaker version of this check, it is a different run:
+    # phase_install deploys the zipapps into /usr/local/bin (which no package
+    # owns, so the verifier is right to ignore them) AND, on gnome.sh, installs
+    # the tree's extension.js/metadata.json/org.fuckwayland.Bridge1.xml over the
+    # package's copies under /usr/share/gnome-shell/extensions -- which the
+    # single Arch package DOES own, so `pacman -Qkk` would report altered files
+    # and this phase would be red by construction on arch-gnome.  So the tree
+    # run says what it did not check and stops.
+    if [ "$MODE" != pkg ]; then
+        note "(--pkg not given: the tree deploy overwrote package-owned files, so $cmd has nothing to prove here)"
+        return 0
+    fi
+    out=$(root "$cmd 2>&1" || true)
+    # pacman -Qkk prints one `... 0 altered files` summary line on success; rpm
+    # -V prints nothing at all.  Anything else -- a `5` size mismatch, a missing
+    # file, `package fuckwayland is not installed` -- is what this phase exists
+    # to catch, so the accepted shapes are named and everything else is a FAIL.
+    if [ -z "$(printf '%s' "$out" | tr -d ' \r\n')" ] \
+       || printf '%s\n' "$out" | grep -Eq '^fuckwayland: .* 0 altered files$'; then
+        pass "$cmd is clean: every installed file is as the package recorded it"
+    else
+        fail "$cmd reported a difference [$(ev "$out")]"
+    fi
 }
 
 phase_windows() {

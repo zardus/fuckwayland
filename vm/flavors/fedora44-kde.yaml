@@ -1,0 +1,67 @@
+#cloud-config
+# vmctl flavor fedora44-kde: Fedora 44 Cloud + the KDE environment, Plasma 6.7.4 / KWin 6.7.4
+# on Wayland, seated by PLASMA-LOGIN-MANAGER and not by SDDM.  Native display tool:
+# kscreen-doctor -o.
+#
+# On demand, not per push, for one reason: nobody has run this autologin.  Fedora 44 replaced
+# SDDM with plasma-login-manager in every KDE variant, and the three keys vm/build-image.sh's
+# dm_plasmalogin writes -- [Autologin] User=, Session=, Relogin= in
+# /etc/plasmalogin.conf.d/autologin.conf, unit plasmalogin.service -- were READ OUT OF THE
+# RPM's own /etc/plasmalogin.conf template, not measured on a running system
+# [recon2/fedora 5].  kde.sh's `dm` phase is where that gets settled: it asks logind which
+# service seated the session and says XFAIL until it answers plasmalogin.  Promote this row to
+# `push` after the first green run.
+#
+# KWin itself needs nothing new: the whole window path goes through
+# org.kde.KWin.Scripting.loadScript, which is as unprivileged on Fedora as on Kubuntu, and
+# kde_output_management_v2 drives wxrandr -- both measured on Fedora's kwin 6.7.4
+# [recon2/fedora 3.4].  Its registry advertises neither foreign-toplevel protocol, so the
+# matrix's "pointer and keyboard need the udev rule (or root)" stays true here.
+#
+# vmctl fills in the two @@...@@ placeholders at build time (root ssh public key; the
+# contents of vm/build-image.sh). The base image lives in $VMIMAGES:
+# vmctl-base: Fedora-Cloud-Base-Generic-44-1.7.x86_64.qcow2
+# vmctl-base-sha256: 28680fe5b371a5a82ebf43a31926e086a168e59949d03969c5093e7071f90b7f
+# vmctl-desktop: kde
+# vmctl-distro: fedora
+# vmctl-ci: on-demand
+hostname: fedora44-kde
+manage_etc_hosts: true
+disable_root: false
+ssh_pwauth: false
+ssh_authorized_keys:
+  - @@ROOT_PUBKEY@@
+users:
+  - name: test
+    uid: 1000
+    gecos: Test User
+    groups: [wheel]
+    shell: /bin/bash
+    lock_passwd: false
+    plain_text_passwd: test
+    sudo: ALL=(ALL) NOPASSWD:ALL
+write_files:
+  # No `owner:` on any entry here.  write_files runs BEFORE the users module, so
+  # `owner: test:test` aborts the whole module with `OSError: Unknown user or
+  # group ... 'test'` and cloud-init ends in status: error [recon2/hyprland].
+  # Everything under /home/test is chowned by the build script instead.
+  - path: /etc/ssh/sshd_config.d/60-vmctl.conf
+    content: "PermitRootLogin prohibit-password\n"
+  - path: /etc/modules-load.d/uinput.conf
+    content: "uinput\n"
+  - path: /etc/vmctl-build.env
+    content: |
+      FLAVOR=fedora44-kde
+      DESKTOP=kde
+      DESKTOP_PKG="kde-desktop-environment kate konsole"
+      EXTRA_PKGS="xdotool wmctrl xprop xrandr wl-mirror python3-gobject gtk3 acl xterm"
+  - path: /usr/local/sbin/vmctl-build
+    permissions: '0755'
+    content: |
+      @@BUILD_SCRIPT@@
+runcmd:
+  - [/usr/local/sbin/vmctl-build]
+power_state:
+  mode: poweroff
+  message: vmctl golden build finished
+  timeout: 120

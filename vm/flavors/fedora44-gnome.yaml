@@ -1,0 +1,69 @@
+#cloud-config
+# vmctl flavor fedora44-gnome: Fedora 44 Cloud + the Workstation environment, GNOME Shell 50.4
+# on mutter 50.4, GDM autologin of user test (uid 1000, password test, NOPASSWD sudo through
+# %wheel -- Fedora has no `sudo` group).  Native display tool: Mutter's own
+# org.gnome.Mutter.DisplayConfig.GetCurrentState, exactly as on the Ubuntu GNOME flavors.
+#
+# What this flavor is for, and what makes it worth a build per push: GNOME 50 on a mutter
+# nobody here has ever run.  Three things are Ubuntu-shaped in the tree and are measured
+# against a second distribution for the first time here --
+#   * the bridge outside Debian packaging: the extension loaded and took
+#     org.fuckwayland.Bridge on Fedora's gnome-shell 50.4 in the recon, but only under a
+#     headless shell; every window command through it is still unmeasured [recon2/fedora 3.2].
+#   * the overlap route's private struct size.  gnome/fuckwayland-overlap@fuckwayland/
+#     generations.json records MetaMonitorsConfig at 80 bytes for Ubuntu's mutter 50.1 and
+#     has no row for Fedora's 50.4; the extension refuses unless its own read agrees, so
+#     `wxrandr --gnome-overlap-status` here is an `xwant` in gnome.sh until this builds once
+#     [plan C1, C5 item 22].
+#   * /etc/gdm and /var/lib/gdm, not gdm3 -- resolved in the guest by which directory the
+#     package created, never by the distro name [recon2/fedora 5].
+# SELinux is Enforcing out of the box and the smoke's `selinux` phase says so and asserts no
+# AVC for wdotool, python3 or udevadm; nothing in the recon tripped one [recon2/fedora 2].
+#
+# vmctl fills in the two @@...@@ placeholders at build time (root ssh public key; the
+# contents of vm/build-image.sh). The base image lives in $VMIMAGES:
+# vmctl-base: Fedora-Cloud-Base-Generic-44-1.7.x86_64.qcow2
+# vmctl-base-sha256: 28680fe5b371a5a82ebf43a31926e086a168e59949d03969c5093e7071f90b7f
+# vmctl-desktop: gnome
+# vmctl-distro: fedora
+# vmctl-ci: push
+hostname: fedora44-gnome
+manage_etc_hosts: true
+disable_root: false
+ssh_pwauth: false
+ssh_authorized_keys:
+  - @@ROOT_PUBKEY@@
+users:
+  - name: test
+    uid: 1000
+    gecos: Test User
+    groups: [wheel]
+    shell: /bin/bash
+    lock_passwd: false
+    plain_text_passwd: test
+    sudo: ALL=(ALL) NOPASSWD:ALL
+write_files:
+  # No `owner:` on any entry here.  write_files runs BEFORE the users module, so
+  # `owner: test:test` aborts the whole module with `OSError: Unknown user or
+  # group ... 'test'` and cloud-init ends in status: error [recon2/hyprland].
+  # Everything under /home/test is chowned by the build script instead.
+  - path: /etc/ssh/sshd_config.d/60-vmctl.conf
+    content: "PermitRootLogin prohibit-password\n"
+  - path: /etc/modules-load.d/uinput.conf
+    content: "uinput\n"
+  - path: /etc/vmctl-build.env
+    content: |
+      FLAVOR=fedora44-gnome
+      DESKTOP=gnome
+      DESKTOP_PKG="workstation-product-environment"
+      EXTRA_PKGS="xdotool wmctrl xprop xrandr wl-mirror python3-gobject gtk3 acl xterm"
+  - path: /usr/local/sbin/vmctl-build
+    permissions: '0755'
+    content: |
+      @@BUILD_SCRIPT@@
+runcmd:
+  - [/usr/local/sbin/vmctl-build]
+power_state:
+  mode: poweroff
+  message: vmctl golden build finished
+  timeout: 120

@@ -76,13 +76,15 @@ DEFAULT = {
 #: name -> (available, reason or what makes it available)
 BACKENDS = {
     "sway": (False, "no sway or i3 IPC socket ($SWAYSOCK)"),
+    "hypr": (False, "no Hyprland IPC socket ($HYPRLAND_INSTANCE_SIGNATURE)"),
     "kwin": (False, "the compositor does not advertise "
                     "kde_output_management_v2"),
     "mutter": (True, "org.gnome.Mutter.DisplayConfig on the session bus"),
+    "cinnamon": (False, "org.cinnamon.Muffin.DisplayConfig is not on the session bus"),
     "wlr": (False, "the compositor does not advertise zwlr_output_manager_v1"),
     "x11": (True, "/usr/bin/xrandr"),
 }
-WAYLAND_BACKENDS = ("sway", "wlr", "mutter", "kwin")
+WAYLAND_BACKENDS = ("sway", "hypr", "wlr", "mutter", "cinnamon", "kwin")
 
 
 def auto_backend():
@@ -128,9 +130,9 @@ def print_backend(forced, verbose):
 def backends_table():
     auto = auto_backend()
     out = ""
-    for name in ("sway", "kwin", "mutter", "wlr", "x11"):
+    for name in ("sway", "hypr", "kwin", "mutter", "cinnamon", "wlr", "x11"):
         ok, why = BACKENDS[name]
-        out += "%s %-6s  %-11s  %s\n" % ("*" if name == auto else " ", name,
+        out += "%s %-8s  %-11s  %s\n" % ("*" if name == auto else " ", name,
                                          "available" if ok else "unavailable",
                                          why)
     return out

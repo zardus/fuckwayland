@@ -1,0 +1,70 @@
+#cloud-config
+# vmctl flavor arch-sway: Arch Linux (the 20260901 cloud image) + sway 1:1.12 with Xwayland,
+# foot and swaybg; greetd autologin ([initial_session]) of user test into sway on vt 1.
+# Native display tool: swaymsg -t get_outputs, with wlr-randr 0.5.0 as a second, independent
+# reader.
+#
+# Arch is here for one measured reason: its archive is the ONLY one that carries all four
+# parity originals at the versions this project clones -- xdotool 4.20260303.1, wmctrl 1.07,
+# xorg-xprop 1.2.8, xorg-xrandr 1.5.4 [recon2/arch 2].  Everywhere else the X11 handover lands
+# on xdotool 3.x and the parity oracle has to be a nix build.  So this is the flavor
+# scripts/parity-oracle.sh runs against a PACKAGED original.
+#
+# sway itself needs nothing: all six tools were measured identical here to Ubuntu's 1.11, and
+# 1.12's registry still carries every global they use (plus a new ext_workspace_manager_v1)
+# [recon2/arch 3.1].
+#
+# Two facts about the base image, both measured: cloud-init 26.2 is IN the image, so the seed
+# vmctl attaches works unchanged; and ssh answered 70 s after qemu started, against 35 s for
+# Fedora [recon2/arch 1].  The image is pinned to the DATED build rather than the `latest`
+# symlink name -- a rolling golden rots weekly, and the undated copy of exactly these bytes
+# measured sha256 e3e688f97a71b265ce202905a504253f60f3680cf57d011a45411c43bedfa930 here on
+# 2026-09-08.  The dated file publishes its own .SHA256 beside it, which ci-golden.sh checks;
+# `# vmctl-base-sha256:` stays out until somebody has verified that file's bytes.
+#
+# vmctl fills in the two @@...@@ placeholders at build time (root ssh public key; the
+# contents of vm/build-image.sh). The base image lives in $VMIMAGES:
+# vmctl-base: Arch-Linux-x86_64-cloudimg-20260901.583572.qcow2
+# vmctl-desktop: sway
+# vmctl-distro: arch
+# vmctl-ci: push
+hostname: arch-sway
+manage_etc_hosts: true
+disable_root: false
+ssh_pwauth: false
+ssh_authorized_keys:
+  - @@ROOT_PUBKEY@@
+users:
+  - name: test
+    uid: 1000
+    gecos: Test User
+    groups: [wheel]
+    shell: /bin/bash
+    lock_passwd: false
+    plain_text_passwd: test
+    sudo: ALL=(ALL) NOPASSWD:ALL
+write_files:
+  # No `owner:` on any entry here.  write_files runs BEFORE the users module, so
+  # `owner: test:test` aborts the whole module with `OSError: Unknown user or
+  # group ... 'test'` and cloud-init ends in status: error [recon2/hyprland].
+  # Everything under /home/test is chowned by the build script instead.
+  - path: /etc/ssh/sshd_config.d/60-vmctl.conf
+    content: "PermitRootLogin prohibit-password\n"
+  - path: /etc/modules-load.d/uinput.conf
+    content: "uinput\n"
+  - path: /etc/vmctl-build.env
+    content: |
+      FLAVOR=arch-sway
+      DESKTOP=sway
+      DESKTOP_PKG="sway swaybg foot grim xorg-xwayland greetd"
+      EXTRA_PKGS="xdotool wmctrl xorg-xprop xorg-xrandr wl-mirror python-gobject gtk3 acl xterm wlr-randr wayland-utils"
+  - path: /usr/local/sbin/vmctl-build
+    permissions: '0755'
+    content: |
+      @@BUILD_SCRIPT@@
+runcmd:
+  - [/usr/local/sbin/vmctl-build]
+power_state:
+  mode: poweroff
+  message: vmctl golden build finished
+  timeout: 120

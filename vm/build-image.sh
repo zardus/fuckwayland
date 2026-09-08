@@ -218,6 +218,32 @@ no_session_ambiguity() {   # SDDM resolves an autologin session NAME against
              "the display manager would pick one of them at random"
     return 0
 }
+dm_enable() {   # dm_enable <unit> <binary> -- make <unit> THE display manager of the image
+    # The debconf answer (pkg_seed_dm) is a hint the postinsts may or may not act
+    # on: gdm3 46's postinst leaves gdm3.service DISABLED when the desktop
+    # metapackage pulls it in non-interactively (measured 2026-09-08: a
+    # noble-gnome built by this script booted to a text console, no
+    # /etc/systemd/system/display-manager.service, no /etc/X11/default-display-
+    # manager; `systemctl enable gdm3` alone brought the autologin up), and dnf
+    # and pacman have no such question at all -- their DM is whatever unit is
+    # enabled.  So every dm_* ends here: the Debian pointer file where Debian
+    # reads one, the other DMs' alias dropped, ours enabled, and the alias that
+    # results checked, because an image that boots into the wrong desktop (or
+    # none) is forty minutes nobody gets back.
+    local unit=$1 bin=$2 other dmlink
+    if [ "$PKG" = apt ]; then
+        wdir "$VMCTL_ROOT/etc/X11"
+        echo "$bin" > "$VMCTL_ROOT/etc/X11/default-display-manager"
+        written "$VMCTL_ROOT/etc/X11/default-display-manager"
+    fi
+    for other in gdm gdm3 sddm plasmalogin lightdm; do
+        [ "$other" = "$unit" ] || systemctl disable "$other" 2>/dev/null || true   # drops its display-manager.service alias
+    done
+    systemctl enable "$unit" || fail "systemctl enable $unit failed"
+    dmlink=$(readlink -f "$VMCTL_ROOT/etc/systemd/system/display-manager.service")
+    [ "${dmlink##*/}" = "$unit.service" ] || fail "display-manager.service is not $unit: ${dmlink:-missing}"
+    say "$unit is the display manager (display-manager.service -> $dmlink)"
+}
 dm_gdm() {   # dm_gdm wayland|x11 -- resolve the GNOME session file, then the DM
     # The session NAME is Ubuntu's ubuntu/ubuntu-xorg (gnome-session's ubuntu-session
     # deb) and plain gnome/gnome-xorg everywhere else: Fedora 44 ships exactly
@@ -258,6 +284,8 @@ InitialSetupEnable=false
 EOF
     [ "$kind" = x11 ] && no_session_ambiguity "$sess.desktop"
     accountsservice "$sess" "$sess"
+    # Ubuntu's package is gdm3 (unit gdm3.service, /usr/sbin/gdm3); Fedora's and Arch's is gdm
+    if [ "$dir" = etc/gdm3 ]; then dm_enable gdm3 /usr/sbin/gdm3; else dm_enable gdm /usr/sbin/gdm; fi
 }
 dm_sddm() {   # dm_sddm <session.desktop>
     local sess=$1
@@ -274,6 +302,7 @@ Session=$sess
 Relogin=false
 EOF
     accountsservice "${sess%.desktop}"
+    dm_enable sddm /usr/bin/sddm
 }
 dm_plasmalogin() {   # dm_plasmalogin <session.desktop>
     # Fedora 44 replaced SDDM with plasma-login-manager in every KDE variant (the
@@ -293,6 +322,7 @@ Session=$sess
 Relogin=false
 EOF
     accountsservice "${sess%.desktop}"
+    dm_enable plasmalogin /usr/bin/plasmalogin
 }
 dm_plasma() {   # dm_plasma wayland|x11 -- resolve the Plasma session file, then the DM
     # Plasma 5.27 (24.04): the Wayland session is plasmawayland.desktop from
@@ -365,15 +395,7 @@ dm_lightdm() {   # dm_lightdm <session>
     # `ls` of a missing path fails; keep the pipeline (set -o pipefail, ERR trap) happy
     dms=$({ ls "$VMCTL_ROOT/usr/sbin/gdm3" "$VMCTL_ROOT/usr/bin/sddm" 2>/dev/null || true; } | tr '\n' ' ')
     say "LightDM is the display manager (installed alongside: ${dms:-none})"
-    wdir "$VMCTL_ROOT/etc/X11"
-    echo /usr/sbin/lightdm > "$VMCTL_ROOT/etc/X11/default-display-manager"
-    written "$VMCTL_ROOT/etc/X11/default-display-manager"
-    systemctl disable gdm gdm3 sddm 2>/dev/null || true       # drops their display-manager.service alias
-    systemctl enable lightdm
-    local dmlink
-    dmlink=$(readlink -f "$VMCTL_ROOT/etc/systemd/system/display-manager.service")
-    [ "$dmlink" = "$VMCTL_ROOT/usr/lib/systemd/system/lightdm.service" ] \
-      || fail "display-manager.service is not lightdm: $dmlink"
+    dm_enable lightdm /usr/sbin/lightdm
     # LightDM 1.32's built-in sessions-directory is /usr/share/lightdm/sessions:
     # /usr/share/xsessions:/usr/share/wayland-sessions (read out of the shipped
     # binary [recon2/cinnamon, recon2/xfce-wayland]), so one stanza selects either

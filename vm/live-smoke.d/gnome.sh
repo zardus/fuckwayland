@@ -9,6 +9,16 @@
 # gapped layout, --persistent reverting after 20 s unless the bridge's
 # ConfirmDisplayChange(true) answers the dialog, and the overlap route applying
 # on 46.0 with six green checks.
+#
+# It also runs on fedora44-gnome (GNOME Shell 50.4 on mutter 50.4) and, on
+# demand, on fedora43-gnome (GNOME 49) and arch-gnome.  Two facts differ from
+# Ubuntu and both are handled below rather than in a second file: GDM's config
+# and state live under /etc/gdm and /var/lib/gdm instead of gdm3 (measured on
+# Fedora 44 and on Arch [recon2/fedora 5, recon2/arch 5]), and the overlap
+# route's private struct size on Fedora's own libmutter-18 has never been read
+# -- gnome/fuckwayland-overlap@fuckwayland/generations.json records 80 for
+# Ubuntu's mutter 50.1 and nothing for Fedora's 50.4, so the overlap check
+# there is an `xwant` naming the row it waits for [plan C1, C5 item 22].
 
 # `remove` is deliberately not in this list: it destroys the installation every
 # other phase measures, so live-smoke.sh runs it last and only under --remove.
@@ -21,6 +31,13 @@ BRIDGE_UUID=fuckwayland-bridge@fuckwayland
 OVERLAP_UUID=fuckwayland-overlap@fuckwayland
 BR='--session -d org.fuckwayland.Bridge -o /org/fuckwayland/Bridge -m org.fuckwayland.Bridge1'
 MX='$HOME/.config/monitors.xml'  # expanded in the guest, not here
+
+# GDM's own two paths, resolved in the GUEST by which directory the package
+# created and never by the distro name -- the same rule vm/build-image.sh's
+# dm_gdm follows.  Ubuntu's gdm3 uses /etc/gdm3 and /var/lib/gdm3; Fedora's and
+# Arch's gdm use /etc/gdm and /var/lib/gdm [recon2/fedora 5, recon2/arch 5].
+GDM_CONF='$(ls /etc/gdm3/custom.conf /etc/gdm/custom.conf 2>/dev/null | head -1)'
+GDM_HOME='$(ls -d /var/lib/gdm3 /var/lib/gdm 2>/dev/null | head -1)'
 
 editor_start() {
     # A GUI started in the foreground over ssh never returns: detach it.
@@ -88,6 +105,16 @@ phase_bridge() {
               | grep -o '\[fuckwayland-bridge\].*' | tail -1" || true)"
     want "the bridge answers GetVersion on the session bus" "uint32|[0-9]" \
          "$(guest "gdbus call $BR.GetVersion 2>&1" || true)"
+    # The name, on its own line, because acquiring it is what every window
+    # command depends on and because it is the one half of the bridge that was
+    # measured on Fedora's GNOME 50.4 before any flavor existed: the shell log
+    # said `[fuckwayland-bridge] acquired org.fuckwayland.Bridge` and
+    # `install-bridge.sh --check` said `owned: yes` [recon2/fedora 3.2].
+    want "org.fuckwayland.Bridge is owned on this shell" "org.fuckwayland.Bridge" \
+         "$(guest "gdbus call --session --dest org.freedesktop.DBus \
+                     --object-path /org/freedesktop/DBus \
+                     --method org.freedesktop.DBus.ListNames 2>&1 \
+                   | tr ',' '\\n' | grep fuckwayland" || true)"
 }
 
 # The layout half.  us,de with the Super+Space gesture; German types
@@ -260,8 +287,27 @@ phase_overlap() {
     # here and asks first) or `agreed` (an agreement for THIS build is already
     # recorded, so it applies quietly).  `unavailable` is the failure, and
     # matching the bare word `available` would match that too.
-    want "--gnome-overlap-status says the route works on this build" "^(available|agreed)$" \
-         "$(guest 'wxrandr --gnome-overlap-status 2>&1' | head -1 || true)"
+    local status; status=$(guest 'wxrandr --gnome-overlap-status 2>&1' || true)
+    note "--gnome-overlap-status: $(ev "$status")"
+    if [ "$DISTRO" = ubuntu ]; then
+        want "--gnome-overlap-status says the route works on this build" "^(available|agreed)$" \
+             "$(printf '%s\n' "$status" | head -1)"
+    else
+        # gnome/fuckwayland-overlap@fuckwayland/generations.json records
+        # MetaMonitorsConfig at 80 bytes for Ubuntu's mutter 50.1 and has no row
+        # for anyone else's libmutter-18.  The extension re-reads the size from
+        # the GType registry on every call and refuses unless the two agree, so
+        # on Fedora 44's and Arch's 50.4 this is unknown until the first run
+        # reads it -- and if it reads 80 the row is a no-op and this line says
+        # XPASS with nothing to do [plan C1, C5 item 22].  The label is written
+        # for every non-Ubuntu build rather than for 50.4 alone because
+        # fedora43-gnome is GNOME 49 / libmutter-17, where a refusal is the
+        # HONEST answer: that XFAIL is permanent and is not a missing row.
+        xwant "--gnome-overlap-status works on $DISTRO's own mutter (until generations.json has a row for it)" \
+              "^(available|agreed)$" "$(printf '%s\n' "$status" | head -1)"
+        note "the MetaMonitorsConfig size this build reports: $(printf '%s\n' "$status" \
+                 | sed -n 's/.*MetaMonitorsConfig \([0-9]*\) bytes.*/\1/p' | head -1)"
+    fi
     out=$(guest "wxrandr --dryrun --unsafe-gnome-overlap --output $second --pos 1000x0 2>&1" || true)
     # Each is one stderr line, `xrandr: overlap check <name>: <detail>`:
     # shell-version, typelib, sentinel, pending-dialog, bounded-read, public-view.
@@ -317,27 +363,28 @@ phase_overlap() {
 
 # F0.3: the greeter is a GNOME Shell session too, and gdm runs it as its own
 # user with its own dconf.  enable-bridge must refuse to run there: no stamp
-# under /var/lib/gdm3 and no fuckwayland in gdm's enabled-extensions after a
-# boot that nobody logs into.
+# under gdm's state directory (/var/lib/gdm3 on Ubuntu, /var/lib/gdm on Fedora
+# and Arch) and no fuckwayland in gdm's enabled-extensions after a boot that
+# nobody logs into.
 phase_enablebridge() {
-    root "sed -i 's/^AutomaticLoginEnable=.*/AutomaticLoginEnable=false/' /etc/gdm3/custom.conf 2>/dev/null;
-          grep -c AutomaticLoginEnable /etc/gdm3/custom.conf" >/dev/null 2>&1 || true
+    root "c=$GDM_CONF; sed -i 's/^AutomaticLoginEnable=.*/AutomaticLoginEnable=false/' \$c 2>/dev/null;
+          grep -c AutomaticLoginEnable \$c" >/dev/null 2>&1 || true
     root "( sleep 1; reboot ) >/dev/null 2>&1 &" >/dev/null 2>&1 || true
     sleep 45
     local i
     for i in $(seq 1 20); do root 'pgrep -u gdm gnome-shell >/dev/null && echo up' | grep -q up && break; sleep 5; done
     note "greeter: $(root 'pgrep -u gdm -a gnome-shell | head -1' | tr -d '\n' || true)"
-    wantnot "no enable-bridge stamp under /var/lib/gdm3 (nobody logged in)" "bridge-enabled" \
-        "$(root 'find /var/lib/gdm3 -name bridge-enabled 2>/dev/null' || true)"
+    wantnot "no enable-bridge stamp under gdm's own state directory (nobody logged in)" "bridge-enabled" \
+        "$(root "find $GDM_HOME -name bridge-enabled 2>/dev/null" || true)"
     # HOME, explicitly.  `runuser -u gdm -- dconf read` keeps ROOT's environment,
     # so dconf opens /root/.config/dconf/user and answers about root's database:
     # the check would pass on that error output whatever gdm's dconf held.  The
     # grep over gdm's own dconf directory is the second, independent half.
     wantnot "gdm's own dconf has no fuckwayland in enabled-extensions" "fuckwayland" \
-        "$(root 'runuser -u gdm -- env HOME=/var/lib/gdm3 XDG_RUNTIME_DIR=/run/user/$(id -u gdm) \
+        "$(root "h=$GDM_HOME; runuser -u gdm -- env HOME=\$h XDG_RUNTIME_DIR=/run/user/\$(id -u gdm) \
                      dconf read /org/gnome/shell/enabled-extensions 2>&1;
-                 grep -ras fuckwayland /var/lib/gdm3/.config/dconf 2>/dev/null | head -2' || true)"
-    root "sed -i 's/^AutomaticLoginEnable=.*/AutomaticLoginEnable=true/' /etc/gdm3/custom.conf 2>/dev/null; true" \
+                 grep -ras fuckwayland \$h/.config/dconf 2>/dev/null | head -2" || true)"
+    root "c=$GDM_CONF; sed -i 's/^AutomaticLoginEnable=.*/AutomaticLoginEnable=true/' \$c 2>/dev/null; true" \
         >/dev/null 2>&1 || true
     root "( sleep 1; reboot ) >/dev/null 2>&1 &" >/dev/null 2>&1 || true
     sleep 10
@@ -366,7 +413,7 @@ phase_udev() {
     # uevent.  What it owes the user is a sentence naming `apt remove
     # fuckwayland`.  XFAIL until that lands, so an unfinished fix cannot turn a
     # smoke run red -- and the day it lands this line says XPASS.
-    xwant "T11: --udev --uninstall names apt remove fuckwayland when the package's rule is there" \
+    xwant "--udev --uninstall names apt remove fuckwayland when the package's rule is there (fix T11)" \
           "apt remove fuckwayland" "$unin"
     want "the package's own rule is still installed" "60-fuckwayland-uinput.rules" \
          "$(root 'ls /usr/lib/udev/rules.d/60-fuckwayland-uinput.rules 2>&1' || true)"

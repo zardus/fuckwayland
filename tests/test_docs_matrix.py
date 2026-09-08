@@ -214,8 +214,11 @@ class TheThirteenImages(unittest.TestCase):
         """`vmctl` raises `unknown '# vmctl-desktop: x'` for anything else, and
         the flavor's whole session type, display manager and screenshot
         arrangement come out of that table."""
-        self.assertEqual(sorted(self.desktops),
-                         ["gnome", "kde", "kde-x11", "sway", "xfce"])
+        # every desktop a flavor names is a DESKTOPS key; the set grows with the flavors (nineteen keys
+        # since the new-desktops prelude), so the claim is the subset, not a fixed list
+        vmctl = open(os.path.join(ROOT, "vm", "vmctl")).read()
+        known = set(re.findall(r'^    "([a-z0-9-]+)":\s+dict\(', vmctl, re.M))
+        self.assertTrue(set(self.desktops) <= known, sorted(set(self.desktops) - known))
         for name, text in self.yaml.items():
             with self.subTest(name):
                 found = re.findall(r"^# vmctl-desktop:\s*(\S+)", text, re.M)

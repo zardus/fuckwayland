@@ -1,0 +1,64 @@
+#cloud-config
+# vmctl flavor arch-gnome: Arch Linux (the 20260901 cloud image) + GNOME Shell 50.4 on
+# mutter 50.4, GDM autologin.  Native display tool: Mutter's DisplayConfig.
+#
+# On demand.  Ubuntu and Fedora already cover the GNOME 50 generation between them, and a
+# rolling golden rots weekly, so this earns a build when somebody wants the third data point
+# and not on every push.  What it adds when it runs: the bridge installed and enabled on Arch,
+# verbatim -- `gnome/install-bridge.sh` found the same extension and udev directories, the
+# uaccess ACL was applied by Arch's own logind, and `--check` said `org.fuckwayland.Bridge
+# owned: yes` after one `systemctl restart gdm` [recon2/arch 3.2].  GDM's config is
+# /etc/gdm/custom.conf here, not /etc/gdm3 -- resolved in the guest, not from this header.
+#
+# One open thing this flavor is the place to settle: on the recon's headless Arch guest, typed
+# keystrokes never reached the focused terminal -- through zwp_virtual_keyboard, through
+# /dev/uinput with the ACL, and with QEMU's own USB keyboard over the HMP monitor, which means
+# it was the display-less session and not wdotool [recon2/arch 3.2].  The rig takes a
+# screenshot of every head per phase, which is exactly what that measurement lacked.
+#
+# vmctl fills in the two @@...@@ placeholders at build time (root ssh public key; the
+# contents of vm/build-image.sh). The base image lives in $VMIMAGES:
+# vmctl-base: Arch-Linux-x86_64-cloudimg-20260901.583572.qcow2
+# vmctl-desktop: gnome
+# vmctl-distro: arch
+# vmctl-ci: on-demand
+hostname: arch-gnome
+manage_etc_hosts: true
+disable_root: false
+ssh_pwauth: false
+ssh_authorized_keys:
+  - @@ROOT_PUBKEY@@
+users:
+  - name: test
+    uid: 1000
+    gecos: Test User
+    groups: [wheel]
+    shell: /bin/bash
+    lock_passwd: false
+    plain_text_passwd: test
+    sudo: ALL=(ALL) NOPASSWD:ALL
+write_files:
+  # No `owner:` on any entry here.  write_files runs BEFORE the users module, so
+  # `owner: test:test` aborts the whole module with `OSError: Unknown user or
+  # group ... 'test'` and cloud-init ends in status: error [recon2/hyprland].
+  # Everything under /home/test is chowned by the build script instead.
+  - path: /etc/ssh/sshd_config.d/60-vmctl.conf
+    content: "PermitRootLogin prohibit-password\n"
+  - path: /etc/modules-load.d/uinput.conf
+    content: "uinput\n"
+  - path: /etc/vmctl-build.env
+    content: |
+      FLAVOR=arch-gnome
+      DESKTOP=gnome
+      DESKTOP_PKG="gnome-shell gnome-session gnome-control-center gnome-text-editor gdm xorg-xwayland"
+      EXTRA_PKGS="xdotool wmctrl xorg-xprop xorg-xrandr wl-mirror python-gobject gtk3 acl xterm"
+  - path: /usr/local/sbin/vmctl-build
+    permissions: '0755'
+    content: |
+      @@BUILD_SCRIPT@@
+runcmd:
+  - [/usr/local/sbin/vmctl-build]
+power_state:
+  mode: poweroff
+  message: vmctl golden build finished
+  timeout: 120

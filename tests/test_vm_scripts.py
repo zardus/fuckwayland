@@ -128,6 +128,33 @@ fail() { printf 'fail: %s\\n' "$*" >> "$FAKE_LOG"; exit 9; }
 written() { printf '%s\\n' "$@" >> "$WRITTEN"; }
 """
 
+# systemd's enable/disable, as far as a display manager's Alias=display-manager.service
+# goes: `enable` needs the unit file and refuses when the alias already points at
+# another unit (systemd's "File display-manager.service already exists and is a
+# symlink to ..."), `disable` drops the alias of the unit named.  A stub that only
+# logs would let every dm_* pass with the display manager still disabled -- which
+# is the golden image that booted to a text console on 2026-09-08.
+SYSTEMCTL_DOUBLE = """#!/bin/sh
+printf "%%s\\\\n" "systemctl $*" >> %s
+root=${VMCTL_ROOT:-}; alias=$root/etc/systemd/system/display-manager.service
+cmd=$1; shift
+for u in "$@"; do
+    unit=$root/usr/lib/systemd/system/${u%%.service}.service
+    case $cmd in
+    enable)
+        [ -f "$unit" ] || { echo "Failed to enable unit: Unit file ${u%%.service}.service does not exist." >&2; exit 1; }
+        if [ -L "$alias" ] && [ "$(readlink -f "$alias")" != "$unit" ]; then
+            echo "Failed to enable unit: File display-manager.service already exists and is a symlink to $(readlink "$alias")." >&2
+            exit 1
+        fi
+        mkdir -p "$(dirname "$alias")"; ln -sfn "$unit" "$alias" ;;
+    disable)
+        [ -L "$alias" ] && [ "$(readlink -f "$alias")" = "$unit" ] && rm "$alias" ;;
+    esac
+done
+exit 0
+"""
+
 
 class TheyAllParse(unittest.TestCase):
     """`bash -n` over every script in vm/.
@@ -525,20 +552,31 @@ class TheFlavorHeaders(unittest.TestCase):
                 self.assertEqual(len(found), 1, found)
                 self.assertIn(found[0], self.mod.DESKTOPS)
 
-    def test_the_distro_and_ci_headers_are_what_the_thirteen_yamls_say(self):
+    def test_the_distro_header_follows_the_flavor_name(self):
         """Both readers refuse a value outside their set, so `assertIn(...,
-        DISTROS)` could only ever have failed by the call raising.  The concrete
-        value is the claim worth pinning: every flavor that exists today is an
-        Ubuntu cloud image built on every push, and promoting the two ISO
-        flavors to `on-demand` is a deliberate one-word edit, not a drift."""
+        DISTROS)` could only ever have failed by the call raising.  The claim
+        worth pinning is the naming convention every yaml follows: a flavor
+        called fedora*/arch-*/nixos-* says that distro in its header, and every
+        other one is an Ubuntu image (noble-, resolute-, stonking-).  A header
+        that disagrees with the name is the one drift a reader of `vmctl
+        flavors` cannot see."""
         for name in self.names:
             with self.subTest(name):
-                # the thirteen Ubuntu flavors say ubuntu; a nixos-* flavor (batch 4) says nixos
-                if name.startswith("nixos-"):
-                    self.assertEqual(self.mod.flavor_distro(name), "nixos")
-                    self.assertIn(self.mod.flavor_ci(name), ("push", "on-demand"))
-                else:
-                    self.assertEqual(self.mod.flavor_distro(name), "ubuntu")
+                want = "ubuntu"
+                for prefix in ("fedora", "arch", "nixos"):
+                    if name.startswith(prefix):
+                        want = prefix
+                self.assertEqual(self.mod.flavor_distro(name), want)
+                self.assertIn(self.mod.flavor_ci(name), ("push", "on-demand"))
+
+    def test_the_ubuntu_cloud_image_flavors_are_built_on_every_push(self):
+        """The Ubuntu cloud-image flavors are the ones that build in minutes on
+        a runner; promoting one of them to `on-demand` is a deliberate one-word
+        edit, not a drift.  The ISO installs and the foreign distros pick their
+        own gate (the CI plan reads it)."""
+        for name in self.names:
+            if self.mod.flavor_distro(name) == "ubuntu" and "vmctl-iso:" not in self.text[name]:
+                with self.subTest(name):
                     self.assertEqual(self.mod.flavor_ci(name), "push")
 
     def flavors_dir(self, tmp):
@@ -741,10 +779,11 @@ class TheDisplayManagers(unittest.TestCase):
     thing that cannot be checked without booting -- unless the files it writes
     are checked here."""
 
-    LAYER = ("written", "wcat", "wdir", "accountsservice", "no_session_ambiguity",
+    LAYER = ("written", "wcat", "wdir", "accountsservice", "no_session_ambiguity", "dm_enable",
              "dm_gdm", "dm_sddm", "dm_plasmalogin", "dm_plasma", "dm_greetd", "dm_lightdm")
+    DM_UNITS = ("gdm3", "gdm", "sddm", "plasmalogin", "lightdm", "greetd")
 
-    def run_dm(self, script, tree=(), links=(), exe=()):
+    def run_dm(self, script, tree=(), links=(), exe=(), units=DM_UNITS):
         tmp = os.path.realpath(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, tmp, True)
         root = os.path.join(tmp, "root")
@@ -758,9 +797,15 @@ class TheDisplayManagers(unittest.TestCase):
         for src, dst in links:
             os.makedirs(os.path.dirname(os.path.join(root, src)), exist_ok=True)
             os.symlink(os.path.join(root, dst), os.path.join(root, src))
+        for u in units:   # the unit files the display-manager packages installed
+            path = os.path.join(root, "usr/lib/systemd/system", u + ".service")
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            open(path, "w").close()
         log = os.path.join(tmp, "log")
         open(log, "w").close()
         d = stubs(tmp, ["systemctl", "usermod", "getent=2"], log)
+        with open(os.path.join(d, "systemctl"), "w") as fh:
+            fh.write(SYSTEMCTL_DOUBLE % log)
         env = dict(os.environ, PATH=d + ":" + os.environ["PATH"], FAKE_LOG=log,
                    WRITTEN=os.path.join(tmp, "written"), VMCTL_ROOT=root, PKG="apt")
         body = (PREAMBLE.replace('written() {', 'unused_written() {')
@@ -969,8 +1014,7 @@ class TheDisplayManagers(unittest.TestCase):
         cinnamon-wayland` needs no extra key -- and AccountsService's XSession=
         is meaningless for a Wayland session, so it is left out there."""
         got, root, _ = self.run_dm("dm_lightdm cinnamon-wayland",
-                                   tree=["usr/lib/systemd/system/lightdm.service",
-                                         "usr/share/wayland-sessions/cinnamon-wayland.desktop"],
+                                   tree=["usr/share/wayland-sessions/cinnamon-wayland.desktop"],
                                    links=[("etc/systemd/system/display-manager.service",
                                            "usr/lib/systemd/system/lightdm.service")])
         self.assertEqual(got.returncode, 0, got.stderr)
@@ -980,17 +1024,75 @@ class TheDisplayManagers(unittest.TestCase):
         self.assertIn("Session=cinnamon-wayland", user)
         self.assertNotIn("XSession=", user)
 
+    def test_lightdm_takes_display_manager_service_back_from_gdm3(self):
+        """The debconf race: gdm3 configured itself first and
+        display-manager.service points at it, which is a golden image that
+        boots into the wrong desktop.  dm_enable drops the other DMs' alias
+        before enabling ours, so the race is undone rather than merely caught."""
+        got, root, _ = self.run_dm("dm_lightdm xubuntu",
+                                   tree=["usr/share/xsessions/xubuntu.desktop"],
+                                   links=[("etc/systemd/system/display-manager.service",
+                                           "usr/lib/systemd/system/gdm3.service")])
+        self.assertEqual(got.returncode, 0, got.stderr)
+        self.assertEqual(self.alias(root), "lightdm.service")
+
     def test_lightdm_refuses_when_display_manager_service_is_not_lightdm(self):
-        """The assertion that catches the debconf race: gdm3 configured itself
-        first and display-manager.service still points at it, which is a golden
-        image that boots into the wrong desktop."""
-        got, _, _ = self.run_dm("dm_lightdm xubuntu",
-                                tree=["usr/lib/systemd/system/lightdm.service",
-                                      "usr/lib/systemd/system/gdm3.service",
-                                      "usr/share/xsessions/xubuntu.desktop"],
-                                links=[("etc/systemd/system/display-manager.service",
-                                        "usr/lib/systemd/system/gdm3.service")])
+        """No lightdm.service on the disk: systemctl enable fails, the alias
+        never appears, and the build stops rather than shipping an image whose
+        display manager is whatever won."""
+        got, _, log = self.run_dm("dm_lightdm xubuntu",
+                                  tree=["usr/share/xsessions/xubuntu.desktop"], units=())
         self.assertEqual(got.returncode, 9)
+        with open(log) as fh:
+            self.assertIn("fail: systemctl enable lightdm failed", fh.read())
+
+    def alias(self, root):
+        return os.path.basename(os.readlink(os.path.join(root, "etc/systemd/system/display-manager.service")))
+
+    def test_every_display_manager_arm_enables_its_unit(self):
+        """The regression of 2026-09-08: the rewrite into layers dropped the
+        step the old script never needed (gdm3's postinst used to enable
+        itself), and every GNOME flavor booted to a text console with gdm3
+        installed, configured and disabled.  Each arm now ends in dm_enable,
+        and the alias is checked on the tree it wrote into -- gdm3 on an Ubuntu
+        tree (/etc/gdm3), gdm on a Fedora or Arch one (/etc/gdm)."""
+        cases = (("dm_gdm wayland", ["etc/gdm3/", self.WL + "ubuntu.desktop"], "gdm3"),
+                 ("dm_gdm wayland", ["etc/gdm/", self.WL + "gnome.desktop"], "gdm"),
+                 ("dm_gdm x11", ["etc/gdm3/", self.XS + "ubuntu-xorg.desktop"], "gdm3"),
+                 ("dm_sddm plasma.desktop", [self.WL + "plasma.desktop"], "sddm"),
+                 ("dm_plasmalogin plasma.desktop", [self.WL + "plasma.desktop"], "plasmalogin"),
+                 ("dm_lightdm xubuntu", [self.XS + "xubuntu.desktop"], "lightdm"))
+        for script, tree, unit in cases:
+            with self.subTest(script=script, unit=unit):
+                got, root, log = self.run_dm(script, tree=tree)
+                self.assertEqual(got.returncode, 0, got.stderr)
+                self.assertEqual(self.alias(root), unit + ".service")
+                with open(log) as fh:
+                    lines = fh.read().splitlines()
+                self.assertIn("systemctl enable " + unit, lines)
+                for other in ("gdm3", "gdm", "sddm", "plasmalogin", "lightdm"):
+                    if other != unit:
+                        self.assertIn("systemctl disable " + other, lines)
+
+    def test_the_debian_pointer_file_is_written_only_where_debian_reads_one(self):
+        """/etc/X11/default-display-manager is x11-common's; dnf and pacman
+        systems have neither the file nor anything that reads it."""
+        _, root, _ = self.run_dm("dm_gdm wayland", tree=["etc/gdm3/", self.WL + "ubuntu.desktop"])
+        self.assertEqual(self.read(root, "etc/X11/default-display-manager").strip(), "/usr/sbin/gdm3")
+        _, root, _ = self.run_dm("dm_sddm plasma.desktop", tree=[self.WL + "plasma.desktop"])
+        self.assertEqual(self.read(root, "etc/X11/default-display-manager").strip(), "/usr/bin/sddm")
+        _, root, _ = self.run_dm("PKG=dnf; dm_gdm wayland", tree=["etc/gdm/", self.WL + "gnome.desktop"])
+        self.assertFalse(os.path.exists(os.path.join(root, "etc/X11/default-display-manager")))
+        self.assertEqual(self.alias(root), "gdm.service")
+
+    def test_gdm_refuses_when_the_alias_does_not_come_up(self):
+        """gdm3 installed but its unit gone (or a systemd that did not link the
+        alias): the build stops with the reason on the console instead of a
+        golden image that boots to a login: prompt."""
+        got, _, log = self.run_dm("dm_gdm wayland", tree=["etc/gdm3/", self.WL + "ubuntu.desktop"], units=())
+        self.assertEqual(got.returncode, 9)
+        with open(log) as fh:
+            self.assertIn("fail: systemctl enable gdm3 failed", fh.read())
 
 
 class ThePlasmaWelcomeCentre(unittest.TestCase):

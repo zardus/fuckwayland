@@ -4,7 +4,7 @@
 # It runs vm/live-smoke.sh against vm/live-smoke.d/fake-vmctl, which replays
 # tests/fixtures/live/noble-gnome-46.0-windows-wm-replay.txt -- the `windows`
 # and `wm` phases' guest commands, recorded off the real GNOME 46.0 guest on
-# 2026-09-08 in the order the phases ask them.  Four passes:
+# 2026-09-08 in the order the phases ask them.  Five passes:
 #
 #   1. the recording as it is: every check has to PASS.  A check that cannot
 #      pass against the desktop it was written from is a broken check.
@@ -23,6 +23,12 @@
 # second: it matched `pgrep -f 'dbus-monitor --session'`, which counts the
 # `sh -c` wrapper carrying that very string, so it printed PASS with no
 # recorder anywhere.
+#
+# Pass 5 is the bookkeeping that keeps the other four honest as step files
+# arrive: every vm/live-smoke.d/<token>.sh is either covered by a recording here
+# or named in tests/fixtures/live/NOT-YET-RUN, never both and never neither.
+# Without it a new step file could ship with no recording, no entry, and nothing
+# saying so -- and its checks would have been run by nobody.
 #
 # Takes a couple of seconds and needs nothing but bash and python3.
 #   usage: vm/live-smoke.d/selftest-offline.sh
@@ -140,10 +146,48 @@ grep -E '^(PASS|FAIL) ' "$WORK/busrec-none.out" | sed 's/^/   /'
 grep -q '^FAIL busrec: no session-bus recording' "$WORK/busrec-none.out" \
     || bad "phase busrec passed with no recorder: the check is matching itself again"
 
+# ---- pass 5: every step file is recorded or declared not yet run ------------
+say
+say "== pass 5: every step file is either recorded here or listed in NOT-YET-RUN"
+NYR=$REPO/tests/fixtures/live/NOT-YET-RUN
+[ -f "$NYR" ] || bad "no $NYR"
+# A recording's token is the flavor its name starts with, resolved to that
+# flavor's `# vmctl-desktop:`.  Longest match first, so noble-gnome-iso wins
+# over noble-gnome for a name that starts with it.
+recorded_tokens() {
+    local cap base fl best
+    for cap in "$REPO"/tests/fixtures/live/*-replay.txt; do
+        [ -e "$cap" ] || continue
+        base=$(basename "$cap"); best=""
+        for fl in "$REPO"/vm/flavors/*.yaml; do
+            fl=$(basename "$fl" .yaml)
+            case $base in "$fl"*) [ ${#fl} -gt ${#best} ] && best=$fl ;; esac
+        done
+        [ -n "$best" ] || { echo "?$base"; continue; }
+        sed -n 's/^#[[:space:]]*vmctl-desktop:[[:space:]]*//p' "$REPO/vm/flavors/$best.yaml" | head -1
+    done
+}
+rec=$(recorded_tokens | sort -u)
+nyr=$(grep -v '^#' "$NYR" | grep . | sort -u)
+for f in "$HERE"/*.sh; do
+    tok=$(basename "$f" .sh)
+    case $tok in common|selftest-offline|guest-*) continue ;; esac
+    in_rec=$(printf '%s\n' "$rec" | grep -cx "$tok" || true)
+    in_nyr=$(printf '%s\n' "$nyr" | grep -cx "$tok" || true)
+    if [ "$in_rec" = 0 ] && [ "$in_nyr" = 0 ]; then
+        bad "step file $tok.sh has no recording and is not in NOT-YET-RUN"
+    elif [ "$in_rec" != 0 ] && [ "$in_nyr" != 0 ]; then
+        bad "step file $tok.sh has a recording AND is still listed in NOT-YET-RUN"
+    else
+        say "   $tok: $(if [ "$in_rec" != 0 ]; then echo recorded; else echo 'not yet run'; fi)"
+    fi
+done
+
 say
 if [ "$fails" = 0 ]; then
     say "selftest-offline: OK ($n_pass checks pass on the recording, 1 fails on the regression,"
-    say "                  and phase busrec passes with a recorder and fails without one)"
+    say "                  phase busrec passes with a recorder and fails without one, and every"
+    say "                  step file is either recorded or declared not yet run)"
     exit 0
 fi
 say "selftest-offline: $fails problem(s)"

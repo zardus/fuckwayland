@@ -10,7 +10,16 @@
 # with -- not our own idea of what we passed on.
 #
 # The same file serves Plasma-on-X11 (kde-x11.sh sources it): the handover is a
-# session-type property, not a desktop one.
+# session-type property, not a desktop one, and the X11 step files that come
+# after it (cinnamon, mate, i3, lxqt, gnome-x11) source this body too.
+#
+# Every flavor that runs it is an Ubuntu one, which is why the four shim names
+# below are Debian's: the packages that carry the originals are x11-utils and
+# x11-xserver-utils here, `xprop`/`xrandr` on Fedora and `xorg-xprop`/
+# `xorg-xrandr` on Arch [recon2/fedora 4, recon2/arch 2].  Nothing in this file
+# says a package name -- the tools do, out of fwcommon's own distro table -- so
+# the day an X11 session exists on a non-Ubuntu flavor these checks port with
+# no edit.
 
 # No `root` phase here.  common.sh's phase_root is F2.3: root over ssh has no
 # session environment, and the claim is that the tools find the SEATED user's
@@ -67,19 +76,19 @@ phase_passthrough() {
     out=$(guest "wxrandr --output Virtual-1 --auto --persistent 2>&1" || true)
     want "--persistent is stripped before the handover" "^xrandr:--output Virtual-1 --auto$" \
          "$(guest "cat $ARGV_LOG" || true)"
-    xwant "T43: --persistent on X11 says in one line that nothing is saved here" \
+    xwant "--persistent on X11 says in one line that nothing is saved here (fix T43)" \
           "saves nothing|no layout is saved|X11" "$out"
     out=$(guest "wxrandr --unsafe-gnome-overlap --output Virtual-1 --pos 100x0 2>&1" || true)
     want "--unsafe-gnome-overlap is refused here, in this session's own words" \
          "x11|not GNOME|only means anything on GNOME" "$out"
     out=$(guest "wxrandr --unsafe-gnome-overlap-unmeasured 51 2>&1" || true)
-    xwant "T26: the force flag alone gets OUR usage error, not the original's" \
+    xwant "the force flag alone gets OUR usage error, not the original's (fix T26)" \
           "unsafe-gnome-overlap-unmeasured" "$out"
     # 3. wmirror has no original at all and says so before it names an apt line.
     out=$(guest "wmirror --check 2>&1" || true)
     want "wmirror --check says this is an X11 session" "this is an X11 session" "$out"
     local firstline; firstline=$(printf '%s\n' "$out" | head -1)
-    xwant "T21 (fix 40): ...and says it before any apt line, not after \"helper: not installed\"" "X11" "$firstline"
+    xwant "...and says it before any apt line, not after the helper line (fix 40, T21)" "X11" "$firstline"
     guest "pkill xterm; true" >/dev/null 2>&1 || true
     root "rm -f /usr/local/bin/xdotool /usr/local/bin/wmctrl /usr/local/bin/xprop /usr/local/bin/xrandr" \
         >/dev/null 2>&1 || true
