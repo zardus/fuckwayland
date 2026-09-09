@@ -106,7 +106,7 @@ and the bytes are named wherever a number is.
   into a `without-fuckwayland` specialisation. Two phases belong to a distribution
   rather than to a desktop and the driver appends them itself: `selinux` on Fedora and
   `pkgverify` (`rpm -V`, `pacman -Qkk`) on both.
-- **4301 tests**, up from 4146, the new ones being the four new window and display
+- **4302 tests**, up from 4146, the new ones being the four new window and display
   backends and every desktop behind them, the rig's own scripts sliced and run against
   stubbed package managers and display managers, the three distribution packagings read
   back out of what they build, the flake and its NixOS module, and the CI workflow and
