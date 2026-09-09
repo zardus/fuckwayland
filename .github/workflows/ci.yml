@@ -413,7 +413,7 @@ jobs:
       - name: tests/test_flake.py with FW_NIX_LIVE=1
         run: FW_NIX_LIVE=1 FUCKWAYLAND_PASSTHROUGH=never python3 tests/test_flake.py
       - name: the checks that boot nothing
-        run: nix build --no-link .#checks.x86_64-linux.module-eval .#checks.x86_64-linux.tools .#checks.x86_64-linux.nixos-sway
+        run: nix build --no-link -L .#checks.x86_64-linux.module-eval .#checks.x86_64-linux.tools .#checks.x86_64-linux.nixos-sway
 
   nix-full:
     needs: plan
@@ -426,7 +426,7 @@ jobs:
         with:
           extra-conf: system-features = nixos-test benchmark big-parallel kvm
       - name: the two NixOS VM checks
-        run: nix build --no-link .#checks.x86_64-linux.nixos-gnome .#checks.x86_64-linux.nixos-kde
+        run: nix build --no-link -L .#checks.x86_64-linux.nixos-gnome .#checks.x86_64-linux.nixos-kde
 
   vm:
     needs: [plan, deb, rpm, pkgbuild]

@@ -987,6 +987,12 @@ class TheDisplayManagers(unittest.TestCase):
         log = os.path.join(tmp, "log")
         open(log, "w").close()
         d = stubs(tmp, ["systemctl"], log)
+        # dm_greetd ends in dm_enable like every arm, so the double and greetd's unit
+        with open(os.path.join(d, "systemctl"), "w") as fh:
+            fh.write(SYSTEMCTL_DOUBLE % log)
+        os.makedirs(os.path.join(root, "usr/lib/systemd/system"), exist_ok=True)
+        with open(os.path.join(root, "usr/lib/systemd/system/greetd.service"), "w") as fh:
+            fh.write(UNIT_FILES["greetd"])
         body = (PREAMBLE.replace('written() {', 'unused_written() {')
                 + sh_layer(*self.LAYER) + '\ndm_greetd "labwc"\n')
         got = subprocess.run(["bash", "-c", body], capture_output=True, text=True, timeout=60,
@@ -1002,7 +1008,9 @@ class TheDisplayManagers(unittest.TestCase):
         with open(log) as fh:
             lines = fh.read().splitlines()
         self.assertIn("systemctl disable getty@tty1.service", lines)
-        self.assertIn("systemctl enable greetd.service", lines)
+        self.assertIn("systemctl enable greetd", lines)
+        self.assertEqual(os.path.basename(os.path.realpath(
+            os.path.join(root, "etc/systemd/system/display-manager.service"))), "greetd.service")
 
     def test_greetd_takes_the_whole_multi_word_command_of_the_dispatch_table(self):
         """The one multi-word command in select_desktop is river's, and it is

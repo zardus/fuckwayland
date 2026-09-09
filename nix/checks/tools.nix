@@ -81,6 +81,9 @@ pkgs.stdenv.mkDerivation {
     export XDG_RUNTIME_DIR=$TMPDIR/run
     install -d -m 0700 "$HOME" "$XDG_RUNTIME_DIR"
     export FUCKWAYLAND_PASSTHROUGH=never
+    # the rig's scripts and the fixtures' fake tools say #!/usr/bin/env, and the
+    # sandbox has no /usr/bin; nothing the packages ship lives in these three trees
+    patchShebangs vm scripts tests/fixtures
     : > "$out"
     fails=
     for f in tests/test_*.py; do

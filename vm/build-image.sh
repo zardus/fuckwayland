@@ -423,7 +423,10 @@ Conflicts=getty@tty1.service
 After=getty@tty1.service
 EOF
     systemctl disable getty@tty1.service 2>/dev/null || true
-    systemctl enable greetd.service
+    # through dm_enable like every other manager: Fedora's sway group brings SDDM
+    # along and it self-enables mid-transaction, so a bare `systemctl enable greetd`
+    # died on the alias it already held (fedora44-sway, CI run 34369384290)
+    dm_enable greetd /usr/bin/greetd
 }
 dm_lightdm() {   # dm_lightdm <session>
     local sess=$1 dms

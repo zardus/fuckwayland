@@ -33,6 +33,9 @@ RUN pacman-key --init && pacman -Syu --noconfirm --needed \
 # bounding set lacks it refuses to exec the binary at all (EPERM from execve, run 34360974165);
 # the headless sway the live tests start needs no capability, so the file loses it here.
 RUN setcap -r /usr/bin/sway 2>/dev/null || true
+# the image's pacman.conf keeps documentation out (NoExtract), and `pacman -Qkk` then
+# reports the package's /usr/share/doc as an altered file (CI run 34369384290)
+RUN sed -i '/^NoExtract/d' /etc/pacman.conf
 # nodejs-lts-jod IS 22 today, but it is a rolling package name and
 # tests/test_bridge_js.py was written against one build; the tarball is the same
 # node on all three images and costs nothing to keep the same.

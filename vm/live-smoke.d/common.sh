@@ -541,7 +541,9 @@ phase_nodialog() {
     # What is left has to be Settings and nothing else.
     local apps pat
     apps=$(guest "$calls | grep 'interface=org.freedesktop.portal.Inhibit' | sed -n 's/.*sender=\\([^ ]*\\).*/\\1/p' | sort -u" | tr -d '\r' || true)
-    pat=$(printf '%s\n' "$apps" | grep . | sed 's/[.:]/\\&/g' | sed 's/^/sender=/' | paste -sd'|' || true)
+    # only the dot is special in an ERE; a backslash before the colon is a "stray \\" warning on
+    # grep 3.12 (Fedora 44), printed into the very output the check reads
+    pat=$(printf '%s\n' "$apps" | grep . | sed 's/\./\\&/g' | sed 's/^/sender=/' | paste -sd'|' || true)
     # Request and Session are the portal's lifecycle objects (a Close on
     # /request/<sender>/... or /session/<sender>/...), never a request for a
     # dialog; they belong to whoever opened them, which is never one of the tools.
