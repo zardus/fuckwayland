@@ -36,12 +36,12 @@
 # /etc a conffile, and a conffile survives `apt remove`).
 addFilter(r"non-conffile-in-etc /etc/xdg/autostart/fuckwayland-enable-bridge\.desktop")
 
-# %postun removes udev's runtime database entry and tag links for /dev/uinput.
-# It has to: the uaccess builtin only ever ADDS ACL entries, so a node
-# re-triggered while the rule is still known keeps the grant, and a left-over
-# ACL makes a later reinstall a no-op.  Every rm is under /run/udev, guarded by
-# `[ -e /dev/uinput ]`, and the major:minor pair comes from `udevadm info`.
-addFilter(r"dangerous-command-in-%postun rm")
+# The tools' names and the words of their trade.  Fedora's rpmlint spell-checks
+# Summary and %description against en_US and scores every miss as an error
+# (twenty of them in the CI rpm job, run 34364127816: wdotool, wxrandr, uinput,
+# execve, argv ...).  The list is the exact set that run printed; a new word in
+# a description is a new finding, which is how it should be.
+addFilter(r"spelling-error \(['\"](wdotool|wdotool's|wwmctl|wxprop|wxrandr|warandr|wmirror|xdotool|wmctrl|xprop|xrandr|arandr|wlroots|wl|uinput|subpackage|mousemove|execve|dnf|dev|argv)['\"]")
 
 # No man page anywhere in this tree, for any of the six commands.  Each one's
 # --help is the cloned tool's own usage text byte for byte, which is the

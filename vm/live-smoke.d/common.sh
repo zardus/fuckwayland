@@ -201,8 +201,12 @@ phase_busrec() {
     # then sees every message on the bus, so one deliberate call has to make the
     # log grow.  A recorder that started and was refused the monitor role would
     # sit there with a pid and an empty file.
-    guest "gdbus call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus \
-           --method org.freedesktop.DBus.ListNames >/dev/null 2>&1; sleep 1; true" >/dev/null 2>&1 || true
+    # dbus-send, not gdbus: it comes with dbus itself, which every guest that has a
+    # dbus-monitor has, where gdbus is glib's and NixOS's session has none on PATH
+    # (measured on nixos-sway, CI run 34364127816: a recorder with a pid and a log
+    # that never grew, because the deliberate call never happened).
+    guest "dbus-send --session --print-reply --dest=org.freedesktop.DBus /org/freedesktop/DBus \
+           org.freedesktop.DBus.ListNames >/dev/null 2>&1; sleep 1; true" >/dev/null 2>&1 || true
     n2=$(guest "wc -l < $BUSLOG 2>/dev/null || echo 0" | tr -d ' \r\n' || true)
     if [ -n "$pid" ] && [ "${n2:-0}" -gt "${n1:-0}" ]; then
         pass "dbus-monitor (pid $pid) is recording into $BUSLOG (the log grew $n1 -> $n2 lines on one bus call)"

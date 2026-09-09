@@ -1566,14 +1566,22 @@ class TheDesktopsTable(unittest.TestCase):
         self.addCleanup(shutil.rmtree, tmp, True)
         # comm is argv[0]'s basename, so a copy of bash named `.kwin_wayland-wrapped`
         # gives the kernel the same fifteen-character comm nixpkgs' wrapper does.
+        m = re.search(r"^pg\(\) \{.*?\n\}", script, re.S | re.M)
+        self.assertTrue(m, "no pg() in this script")
+        # pg() reads the whole process table, so a real sway (a live session on the
+        # developer's box, or a compositor another test file left running in the
+        # same sandbox) answers for the name before this test's own process exists
+        for n in names:
+            pre = subprocess.run(["bash", "-c", m.group(0) + "\npg %s\n" % shlex.quote(n)],
+                                 capture_output=True, timeout=60)
+            if pre.returncode == 0:
+                self.skipTest("a live process already answers for `pg %s` on this box" % n)
         exe = os.path.join(tmp, want)
         shutil.copy(shutil.which("bash"), exe)
         proc = subprocess.Popen([exe, "-c", "read x"], stdin=subprocess.DEVNULL,
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.addCleanup(proc.wait)
         self.addCleanup(proc.kill)
-        m = re.search(r"^pg\(\) \{.*?\n\}", script, re.S | re.M)
-        self.assertTrue(m, "no pg() in this script")
         out = {}
         for n in names:
             got = subprocess.run(["bash", "-c", m.group(0)

@@ -298,10 +298,22 @@ class SwayWindowTest(unittest.TestCase):
                                "windowstate", "--remove", "FULLSCREEN",
                                backend="wlr")
         self.assertEqual(rc, 0, err)
-        # capability gaps error cleanly
-        rc, _o, err = self.wdo("get_desktop", backend="wlr")
-        self.assertEqual(rc, 1)
-        self.assertIn("not supported by the wlr backend", err)
+        # The desktop commands follow the registry: sway 1.11 as Arch builds it
+        # publishes ext_workspace_manager_v1 and the floor answers over it, Ubuntu's
+        # 1.11 does not and the floor says so (CI run 34364127816 measured both).
+        reg = subprocess.run(
+            [sys.executable, "-c", "from wdotool import backend_detect as b; "
+             "print(' '.join(sorted(b.session_registry() or {})))"],
+            env=self._wdo_env(None), capture_output=True, text=True, cwd=ROOT, timeout=30)
+        has_ws = "ext_workspace_manager_v1" in reg.stdout.split()
+        rc, out, err = self.wdo("get_desktop", backend="wlr")
+        if has_ws:
+            self.assertEqual(rc, 0, err)
+            self.assertRegex(out, r"^\d+\n$")
+        else:
+            self.assertEqual(rc, 1)
+            self.assertIn("not supported by the wlr backend", err)
+            self.assertIn("ext_workspace_manager_v1", err)
         rc, _o, err = self.wdo("search", "--class", "foota", "getwindowpid",
                                backend="wlr")
         self.assertEqual(rc, 1)

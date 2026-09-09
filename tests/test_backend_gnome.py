@@ -1488,7 +1488,11 @@ class ConstructorTests(_Base):
         self.assertTrue(self.real_installed())
         # and the real search path is the script's two destinations
         backend_gnome._extension_dirs = orig
-        dirs = backend_gnome._extension_dirs()
+        # the system half follows XDG_DATA_DIRS (a nix sandbox has no /usr/share in
+        # it), so the spec's default is set explicitly to pin the derivation
+        from unittest import mock
+        with mock.patch.dict(os.environ, {"XDG_DATA_DIRS": "/usr/local/share:/usr/share"}):
+            dirs = backend_gnome._extension_dirs()
         self.assertTrue(any(x.endswith("/.local/share") for x in dirs), dirs)
         self.assertIn("/usr/share", dirs)
 

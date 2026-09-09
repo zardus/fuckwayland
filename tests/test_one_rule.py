@@ -102,9 +102,19 @@ def tracked_files():
     """Every file git tracks with one of the suffixes above.  git, not a walk,
     so a scratch copy or a build tree in the working directory cannot fail the
     suite for a sentence nobody is shipping."""
-    out = subprocess.run(["git", "-C", ROOT, "ls-files", "-z"],
-                         stdout=subprocess.PIPE, check=True).stdout
-    names = [n for n in out.decode("utf-8", "replace").split("\0") if n]
+    try:
+        out = subprocess.run(["git", "-C", ROOT, "ls-files", "-z"],
+                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=True).stdout
+        names = [n for n in out.decode("utf-8", "replace").split("\0") if n]
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        # not a checkout (the flake's check runs on a copy of the tree with no .git):
+        # walk it, leaving out what git would not track
+        skip = {".git", "__pycache__", "release", "dist", "result", "build", "live-smoke.out", ".venv"}
+        names = []
+        for dirpath, dirnames, filenames in os.walk(ROOT):
+            dirnames[:] = [x for x in dirnames if x not in skip and not x.startswith(".")]
+            for f in filenames:
+                names.append(os.path.relpath(os.path.join(dirpath, f), ROOT))
     return [n for n in names
             if n.endswith(SUFFIXES) and os.path.basename(n) not in EXEMPT]
 

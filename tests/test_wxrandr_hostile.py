@@ -47,7 +47,10 @@ class FakeWlr(unittest.TestCase):
     MODE = "normal"
 
     def setUp(self):
-        self.tmp = tempfile.mkdtemp(prefix="wxrandr-hostile-")
+        # under /tmp when there is one: a nix sandbox's TMPDIR is long enough to push a
+        # socket path past AF_UNIX's 107 bytes
+        self.tmp = tempfile.mkdtemp(prefix="wxrandr-hostile-",
+                                    dir="/tmp" if os.access("/tmp", os.W_OK) else None)
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         self.sock = os.path.join(self.tmp, "wayland-fake")
         self.applies = os.path.join(self.tmp, "applies.log")
@@ -149,6 +152,8 @@ class HyprlandUnderTheWlrBackend(FakeWlr):
         d = os.path.join(self.tmp, "hypr", sig)
         os.makedirs(d)
         path = os.path.join(d, ".socket.sock")
+        if len(path.encode()) > 100:
+            self.skipTest("AF_UNIX path too long under this TMPDIR: %s" % path)
         srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.addCleanup(srv.close)
         srv.bind(path)

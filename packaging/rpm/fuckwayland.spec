@@ -18,6 +18,10 @@
 # hold every claim that can be held without rpmbuild.
 %global bridge_uuid  fuckwayland-bridge@fuckwayland
 %global overlap_uuid fuckwayland-overlap@fuckwayland
+# brp-mangle-shebangs rewrites #!/bin/sh into #!/usr/bin/sh; the helper ships
+# the bytes debian/ ships (tests/test_release_rpm.py compares them to the tree)
+# and /bin/sh is the same file on Fedora.
+%global __brp_mangle_shebangs_exclude_from ^/usr/libexec/fuckwayland/
 
 Name:           fuckwayland
 Version:        0.4.0

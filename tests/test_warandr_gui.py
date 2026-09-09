@@ -93,7 +93,10 @@ def _base_env(tmp, display):
     env.update({
         "DISPLAY": display, "GDK_BACKEND": "x11",
         "NO_AT_BRIDGE": "1", "GSETTINGS_BACKEND": "memory",
-        "HOME": tmp, "PYTHONPATH": ROOT,
+        "HOME": tmp,
+        # the tree first, then whatever the parent had: under nix the parent's PYTHONPATH is where
+        # gi lives, and replacing it turns "no DISPLAY" into "GTK 3 for Python is not available"
+        "PYTHONPATH": ROOT + (os.pathsep + os.environ["PYTHONPATH"] if os.environ.get("PYTHONPATH") else ""),
         "WARANDR_XRANDR": "%s %s" % (sys.executable,
                                      os.path.join(FIXTURES, "fake_xrandr.py")),
         "FAKE_XRANDR_STATE": os.path.join(tmp, "state.json"),

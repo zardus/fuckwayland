@@ -62,6 +62,7 @@ pkgs.stdenv.mkDerivation {
     nodejs
     zstd
     git
+    procps   # vm/vmctl's pg() is pgrep -x plus the wrapper rule; tests/test_vm_scripts.py runs it
   ];
 
   buildInputs = with pkgs; [ gtk3 pango gdk-pixbuf atk at-spi2-core cairo ];

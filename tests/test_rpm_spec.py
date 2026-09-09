@@ -118,7 +118,7 @@ SOURCE_ALIASES = {
 #: went with the placeholder.
 ACCEPTED_FINDINGS = (
     "non-conffile-in-etc",
-    "dangerous-command-in-%postun",
+    "spelling-error",
     "no-manual-page-for-binary",
 )
 

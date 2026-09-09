@@ -36,3 +36,25 @@
 # pattern is here so that the answer is a green job either way, and it is
 # deliberately narrow -- only our own seven top-level names match.
 ^fuckwayland W: Referenced python module '(fwcommon|wdotool|wwmctl|wxprop|wxrandr|warandr|wmirror)[.']
+
+# The console scripts' interpreter.  namcap 3.5 reads `#!/usr/bin/python` and
+# reports the `python` it resolves to as an uninstalled dependency even though
+# depends=('python') names it and the package is installed on the box running
+# namcap (measured in the CI pkgbuild job, run 34364127816, after the shebang
+# was fixed from /usr/sbin/python).  A namcap reading, not a packaging one.
+^fuckwayland W: Referenced library 'python' is an uninstalled dependency
+
+# warandr's GUI imports gi at run time and nowhere else, which is exactly what
+# optdepends=('python-gobject: the warandr GUI') says: namcap reports the
+# optional dependency it found the modules of, and that is the intended shape.
+^fuckwayland W: Dependency python-gobject detected but optional
+
+# The same import, seen through gi.repository.Gtk and Gdk: GTK 3 is what the
+# GUI draws with and is pulled in by python-gobject's own optdepends chain, so
+# it stays optional here too (a headless box never loads warandr/gui.py).
+^fuckwayland W: Dependency gtk3 detected but optional
+
+# pango and glib2 are the C libraries behind gi.repository.Pango, GLib and
+# GObject; namcap calls them "implicitly satisfied" because every GTK 3
+# install carries them, and "optional" for the reason python-gobject is.
+^fuckwayland W: Dependency (pango|glib2) detected and implicitly satisfied but optional
