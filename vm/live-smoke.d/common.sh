@@ -541,8 +541,19 @@ phase_nodialog() {
     # Request and Session are the portal's lifecycle objects (a Close on
     # /request/<sender>/... or /session/<sender>/...), never a request for a
     # dialog; they belong to whoever opened them, which is never one of the tools.
+    #
+    # `Documents.GetMountPoint` joins them, and only that member of that interface.  It reads the path
+    # the document portal is mounted at and answers a string; there is no dialog behind it and no
+    # consent to give.  Measured on resolute-hypr 2026-09-09: one call, `path=/org/freedesktop/portal/
+    # documents; interface=org.freedesktop.portal.Documents; member=GetMountPoint`, on a run whose 1152
+    # bus lines carried no other portal method call at all -- the portal is D-Bus activated and asks
+    # itself this on startup.  Widened by member and not by interface: `Documents` also has AddFull and
+    # friends, and T65's claim is about what the tools provoke, so the smallest widening that is still
+    # a fact is the right one (the same reasoning that put Request and Session here).
     other=$(guest "$calls | grep 'interface=org.freedesktop.portal\\.' \
-                 | grep -vE 'interface=org.freedesktop.portal.(Settings|Request|Session)' ${pat:+| grep -vE '$pat'} | head -5" || true)
+                 | grep -vE 'interface=org.freedesktop.portal.(Settings|Request|Session)' \
+                 | grep -v 'interface=org.freedesktop.portal.Documents; member=GetMountPoint' \
+                 ${pat:+| grep -vE '$pat'} | head -5" || true)
     if [ -z "$other" ]; then
         if [ "$n" = 0 ]; then pass "no portal method call at all during the whole smoke"
         else pass "no portal method call other than Settings from anything but the editor ($n portal calls; app connections: ${apps:-none})"; fi

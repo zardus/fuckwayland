@@ -60,11 +60,14 @@ def _lost(e) -> CmdError:
     return CmdError("wayfire backend: lost the connection to the compositor (%s)" % e)
 
 
-def _wedged() -> CmdError:
+def _wedged(timeout: "float | None" = None) -> CmdError:
     """Connected and not answering: the kernel accepts on a listening socket whose owner is stuck in its own
-    event loop, so a wedged compositor looks exactly like a healthy one until the first read."""
+    event loop, so a wedged compositor looks exactly like a healthy one until the first read.
+
+    The number in the sentence is the deadline that actually elapsed, so a reader running on 2.0 s
+    (xkbmap.WayfireLayouts) does not tell the user it waited ten."""
     return CmdError("wayfire backend: no answer from the compositor within %gs "
-                    "(it is not responding)" % IPC_TIMEOUT)
+                    "(it is not responding)" % (IPC_TIMEOUT if timeout is None else timeout))
 
 
 def _error_line(reply: dict, method: str) -> CmdError:
@@ -96,17 +99,26 @@ class _WayfireIPC:
     `view-app-id-changed`, `view-mapped`, `view-focused`, `view-geometry-changed`, `view-unmapped` in that
     order). A command sharing it would have to read its reply out from behind an unbounded queue of those."""
 
-    def __init__(self, sockpath: str):
+    def __init__(self, sockpath: str, timeout: "float | None" = None):
+        """`timeout` bounds the connect and every read on it; None is IPC_TIMEOUT, read at call time so the
+        module attribute stays the knob a test can turn.  IPC_TIMEOUT (10.0 s) is right for a command a user
+        is waiting on and wrong for `xkbmap.WayfireLayouts`, which runs inside `fetch()` while the daemon
+        holds its lock: there a wedged Wayfire would stall every `type` for ten seconds, where KwinLayouts,
+        GnomeInputSources, CinnamonInputSources and HyprLayouts all bound it at 2.0 s.  That reader passes
+        WAYFIRE_TIMEOUT = 2.0 (requests-batch-6.md, from batch 10)."""
         self.sockpath = sockpath
-        self.sock = self._connect(IPC_TIMEOUT)
+        self.timeout = IPC_TIMEOUT if timeout is None else timeout
+        self.sock = self._connect(self.timeout)
 
     def _connect(self, timeout: "float | None" = None) -> socket.socket:
-        """A fresh connection, carrying `timeout` once it is up; the connect itself always gets IPC_TIMEOUT.
+        """A fresh connection, carrying `timeout` once it is up; the connect gets the same deadline.
 
         The retry loop is the sway backend's, for the reason measured there: a compositor wedged inside its
         event loop still has a listening socket, the kernel queues connections for it, and a connect with no
-        deadline of its own blocks for ever once the backlog fills."""
-        deadline = time.monotonic() + IPC_TIMEOUT
+        deadline of its own blocks for ever once the backlog fills -- which is why the connect is bounded by
+        the caller's number and not by IPC_TIMEOUT."""
+        bound = IPC_TIMEOUT if timeout is None else timeout
+        deadline = time.monotonic() + bound
         while True:
             s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             s.settimeout(max(0.001, deadline - time.monotonic()))
@@ -117,7 +129,7 @@ class _WayfireIPC:
                 # both are OSError subclasses: this arm has to come first
                 s.close()
                 if time.monotonic() >= deadline:
-                    raise _wedged() from None
+                    raise _wedged(bound) from None
                 time.sleep(0.01)
             except OSError as e:
                 s.close()
@@ -146,7 +158,9 @@ class _WayfireIPC:
         try:
             sock.sendall(cls.frame({"method": method, "data": data}))
         except TimeoutError:
-            raise _wedged() from None
+            # the socket carries the deadline the caller chose (2.0 s for xkbmap's reader, IPC_TIMEOUT for a
+            # command), so it is the socket and not the module constant that says how long we waited
+            raise _wedged(sock.gettimeout()) from None
         except OSError as e:
             raise _lost(e) from None
 
@@ -164,7 +178,7 @@ class _WayfireIPC:
         except TimeoutError:
             # TimeoutError is an OSError: this arm has to come first, or a compositor that is merely wedged
             # reads as one that has gone.
-            raise _wedged() from None
+            raise _wedged(sock.gettimeout()) from None
         except (OSError, struct.error, ValueError) as e:
             raise _lost(e) from None
 
@@ -230,11 +244,21 @@ class WayfireBackend(WindowBackend):
         if GATE_METHOD not in self.methods:
             # The gate, not a fall-through: a Wayfire whose ipc plugin is loaded and whose ipc-rules is not
             # answers every window method `No such method found!`, and letting that reach the caller one
-            # command at a time would blame the tool for a two-word config line. The socket goes back before
-            # the refusal -- detect() catches this and carries on to the wlr floor, which opens its own.
+            # command at a time would blame the tool for a two-word config line. The socket goes back
+            # before the refusal.
+            #
+            # `.api_gate` is what makes detect() STOP here instead of falling through to the wlr floor,
+            # which is plan A 1.2's sentence: "a socket that exists with no ipc-rules gives that line
+            # rather than falling through to wlr".  Wayfire does advertise the wlr protocol, so the
+            # fall-through worked -- it just left the user on the capability floor with no idea that two
+            # words in wayfire.ini buy the window half.  A socket that is merely stale or unreachable
+            # raises a wire error without this flag and is still swallowed, which is the case the
+            # fall-through was protecting.
             self.ipc.close()
-            raise CmdError("wayfire backend: this Wayfire's IPC has no %s: Wayfire 0.9 or newer with "
+            err = CmdError("wayfire backend: this Wayfire's IPC has no %s: Wayfire 0.9 or newer with "
                            "`plugins = ipc ipc-rules` is required" % GATE_METHOD)
+            err.api_gate = True
+            raise err
         self._x = "unset"     # the X11 connection, opened at most once per process
 
     def _methods(self) -> "frozenset[str]":

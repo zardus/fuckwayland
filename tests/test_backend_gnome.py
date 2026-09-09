@@ -1878,6 +1878,30 @@ class DetectTests(_Base):
             backend_detect.detect()
         self.assertEqual(self.made, ["_wayfire", "_wlr"])
 
+    def test_the_wayfire_api_gate_stops_detection_instead_of_falling_through(self):
+        """Plan A 1.2: "a socket that exists with no `ipc-rules` gives that line rather than falling through
+        to wlr".  Wayfire DOES advertise `zwlr_foreign_toplevel_manager_v1`, so the fall-through worked --
+        and left a user whose wayfire.ini says `plugins = ipc` on the capability floor, never told that two
+        more words buy the window half [requests-batch-1.md, from batch 6].  The gate refusal carries
+        `.api_gate`; every other failure here does not, and the test below this one is the control that
+        those are still swallowed."""
+        self.compositor("hyprland")          # a registry with the wlr manager in it
+        sock = os.path.join(self.rtdir, "wayfire-wayland-1-.socket")
+        open(sock, "w").close()
+        self.addCleanup(os.unlink, sock)
+
+        def gated():
+            self.made.append("_wayfire")
+            err = CmdError("wayfire backend: this Wayfire's IPC has no window-rules/list-views: "
+                           "Wayfire 0.9 or newer with `plugins = ipc ipc-rules` is required")
+            err.api_gate = True
+            raise err
+        backend_detect._wayfire = gated
+        with self.assertRaises(CmdError) as cm:
+            backend_detect.detect()
+        self.assertIn("`plugins = ipc ipc-rules` is required", str(cm.exception))
+        self.assertEqual(self.made, ["_wayfire"])       # and NOT ["_wayfire", "_wlr"]
+
     def test_a_cosmic_registry_with_no_wlr_manager_picks_cosmic(self):
         """U15. Every window command answered the rc-2 sentence on COSMIC for one reason: there is no
         `zwlr_foreign_toplevel_manager_v1` in cosmic-comp's 53 globals, and the detector had nothing else to
@@ -2316,15 +2340,18 @@ class ShippedFilesTests(unittest.TestCase):
         """Four copies, and a mismatch is silent in three of them: the shell
         keys the extension by the directory name in metadata.json, the tools
         ask GetExtensionInfo for EXT_UUID, install-bridge.sh copies into
-        $UUID and debian/enable-bridge enables $UUID. Any one of those
-        drifting leaves the package installing an extension nothing turns on
-        or diagnoses."""
+        $UUID and packaging/common/enable-bridge enables $UUID. Any one of
+        those drifting leaves the package installing an extension nothing
+        turns on or diagnoses.  The path moved with the RPM/PKGBUILD work
+        (batch 3, design decision 8): `git mv debian/enable-bridge
+        packaging/common/enable-bridge`, same bytes, and debian/rules copies
+        it into the .deb from there."""
         with open(os.path.join(self.EXT, "metadata.json")) as f:
             meta = json.load(f)
         self.assertEqual(meta["uuid"], EXT_UUID)
         self.assertEqual(os.path.basename(self.EXT), EXT_UUID)
         for path in (os.path.join(self.GNOME, "install-bridge.sh"),
-                     os.path.join(ROOT, "debian", "enable-bridge")):
+                     os.path.join(ROOT, "packaging", "common", "enable-bridge")):
             with open(path) as f:
                 src = f.read()
             found = re.findall(r"^UUID='([^']+)'", src, re.M)

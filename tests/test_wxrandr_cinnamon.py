@@ -456,7 +456,7 @@ class NoOverlapRoute(CinnamonCase):
     def test_overlap_available_answers_the_typelib_reason(self):
         """The backend method behind `--gnome-overlap-status`. It is not yet what the flag prints: today
         wxrandr/cli.py:1072 short-circuits on the backend token before the impl is asked, which is
-        `TheCliStillKeysOnTheToken` below."""
+        `TheEightCliSites` below."""
         mo = self.outputs()
         version, why = mo.overlap_available()
         self.assertIsNone(version)
@@ -509,14 +509,16 @@ def three_heads():
                       layout_mode=2)
 
 
-class TheCliStillKeysOnTheToken(CinnamonCase):
+class TheEightCliSites(CinnamonCase):
     """Eight behaviours in wxrandr/cli.py are chosen by `sess.backend == "mutter"`, and a Cinnamon session
     is a Muffin-flavoured MutterOutputs under the token `cinnamon`, so it misses all eight. Four are
     user-visible sentences and four are silence where GNOME speaks.
 
-    These run the real `cli.main`, not the backend, and are `expectedFailure` until the cli.py owner lands
-    the request. They are written as the passing assertion so that the day it lands they turn green and
-    the xfail marks come off; nothing here is a workaround."""
+    These run the real `cli.main`, not the backend.  They were written as eight `expectedFailure`s -- the
+    passing assertion, red against the tree that had the token test -- and landed green with the cli.py
+    change of 2026-09-09 (batch 20): the four sentences now come off `sess.impl.flavor`, so GNOME's own
+    bytes do not move, and the four silences speak.  The class was `TheCliStillKeysOnTheToken` while that was
+    still the state; the history belongs here, where a failure line cannot send a reader the wrong way."""
 
     def fixture(self):
         return three_heads()
@@ -526,20 +528,17 @@ class TheCliStillKeysOnTheToken(CinnamonCase):
         below came from."""
         return self.run_cli("--backend", "mutter", *argv)
 
-    @unittest.expectedFailure    # wxrandr/cli.py:1072 (owner: the batch holding cli.py)
     def test_the_status_query_gives_the_typelib_reason(self):
         code, out, err = self.run_cli("--gnome-overlap-status")
         self.assertEqual(code, 0, err)
         self.assertIn("reason: %s" % gnome_overlap.CINNAMON_REASON, out)
         self.assertNotIn("places overlapping monitors without", out)
 
-    @unittest.expectedFailure    # wxrandr/cli.py:1153
     def test_the_allow_command_gives_the_typelib_reason(self):
         code, out, err = self.run_cli("--gnome-overlap-allow")
         self.assertEqual(code, 1)
         self.assertIn(gnome_overlap.CINNAMON_REASON, err)
 
-    @unittest.expectedFailure    # wxrandr/cli.py:1724
     def test_the_flag_gives_the_typelib_reason(self):
         code, out, err = self.run_cli("--unsafe-gnome-overlap",
                                       "--output", "DP-1", "--pos", "0x0")
@@ -547,7 +546,6 @@ class TheCliStillKeysOnTheToken(CinnamonCase):
         self.assertEqual(err, "xrandr: --unsafe-gnome-overlap only means anything on GNOME; %s\n"
                               % gnome_overlap.CINNAMON_REASON)
 
-    @unittest.expectedFailure    # wxrandr/cli.py:1529
     def test_brightness_warns_and_succeeds_the_way_it_does_on_gnome(self):
         """Muffin has no LUT call either (its DisplayConfig is Mutter's), so the answer is GNOME's
         warn-and-succeed. Today the cinnamon token falls through to the wlr gamma path and the run dies
@@ -558,7 +556,6 @@ class TheCliStillKeysOnTheToken(CinnamonCase):
         self.assertIn("--brightness/--gamma are not supported on Muffin", err)
         self.assertNotIn("no wayland socket", err)
 
-    @unittest.expectedFailure    # wxrandr/cli.py:1322
     def test_the_dryrun_plan_shows_the_neighbours_the_apply_will_shift(self):
         """`Session.positions()` runs `keep_adjacent` only for the mutter token, and that is what marks the
         shifted outputs `changed` so their crtc lines reach the plan and the screen size. The apply itself
@@ -572,13 +569,11 @@ class TheCliStillKeysOnTheToken(CinnamonCase):
         self.assertEqual(code, 0, err)
         self.assertEqual(out, want)
 
-    @unittest.expectedFailure    # wxrandr/cli.py:1579
     def test_noprimary_says_cinnamon_keeps_one(self):
         code, out, err = self.run_cli("--output", "eDP-1", "--mode", "1920x1080", "--noprimary")
         self.assertEqual(code, 0, err)
         self.assertIn("Cinnamon requires a primary output; keeping eDP-1", err)
 
-    @unittest.expectedFailure    # wxrandr/cli.py:1600
     def test_a_dryrun_says_which_compositor_verified_it(self):
         """The line is the backend token, so asking the flavour for it leaves GNOME's `mutter verify: ok`
         byte-identical (tests/test_wxrandr_mutter.py:1326 pins it) and gives Cinnamon `cinnamon verify: ok`.
@@ -592,7 +587,6 @@ class TheCliStillKeysOnTheToken(CinnamonCase):
         self.assertEqual([c[1] for c in self.svc.calls], [mutter.VERIFY])
         self.assertIn("cinnamon verify: ok", err)
 
-    @unittest.expectedFailure    # wxrandr/cli.py:1751
     def test_listmonitors_puts_the_primary_first(self):
         """RandR 1.5 lists the primary monitor first, and that is opt-in per backend because it is only
         observable where the compositor has a real primary XWayland knows about. Muffin has one -- it is

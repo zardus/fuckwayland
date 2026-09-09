@@ -69,7 +69,9 @@ def read_only_reason(name: str) -> str:
 
 #: The refusal for the four commands the protocol has no request for. labwc is a *stacking* compositor and
 #: still cannot move a window, so the reason names the protocol, not a tiling policy [M labwc.md §6c].
-NO_GEOMETRY = "zwlr_foreign_toplevel_management_v1 carries no geometry and no stacking"
+NO_GEOMETRY = ("zwlr_foreign_toplevel_management_v1 carries no geometry and no stacking; not yet "
+               "here, and the routes are the X plane for an XWayland window (AGENTS.md route 5, a "
+               "real ConfigureWindow) or a patched compositor for a native one (route 6)")
 
 # zwlr_foreign_toplevel_handle_v1 state enum
 _ST_MAXIMIZED = 0

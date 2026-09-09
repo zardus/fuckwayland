@@ -342,7 +342,7 @@ _WSM_REQ_COMMIT, _WSM_REQ_STOP = 0, 1
 _WSG_EV_CAPABILITIES, _WSG_EV_WORKSPACE_ENTER = 0, 3
 #: workspace events / requests
 _WS_EV_ID, _WS_EV_NAME, _WS_EV_COORDINATES = 0, 1, 2
-_WS_EV_STATE, _WS_EV_CAPABILITIES = 3, 4
+_WS_EV_STATE, _WS_EV_CAPABILITIES, _WS_EV_REMOVED = 3, 4, 5
 _WS_REQ_ACTIVATE, _WS_REQ_DEACTIVATE = 1, 2
 
 
@@ -432,6 +432,20 @@ class WorkspaceServer:
                 self._send(conn, self.ws_mgr, _WSM_EV_DONE)
 
 
+    def remove(self, index: int):
+        """Destroy one workspace the way a compositor does: `ext_workspace_handle_v1.removed` on that
+        handle's own object, then the manager's `done`.  `self.ws_ids` is left alone, so it stays the
+        oracle a test compares the client's `handles()` against -- a test that reached into the client and
+        flipped its own row would be asserting against the reader it is testing."""
+        with self._lock:
+            conns = list(self._clients)
+        oid = self.ws_ids[index]
+        for conn in conns:
+            self._send(conn, oid, _WS_EV_REMOVED)
+            if self.ws_mgr:
+                self._send(conn, self.ws_mgr, _WSM_EV_DONE)
+
+
 class WorkspaceCompositor(WorkspaceServer, Server):
     """`ext_workspace_manager_v1` and nothing else -- labwc's and Budgie's shape for a desktops test."""
 
@@ -477,7 +491,13 @@ _EXT_EV_CLOSED, _EXT_EV_DONE, _EXT_EV_TITLE, _EXT_EV_APP_ID, _EXT_EV_IDENTIFIER 
 _CI_REQ_STOP, _CI_REQ_GET = 0, 1
 #: zcosmic_toplevel_handle_v1 events
 _CH_EV_CLOSED, _CH_EV_DONE, _CH_EV_STATE, _CH_EV_GEOMETRY = 0, 1, 8, 9
+#: `workspace_enter` (6) takes a `zcosmic_workspace_handle_v1`, which is the handle a client below info v3
+#: holds; a v3 client holds `ext_workspace_handle_v1`s only, so cosmic-comp sends it `ext_workspace_enter`
+#: (10) and never opcode 6 [R recon2/cosmic/tlinfo.rs:639-640: `raw_ext_workspace_handles` ->
+#: `instance.ext_workspace_enter`].  The fake branches on the version the client actually bound, so a fake
+#: binding v3 and sending 6 -- which is what it did until 2026-09-09 -- cannot happen again.
 _CH_EV_WORKSPACE_ENTER = 6
+_CH_EV_EXT_WORKSPACE_ENTER = 10
 #: zcosmic_toplevel_manager_v1 events / requests
 _CM_EV_CAPABILITIES = 0
 _CM_REQUESTS = {
@@ -549,6 +569,7 @@ class CosmicCompositor(WorkspaceServer, Server):
         self.calls = []           # (request name, [object ids after the toplevel])
         self.list_oid = None
         self.info_oid = None
+        self.info_bound = None       # the zcosmic_toplevel_info_v1 version the client bound
         self.mgr_oid = None
         self.seat_oid = None
         self.kbd_mgr = None
@@ -571,6 +592,7 @@ class CosmicCompositor(WorkspaceServer, Server):
             return
         if iface == COSMIC_INFO:
             self.info_oid = new_id
+            self.info_bound = version
             return
         if iface == COSMIC_MGR:
             self.mgr_oid = new_id
@@ -628,8 +650,9 @@ class CosmicCompositor(WorkspaceServer, Server):
             self._send(conn, rec.cosmic, _CH_EV_GEOMETRY,
                        struct.pack("<Iiiii", 0, x, y, w, h))
         if self.ws_ids:
-            self._send(conn, rec.cosmic, _CH_EV_WORKSPACE_ENTER,
-                       struct.pack("<I", self.ws_ids[0]))
+            op = (_CH_EV_EXT_WORKSPACE_ENTER if (self.info_bound or 0) >= 3
+                  else _CH_EV_WORKSPACE_ENTER)
+            self._send(conn, rec.cosmic, op, struct.pack("<I", self.ws_ids[0]))
         self._send(conn, rec.cosmic, _CH_EV_STATE,
                    struct.pack("<I", len(arr)) + arr + b"\0" * pad(len(arr)))
         self._send(conn, rec.cosmic, _CH_EV_DONE)

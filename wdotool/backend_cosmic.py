@@ -82,7 +82,8 @@ _MGR_MOVE_TO_EXT_WORKSPACE = 13
 _MGR_EV_CAPABILITIES = 0
 
 #: The refusal for the four commands with no request behind them.
-NO_GEOMETRY = "the COSMIC toplevel protocol has no move, resize, raise or lower"
+NO_GEOMETRY = ("the COSMIC toplevel protocol has no move, resize, raise or lower; not yet here, "
+               "and the route is a patched cosmic-comp (AGENTS.md route 6)")
 
 
 class _Top:
@@ -352,26 +353,24 @@ class CosmicBackend(XPlaneViews, WindowBackend):
             ))
         return wins
 
-    def _ws_rows(self):
-        """The workspace records in desktop-number order, or [].
+    def _ws_handles(self) -> "list[int]":
+        """The `ext_workspace_handle_v1` oids in desktop-number order, or [].
 
-        `WorkspaceClient._live()` is the ordering rule -- coordinates first, arrival second -- and this
-        backend needs the handle object ids it carries, which `workspace_list()` (the public `Workspace`
-        rows) deliberately does not: `workspace_enter` names a workspace by oid, and `move_to_ext_workspace`
-        takes one. See the request filed against wdotool/ext_workspace.py for a public accessor."""
-        return [] if self.ws is None else self.ws._live()
+        `WorkspaceClient.handles()` is the public accessor (landed 2026-09-09; this used to reach through to
+        `_live()` with the request filed beside it).  The oid is what this backend needs and the public
+        `backend.Workspace` deliberately does not carry: `workspace_enter` names a workspace by oid, and
+        `move_to_ext_workspace` takes one."""
+        return [] if self.ws is None else self.ws.handles()
 
     def _active_workspaces(self) -> "set[int]":
         """The handle oids of the workspaces that say they are active; empty when none does."""
-        return {r.oid for r in self._ws_rows() if r.state & ext_workspace.STATE_ACTIVE}
+        return set() if self.ws is None else self.ws.active_handles()
 
     def _desktop_of(self, rec: _Top) -> int:
         if rec.workspace is None:
             return -1
-        for i, r in enumerate(self._ws_rows()):
-            if r.oid == rec.workspace:
-                return i
-        return -1
+        handles = self._ws_handles()
+        return handles.index(rec.workspace) if rec.workspace in handles else -1
 
     def activate(self, wid: int):
         rec = self._by_wid(wid)
@@ -486,11 +485,11 @@ class CosmicBackend(XPlaneViews, WindowBackend):
         self._need(CAP_MOVE_TO_WORKSPACE, "set_desktop_for_window")
         if self.mgr_ver < 4 or not self.outputs:
             self._unsupported("set_desktop_for_window")
-        rows = self._ws_rows()
-        if not 0 <= n < len(rows):
+        handles = self._ws_handles()
+        if not 0 <= n < len(handles):
             raise CmdError("cosmic backend: no workspace %d" % n)
         self._mgr_send(_MGR_MOVE_TO_EXT_WORKSPACE,
-                       [("u", rec.cosmic), ("u", rows[n].oid), ("u", self.outputs[0])])
+                       [("u", rec.cosmic), ("u", handles[n]), ("u", self.outputs[0])])
 
     def display_size(self) -> tuple[int, int]:
         if not self.out_w or not self.out_h:

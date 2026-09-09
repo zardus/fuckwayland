@@ -32,6 +32,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from fwcommon.errors import CmdError
 from fwcommon import wayland_mini
 from fwcommon.wayland_mini import Cursor, WlConn
+from support import env as support_env
 from wl_fake import msg, wstr
 from wdotool import backend_sway
 
@@ -283,6 +284,27 @@ class WlrBackendGuards(unittest.TestCase):
         self.assertNotEqual(conn.sock.fileno(), -1, "the socket must still be open")
         self.assertEqual(conn.find_global("wl_output")[0], 1,
                          "and the registry it holds is still readable")
+
+    def test_detection_hands_its_own_connection_over_so_a_session_opens_one(self):
+        """The other end of the seam, landed 2026-09-09 (requests-batch-8.md item 2, plan A 1.0 step 6):
+        `session_registry()` used to close the connection in its `finally` and `_wlr()` constructed with no
+        argument, so a wlr session really did open TWO connections -- detection's, to choose between the wlr
+        and COSMIC toplevel protocols, and the backend's, to read the same registry again.  The compositor's
+        own accept count is the only witness that says which."""
+        from wdotool import backend_detect
+        srv = BrokenCompositor("ok")
+        self.addCleanup(srv.close)
+        backend_detect.reset()
+        self.addCleanup(backend_detect.reset)
+        with support_env(XDG_RUNTIME_DIR=os.path.dirname(srv.path),
+                         WAYLAND_DISPLAY=os.path.basename(srv.path),
+                         SWAYSOCK=None, I3SOCK=None, HYPRLAND_INSTANCE_SIGNATURE=None,
+                         WAYFIRE_SOCKET=None, WDOTOOL_BACKEND=None,
+                         DBUS_SESSION_BUS_ADDRESS="unix:path=/nonexistent-fw-bus"):
+            b = backend_detect.detect()
+            self.assertEqual(b.name, "wlr")
+            self.assertIs(b.c, backend_detect.session_conn())
+        self.assertEqual(len(srv.conns), 1, "detection's connection is the one the backend uses")
 
     def test_a_connection_this_constructor_opened_is_closed_on_failure(self):
         """The other half of the same rule, and the reason the flag exists: an fd left to the collector is

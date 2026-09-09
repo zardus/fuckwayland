@@ -34,7 +34,7 @@ from fwcommon import dbus_mini, distro, passthrough, session
 import wl_fake
 from support import env as support_env
 from test_dbus_mini import MockBus
-from wxrandr import cli
+from wxrandr import cli, gnome_overlap, mutter as mutter_mod
 
 #: a GNOME session, as the probes would find it
 GNOME = {
@@ -662,6 +662,54 @@ class DroppedOnTheHandover(Stubbed):
         self.assertNotIn("is dropped on X11", err)
 
 
+class TheOverlapFlagOffGnome(unittest.TestCase):
+    """The sentence a non-GNOME Wayland session gets for `--unsafe-gnome-overlap`, byte for byte.
+
+    It moved on 2026-09-09.  The apply gate used to write its own "which places overlapping monitors
+    without it", which is FALSE on Cinnamon -- Muffin refuses the very layout that sentence promises -- so
+    all three callers now come off `gnome_overlap.not_gnome_reason()` and its generic arm reads "without any
+    of this" (requests-batch-7.md, batch 7 -> batch 20).  Every existing test stopped at "only means
+    anything on GNOME", so the half that changed was unpinned and the next reword would have been silent.
+
+    `_run_session` is called directly because the refusal is its first statement, before a session is asked
+    anything: a kwin or cinnamon session that could answer would be a fixture about the wrong thing."""
+
+    class _Sess:
+        """Only the fields `_run_session` reads before it refuses."""
+
+        backend = "kwin"
+        persistent = False
+        overlap = False
+        overlap_force = False
+
+    def refusal(self, backend):
+        sess = self._Sess()
+        sess.backend = backend
+        opts = cli.Opts()
+        opts.overlap = True
+        with self.assertRaises(cli.Fatal) as cm:
+            cli._run_session(sess, opts)
+        return cm.exception.args[0]
+
+    def test_kwin_is_told_it_places_them_without_any_of_this(self):
+        self.assertEqual(self.refusal("kwin"),
+                         "--unsafe-gnome-overlap only means anything on GNOME; this session is kwin, "
+                         "which places overlapping monitors without any of this\n")
+
+    def test_sway_gets_the_same_sentence_with_its_own_name_in_it(self):
+        self.assertEqual(self.refusal("sway"),
+                         "--unsafe-gnome-overlap only means anything on GNOME; this session is sway, "
+                         "which places overlapping monitors without any of this\n")
+
+    def test_cinnamon_gets_muffins_own_reason_and_never_the_generic_one(self):
+        """The whole point of routing the three callers through one function: a Cinnamon session may not be
+        told that it places overlapping monitors without this, because it does not place them at all."""
+        line = self.refusal("cinnamon")
+        self.assertNotIn("without any of this", line)
+        self.assertNotIn("without it", line)
+        self.assertIn(gnome_overlap.CINNAMON_REASON, line)
+
+
 class ReadmeOnTheHandover(unittest.TestCase):
     """The paragraph that promises the handover, against what it does.
 
@@ -873,9 +921,13 @@ class CinnamonProbe(unittest.TestCase):
         """The available probe hands its connection on in `handle`; this one owns it to the end and closes it.
         Asserted on the call and not on the mock's connection list, because the dropped Probe holds no
         reference either way and CPython's refcounting would close the socket for us -- which would make the
-        socket-count version of this test unable to fail."""
+        socket-count version of this test unable to fail.
+
+        The name patched is `wxrandr.mutter.Bus`, not `fwcommon.dbus_mini.Bus`: since 2026-09-09 the two
+        flavours share one probe (`mutter.probe(flavor=MUFFIN)`), which binds `Bus` at import time, and
+        mutter.py is where the close now happens."""
         opened = []
-        real = dbus_mini.Bus
+        real = mutter_mod.Bus
 
         class Recording(real):
             def __init__(self, *a, **kw):
@@ -887,8 +939,8 @@ class CinnamonProbe(unittest.TestCase):
                 self.closes += 1
                 super().close()
 
-        dbus_mini.Bus = Recording
-        self.addCleanup(setattr, dbus_mini, "Bus", real)
+        mutter_mod.Bus = Recording
+        self.addCleanup(setattr, mutter_mod, "Bus", real)
         with self.bus_env(self.mock.address):
             p = cli.probe_backend("cinnamon")
         self.assertFalse(p.available)

@@ -885,20 +885,11 @@ def _probe_cinnamon():
     org.cinnamon.Muffin.DisplayConfig and never org.gnome.Mutter.DisplayConfig [M recon2/cinnamon.md §2.2], so
     this is a separate name on the same bus and not a second flavour of the mutter probe."""
     from fwcommon import session as wsession
-    from fwcommon.dbus_mini import Bus, DBusError
-    hit = wsession.find_session_bus()
-    if not hit:
-        return Probe("cinnamon", False, "no session bus")
-    try:
-        bus = Bus(hit[1])
-    except (DBusError, OSError, ValueError):
-        return Probe("cinnamon", False, "no session bus")
-    try:
-        owned = bus.name_has_owner(CINNAMON_DEST)
-    except DBusError:
-        owned = False
-    if not owned:
-        bus.close()
+    from wxrandr import mutter as mutter_mod
+    bus = mutter_mod.probe(flavor=mutter_mod.MUFFIN)
+    if bus is None:
+        if not wsession.find_session_bus():
+            return Probe("cinnamon", False, "no session bus")
         return Probe("cinnamon", False, "%s is not on the session bus" % CINNAMON_DEST)
     return Probe("cinnamon", True,
                  detail="%s on the session bus" % CINNAMON_DEST,
@@ -1070,9 +1061,11 @@ def overlap_status_lines(sess, unavailable=None) -> list:
     if unavailable:
         lines += ["unavailable", "reason: %s" % unavailable]
     elif sess.backend != "mutter":
-        lines += ["unavailable",
-                  "reason: this session is %s, which places overlapping "
-                  "monitors without any of this" % sess.backend]
+        # one sentence for the three callers that have to say it (here, --gnome-overlap-allow, the flag
+        # itself): on Cinnamon "places overlapping monitors without any of this" is false -- Muffin carries
+        # Mutter's validator with Mutter's own strings and refuses exactly the layout the flag exists for
+        # [M recon2/cinnamon.md §2.2]
+        lines += ["unavailable", "reason: %s" % gnome_overlap.not_gnome_reason(sess.backend)]
     else:
         version, why = sess.impl.overlap_available()
         lines.append("")                        # the token, filled in below
@@ -1151,9 +1144,8 @@ def _do_overlap_allow(sess, dryrun=False) -> int:
     consent."""
     flag = gnome_overlap.ALLOW_FLAG
     if sess.backend != "mutter":
-        raise Fatal("%s: this session is %s, which places overlapping monitors "
-                    "without any of this -- there is nothing to agree to\n"
-                    % (flag, sess.backend))
+        raise Fatal("%s: %s -- there is nothing to agree to\n"
+                    % (flag, gnome_overlap.not_gnome_reason(sess.backend)))
     reply = sess.impl.overlap_probe()
     if not reply.get("ok"):
         raise Fatal("%s: %s" % (flag, gnome_overlap.refusal_text(reply)))
@@ -1232,12 +1224,13 @@ class Session:
         sway_sock = reuse("sway")
         kprobe = reuse("kwin")
         probe = reuse("mutter")
+        cprobe = reuse("cinnamon")
         wprobe = reuse("wlr")
         # detection may have opened a connection per backend it tried; only the chosen one is reused, so the
         # rest are closed here rather than left to the garbage collector (which reports them as a
         # ResourceWarning at whatever moment it gets round to them)
         self.probes = probes
-        keep = {id(h) for h in (sway_sock, kprobe, probe, wprobe) if h is not None}
+        keep = {id(h) for h in (sway_sock, kprobe, probe, cprobe, wprobe) if h is not None}
         for p in probes.values():
             if p.handle is not None and id(p.handle) not in keep:
                 p.close()
@@ -1282,12 +1275,16 @@ class Session:
             # opens nothing here and the probe has already refused a session that has none, by name.
             self.impl = hypr_mod.HyprOutputs(ipc=reuse("hypr"))
         elif self.backend == "cinnamon":
-            # The tables, the probes and `--backends` know this one; its output backend is wxrandr/mutter.py's
-            # Muffin flavour, which is not in the tree yet. A refusal, never a fall-through to WlrOutputs:
-            # Muffin has no wlr output protocol at all, so answering as `wlr` here would be a wrong answer
-            # rather than a missing one.
-            raise Fatal("xrandr: the %s backend is named by --backend and is not built into this "
-                        "install\n" % self.backend)
+            from wxrandr import mutter as mutter_mod
+            try:
+                # Muffin's DisplayConfig is Mutter's interface under Cinnamon's three names, so this is the
+                # mutter arm above with the flavour swapped -- including the connection the probe opened,
+                # which `keep` holds for exactly this. Never a fall-through to WlrOutputs: Muffin has no wlr
+                # output protocol at all, so answering as `wlr` here would be a wrong answer, not a missing
+                # one. Measured live on resolute-cinnamon-wayland (Cinnamon 6.4.13 / muffin 6.4.1).
+                self.impl = mutter_mod.MutterOutputs(bus=cprobe, flavor=mutter_mod.MUFFIN)
+            except (mutter_mod.DBusError, OSError, ValueError):
+                self._cant_open()
         else:
             try:
                 self.impl = core.WlrOutputs(conn=wprobe)
@@ -1317,7 +1314,11 @@ class Session:
         (no holes allowed) also the follow-your-neighbour shift the apply performs, so the plan, --fb and
         screen-size checks see the real layout (the warnings are printed once, by the apply/verify)."""
         pos = core.resolve_positions(targets, dims)
-        if self.backend == "mutter":
+        # the impl, not the token: a Cinnamon session is a Muffin-flavoured MutterOutputs under the token
+        # `cinnamon` and has the same no-holes rule.  Measured on the three-head fixture of
+        # tests/test_wxrandr_cinnamon.py: without this the `--dryrun --verbose` plan omits the crtc lines
+        # for the neighbours the apply shifts and promises `screen 0: 5760x1600` where the run leaves 5520
+        if getattr(self.impl, "flavor", None) is not None:
             from wxrandr import mutter as mutter_mod
             moved = {n for n, _p, _via in mutter_mod.keep_adjacent(targets, dims, pos)}
             for t in targets:
@@ -1524,11 +1525,14 @@ def _apply_gamma(sess: Session, opts: Opts, outputs):
             # build_targets already printed the bare not-found warning and xrandr keeps exit 0 for a typo'd
             # --output; don't spawn a holder against a name the compositor has never heard of.
             continue
-        if sess.backend == "mutter":
-            # Mutter has neither zwlr_gamma_control nor a DisplayConfig LUT
-            # call: a cosmetic impossibility, so warn and succeed
-            core.warn("--brightness/--gamma are not supported on Mutter "
-                      "(no gamma LUT API); ignoring for %s\n" % s.name)
+        flavor = getattr(sess.impl, "flavor", None)
+        if flavor is not None:
+            # Neither flavour has zwlr_gamma_control or a DisplayConfig LUT call, so warn and succeed --
+            # named by the compositor the user is running (Mutter, Muffin).  Without this the cinnamon
+            # token fell through to the wlr gamma path below and died `cannot set gamma: no wayland
+            # socket`, a failure about a protocol that session never had.
+            core.warn("--brightness/--gamma are not supported on %s "
+                      "(no gamma LUT API); ignoring for %s\n" % (flavor.compositor, s.name))
             continue
         if sess.backend == "kwin" and not sess.impl.has_gamma:
             # probed, not assumed: kde-output-management-v2 carries no LUT
@@ -1574,8 +1578,9 @@ def _do_setit_1_2(sess: Session, opts: Opts, outputs):
     # sees the primary the real call would send, and the dryrun branch puts this back before it saves.
     primary_before = sess.state.primary
     if opts.noprimary:
-        if (sess.backend == "mutter" and sess.impl.primary and not any(s.primary for s in opts.stanzas)):
-            core.warn("GNOME requires a primary output; keeping %s\n" % sess.impl.primary)
+        nflavor = getattr(sess.impl, "flavor", None)
+        if (nflavor is not None and sess.impl.primary and not any(s.primary for s in opts.stanzas)):
+            core.warn("%s requires a primary output; keeping %s\n" % (nflavor.desktop, sess.impl.primary))
         if (sess.backend == "kwin" and sess.impl.primary and not any(s.primary for s in opts.stanzas)):
             # neither set_priority nor set_primary_output has an inverse:
             # KWin's output order always has a first entry
@@ -1595,9 +1600,12 @@ def _do_setit_1_2(sess: Session, opts: Opts, outputs):
         # `xrandr: <mutter message>` the apply would give; KWin has no such request and re-runs the plan
         # client-side (mode resolution, the last-output refusal); sway and wlroots have nothing to ask.
         sess.impl.verify(sess.state, targets)
-        if sess.backend == "mutter":
-            # the verdict goes to stderr: stdout stays xrandr's dryrun bytes
-            sys.stderr.write("mutter verify: ok\n")
+        vflavor = getattr(sess.impl, "flavor", None)
+        if vflavor is not None:
+            # the verdict goes to stderr: stdout stays xrandr's dryrun bytes.  The word is the backend
+            # token off the flavour, so GNOME keeps `mutter verify: ok` byte-identical and Cinnamon --
+            # whose method 0 really did go to Muffin -- says `cinnamon verify: ok` instead of nothing
+            sys.stderr.write("%s verify: ok\n" % vflavor.name)
         # Nothing was sent, so nothing may be claimed about the compositor -- including the primary: a --dryrun
         # that recorded one would make the next --query name a primary the compositor was never asked for.
         # (Mutter and KWin re-sync this from the compositor in snapshot(), so putting back what the run started
@@ -1720,9 +1728,8 @@ def _run_session(sess: Session, opts: Opts) -> int:
         sess.persistent = True
     if opts.overlap:
         if sess.backend != "mutter":
-            raise Fatal("%s only means anything on GNOME; this session is %s, "
-                        "which places overlapping monitors without it\n"
-                        % (gnome_overlap.FLAG, sess.backend))
+            raise Fatal("%s only means anything on GNOME; %s\n"
+                        % (gnome_overlap.FLAG, gnome_overlap.not_gnome_reason(sess.backend)))
         sess.overlap = True
         sess.overlap_force = opts.overlap_force
     if opts.screen > 0:
@@ -1746,7 +1753,10 @@ def _run_session(sess: Session, opts: Opts) -> int:
         if opts.monitor_op[0] in ("list", "listactive"):
             # KWin has a real primary XWayland knows about (measured: its
             # own --listmonitors puts it first), so it lists it first too
-            for line in core.render_monitors(outputs, sess.state, sess.backend in ("mutter", "kwin")):
+            # Muffin has the same real primary, on the same logical-monitor flag this backend already
+            # reads and syncs, so the flavour answers for both of them
+            primary_first = (getattr(sess.impl, "flavor", None) is not None or sess.backend == "kwin")
+            for line in core.render_monitors(outputs, sess.state, primary_first):
                 print(line)
             return 0
         if opts.monitor_op[0] == "del":

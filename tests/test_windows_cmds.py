@@ -986,6 +986,10 @@ class SwayResizeRestoreTest(unittest.TestCase):
 
         b = SwayBackend.__new__(SwayBackend)
         b.commands = []
+        # `__new__` runs no constructor, so the dialect cache has to be planted: since 2026-09-09 the
+        # refusals open with `dialect()` (an i3 session may not be told about sway), and an unset
+        # `_dialect` would send this double down a GET_VERSION round trip it has no socket for.
+        b._dialect = "sway"
         node = {"id": 7, "deco_rect": {"height": 0}}
         from wdotool.backend import Window
 
@@ -1027,6 +1031,7 @@ class SwayFullscreenGuardTest(unittest.TestCase):
 
         b = SwayBackend.__new__(SwayBackend)
         b.commands = []
+        b._dialect = "sway"                    # see SwayResizeRestoreTest._backend
         node = {"id": 7, "deco_rect": {"height": 0}, "fullscreen_mode": 1}
         win = Window(id=7, x=0, y=0, w=1280, h=720)
         b._node = lambda wid: (node, win, True, "3")

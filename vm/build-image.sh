@@ -246,6 +246,22 @@ dm_enable() {   # dm_enable <unit> <binary> -- make <unit> THE display manager o
     for other in gdm gdm3 sddm plasmalogin lightdm; do
         [ "$other" = "$unit" ] || systemctl disable "$other" 2>/dev/null || true   # drops its display-manager.service alias
     done
+    # ...and whatever else already owns the link, by reading it rather than by guessing.  Measured on
+    # fedora44-cosmic 2026-09-09: `dnf group install cosmic-desktop-environment` (1,147 packages) puts
+    # cosmic-greeter -- which IS greetd, `ExecStart=greetd --config /etc/greetd/cosmic-greeter.toml` --
+    # on the image and SELF-ENABLES it mid-transaction, and Fedora's greetd.service has no `WantedBy=`
+    # at all, so `systemctl enable greetd` is exactly that one alias symlink and nothing else.  It then
+    # fails: "File '/etc/systemd/system/display-manager.service' already exists and is a symlink to
+    # /usr/lib/systemd/system/cosmic-greeter.service", and the whole flavor dies at line 410.  Verified
+    # by hand in that guest: disable the incumbent, enable ours, and the reboot gave greetd active,
+    # display-manager.service active, a seated `test seat0 tty1 Service=greetd` session, cosmic-comp
+    # holding head 0's scanout and the head painting at stddev 0.131454 [requests-batch-2.md, batch 14].
+    dmlink=$(readlink -f "$VMCTL_ROOT/etc/systemd/system/display-manager.service" 2>/dev/null || true)
+    if [ -n "$dmlink" ] && [ "$dmlink" != "$want" ]; then
+        other=$(basename "$dmlink" .service)
+        say "display-manager.service is $other.service; disabling it so $unit can take the alias"
+        systemctl disable "$other" 2>/dev/null || rm -f "$VMCTL_ROOT/etc/systemd/system/display-manager.service"
+    fi
     systemctl enable "$unit" || fail "systemctl enable $unit failed"
     if [ ! -L "$VMCTL_ROOT/etc/systemd/system/display-manager.service" ]; then
         # Debian's gdm3.service has no [Install] section at all: `systemctl enable gdm3`
@@ -975,6 +991,19 @@ plugins = autostart command cube expo fast-switcher fisheye grid idle invert mov
           wrot zoom ipc ipc-rules stipc
 xwayland = true
 
+# Two groups, so `wdotool/xkbmap.py:WayfireLayouts` (U07) is reachable at all.  With one
+# xkb_layout the compositor's keymap has one group, `choose_group()` is CERTAIN and `fetch()`
+# never asks any desktop reader -- measured 2026-09-08 against wayfire 0.10.0-1, the package
+# this flavor installs: `wdotool keys explain --chars z` answered `layout: English (US) --
+# group 1 of 1, from wayland` and `wayfire/get-keyboard-state` reported one possible layout.
+# It is an ini line and not a smoke step because there is no runtime route to a second layout:
+# `wayfire/set-config-options {"input/xkb_layout": ...}` answers `{"result": "ok"}` and changes
+# nothing, and `wayfire/set-keyboard-state` must NEVER be called -- it recompiles the keymap as
+# the selected layout DUPLICATED and loses the other one until restart [M recon2/wayfire.md
+# §2.7, requests-batch-2.md from batch 13].
+[input]
+xkb_layout = us,de
+
 [autostart]
 env = /usr/local/bin/vmctl-wayfire-env
 panel = wf-panel
@@ -1016,10 +1045,12 @@ EOF
 }
 desktop_cosmic() {
     # cosmic-comp panics with Io(Os { code: 13 }) at src/config/mod.rs:173 when
-    # ~/.config is not the user's before the first login [recon2/arch].  Whether its
-    # KMS backend paints on virtio-vga with no 3D is unmeasured: the first
-    # fedora44-cosmic build decides, and the fallback is a nested COSMIC_BACKEND=winit,
-    # which forfeits multi-head [recon2/cosmic].
+    # ~/.config is not the user's before the first login [recon2/arch].  Its KMS backend
+    # PAINTS on virtio-vga with no 3D -- measured 2026-09-09 off the fedora44-cosmic disk:
+    # /sys/kernel/debug/dri/0/state names cosmic-comp as head 0's allocator and a QMP
+    # screendump of that head measures stddev 0.131454 against the rig's 0.02 flat-colour
+    # line -- so there is no COSMIC_BACKEND=winit fallback here and none is needed
+    # [vm/flavors/fedora44-cosmic.yaml carries the write-up].
     # Nothing is written into ~/.config/cosmic: the recon recorded no cosmic-idle
     # config path, key or value, and a guess here would be a rig setting no measurement
     # stands behind.  The first fedora44-cosmic build is where idle blanking gets
@@ -1055,10 +1086,23 @@ sleep-display-ac=0
 sleep-display-battery=0
 sleep-computer-ac=0
 sleep-computer-battery=0
+
+# The key's own default is FALSE, and MATE is the only desktop in the rig where it is
+# [recon2/mate.md 5, read out of the schema]: a head that `vmctl head <n> off` unplugs and
+# `vmctl head <n> 1920x1080` plugs back in would stay disabled here where every other
+# flavor's desktop turns it back on, which is exactly what mate.sh's `heads` phase measures
+# [requests-batch-2.md, from batch 16].
+[org.mate.SettingsDaemon.plugins.xrandr]
+turn-on-external-monitors-at-startup=true
 EOF
     glib-compile-schemas "$VMCTL_ROOT/usr/share/glib-2.0/schemas"
     [ "$(gsettings get org.mate.session idle-delay 2>/dev/null)" = "0" ] \
         || fail "gschema override not applied (org.mate.session idle-delay)"
+    # glib-compile-schemas ignores a WHOLE override file on one unknown key, so the new
+    # block is verified by name too rather than trusted to the line above
+    [ "$(gsettings get org.mate.SettingsDaemon.plugins.xrandr \
+            turn-on-external-monitors-at-startup 2>/dev/null)" = "true" ] \
+        || fail "gschema override not applied (org.mate.SettingsDaemon.plugins.xrandr)"
     hide_autostart mate-screensaver update-notifier
 }
 desktop_i3() {

@@ -265,11 +265,26 @@ hypr_xwayland() {
         return 0
     fi
     guest "setsid nohup $xcmd >/dev/null 2>&1 </dev/null & sleep 3; true" >/dev/null || true
-    local list xid row
+    local list xid row oracle
+    # The ORACLE is the real xprop's root list, not ours.  Ours is deliberately a superset: the merged root
+    # lists native windows too, by the minted id the tools print for them (wxprop/core.py:680), and the
+    # editor this phase already opened is one of those -- so `head -1` of OUR list is whatever arrived
+    # first, and on the 2026-09-09 run that was the editor's minted 0x48bea19f, not the X client's
+    # 0x00400020.  The check failed on its own oracle while the backend was right: `wwmctl -lpx` and the
+    # original `wmctrl -lpx` both said 0x00400020 in the same run.
+    oracle=$(guest 'xprop -root _NET_CLIENT_LIST 2>/dev/null' || true)
     list=$(guest 'wxprop -root _NET_CLIENT_LIST' || true)
     want "wxprop -root _NET_CLIENT_LIST names the X client (Hyprland's Xwayland root is the real one)" \
          "window id # 0x[0-9a-f]+" "$list"
-    xid=$(printf '%s\n' "$list" | grep -o '0x[0-9a-f]*' | head -1)
+    xid=$(printf '%s\n' "$oracle" | grep -o '0x[0-9a-f]*' | tail -1)
+    if [ -n "$xid" ]; then
+        # and our merged list carries what the X root carries: a minted id is biased into 0x4000_0000 and
+        # up (wdotool/backend.py ID_BASE) so it can never be read as an X id, but the X ids themselves have
+        # to be there
+        want "and our merged root list carries the X root's own id $xid" "$xid" "$list"
+    else
+        note "(the real xprop printed no id: no X client on the root, so there is nothing to join)"
+    fi
     row=$(guest 'wwmctl -lpx' | grep -i "$xproc" || true)
     if [ -n "$xid" ]; then
         # xprop writes the id short (`0x40000c`) and wmctrl pads it to eight (`0x0040000c`), so the
@@ -363,7 +378,14 @@ def" "$(editor_text)"
 # The layout, which is where Hyprland differs from every other desktop in this tree: XKB state
 # is kept PER DEVICE, so switching the physical keyboard's group leaves the injected device on
 # its own.  `HyprLayouts` reads the physical keyboard's index off `j/devices`; whether the
-# keystrokes then land in that group is the open question this run records.
+# keystrokes then land in that group was the open question this phase existed to record, and the
+# 2026-09-09 run on resolute-hypr answered it: they do not.  See the xwant at the end.
+#
+# One more thing that run measured, and that `_hypr_keyboard`'s clauses had better not lean on:
+# `main` MOVES.  With three keyboards (`power-button`, `at-translated-set-2-keyboard`,
+# `wdotool-virtual-keyboard`) it was our own injected device that was `main: true` before the
+# switch, and the physical one afterwards -- so `main` is "last used", not "the real keyboard",
+# and the rule that skips `wdotool-*` before reading it is what makes the reader work at all.
 layout_phase() {
     local kb
     kb=$(hypr_keyboard)
@@ -385,8 +407,23 @@ layout_phase() {
     local got; got=$(type_and_read 'yz@ Straße')
     note "typed through /dev/uinput with the session in group 2: $(ev "$got")"
     note "$(guest 'hyprctl -j devices' || true)"
-    xwant "German types byte-exact after a switch on the physical keyboard (until this run says \
-whether the injected device follows the session's group)" "yz@ Straße" "$got"
+    # ANSWERED, 2026-09-09, on this flavor: the injected device does NOT follow the session's group, and
+    # a reader that is right about the session is what makes `type` wrong.  With
+    # `at-translated-set-2-keyboard` switched to group 1 (German) `hyprctl -j devices` still reported
+    # `wdotool-virtual-keyboard` at `active_layout_index: 0`, `keys explain` correctly said
+    # `layout: German -- group 2 of 2, from wayland + hyprland devices`, and `wdotool type "zy@ Strasse"`
+    # into a `foot -e cat` produced `zyq Strasse`: the `@` was encoded as the German AltGr+Q and landed in
+    # the US group as a plain `q`.  Before HyprLayouts, wdotool admitted it was guessing and typed
+    # CORRECTLY, because the guess (US) was what the injected device really was [recon2/hyprland 3].
+    #
+    # NOT YET, and the route is ours and not a rung of the ladder: the uinput path must encode for the
+    # group ITS OWN device is in, which is a second question from the one `keys explain` answers about the
+    # session -- `xkbmap.HyprLayouts`' "fourth rule", named as open in `_hypr_keyboard`'s docstring
+    # (requests-batch-12.md item 2, from batch 10).  Below that, route 2: `hyprctl switchxkblayout
+    # wdotool-virtual-keyboard <n>` before the injection, which moves the session's own state and would
+    # have to be put back.
+    xwant "German types byte-exact after a switch on the physical keyboard (fix xkbmap.HyprLayouts: the \
+injected device keeps its own group; measured 2026-09-09, zy@ typed as zyq)" "yz@ Straße" "$got"
     guest "hyprctl switchxkblayout $kb 0" >/dev/null 2>&1 || true
     sleep 1
     same "back in group 1, US types byte-exact again" "us: yz@" "$(type_and_read 'us: yz@')"
@@ -401,6 +438,13 @@ whether the injected device follows the session's group)" "yz@ Straße" "$got"
 # session) while the same command on a fresh session applies at once [recon2/hyprland 4].  That
 # last sentence is what the hypr backend rides on, so the applies are plain checks here, and this
 # phase is careful to be the first thing in the run that applies anything.
+#
+# One half of the recon paragraph above did NOT reproduce on this flavor, 2026-09-09, and the phase
+# body says where: two timed-out wlr applies on a virgin three-head session were followed by two
+# `keyword monitor` applies that landed in 0.28 s and 0.36 s, so a wlr apply does not stop 0.53.3
+# taking `keyword monitor`.  What it does do is change how the wlr path itself answers: after a
+# `keyword monitor` apply the same wlr request stops timing out and returns rc 0 in 0.64 s having
+# changed nothing.  Both measurements are checks in this phase.
 #
 # What 0.56.2 differs in, measured: the first wlr apply of a FRESH single-head session already
 # times out, where 0.53.3's worked [recon2/arch 3.4].  `hyprctl keyword monitor` was tried in that
@@ -429,17 +473,65 @@ phase_display() {
     local pair first
     pair=$(display_pair); first=${pair%% *}
     if [ -z "$first" ]; then fail "no enabled output in the oracle [$(ev "$outs")]"; return 1; fi
-    # The pair of applies this file exists for, taken FIRST so that nothing else in the phase has
-    # touched an output before the second one runs.
-    local one two
-    guest "wxrandr --output $first --mode 1280x1024" >/dev/null 2>&1 || true
+    # ------------------------------------------------------------------ the wlr route, FIRST
+    # This used to be the last thing in the phase, on the reading of [recon2/hyprland 4] that an apply
+    # through the wlr path is what stops a 0.53.3 session taking `keyword monitor`.  MEASURED on this
+    # flavor 2026-09-09, and that is not what happens -- what happens is the reverse, and it is why the
+    # check has moved to the top:
+    #
+    #   virgin session, three heads:  two wlr applies in a row, 10.16 s and 10.26 s, both timed out,
+    #                                 the head unchanged, both naming the Hyprland clause;
+    #   then `keyword monitor`:       0.28 s and 0.36 s, both landed -- so a timed-out wlr apply does
+    #                                 NOT poison the route this backend uses;
+    #   after a `keyword monitor`:    the SAME wlr apply answers rc 0 in 0.64 s, prints nothing, and
+    #                                 changes nothing.
+    #
+    # So run last, this check was asking a session that cannot time out to time out: it saw an empty
+    # stderr and went red about a compositor doing nothing wrong (67 pass / 1 fail, 2026-09-09).  Run
+    # first, the premise holds and the rest of the phase still applies fine.  What is asserted is
+    # wxrandr/core.py's Hyprland clause (U08) and not the rc: the generic "timed out" is true and
+    # useless on this compositor, and the clause says which backend does work.  TWO applies, because on
+    # a single head the first wlr apply of a session was measured to WORK (rc 0 in 0.25 s) and it is
+    # the second that times out; with a second output present even the first hangs, so the second is
+    # the one that carries the message on either shape.
+    if [ "$DISTRO" != arch ]; then
+        local m0; m0=$(hypr_mode "$first")
+        guest "wxrandr --backend wlr --output $first --mode 1680x1050" >/dev/null 2>&1 || true
+        want "the wlr route's timeout names the Hyprland clause and the backend that works (U08)" \
+             "use --backend hypr" \
+             "$(guest "wxrandr --backend wlr --output $first --mode 1280x1024 2>&1" || true)"
+        # "timed out ... with nothing changed" is half the sentence, so the mode is read back: two wlr
+        # applies asked for 1680x1050 and then 1280x1024, and $first has to still be in $m0.
+        same "and nothing changed while it timed out, which is the other half of the sentence" \
+             "$m0" "$(hypr_mode "$first")"
+    fi
+    # ------------------------------------------------------------------ the applies
+    # The pair of applies this file exists for, taken before anything else in the phase has
+    # touched an output.
+    # Both applies SHRINK, and that is a fact about the rig and not a softened check.  Measured on
+    # resolute-hypr 2026-09-09: on `-device virtio-vga` a head's mode can be made smaller as often as you
+    # like and never larger again within a session.  1920x1080 -> 1680x1050 -> 1280x1024 all land;
+    # 1280x1024 -> 1920x1080 does not, and the compositor is not what refuses it -- `hyprctl keyword
+    # monitor` answers `ok`, aquamarine logs `atomic drm request: failed to commit: Invalid argument,
+    # flags: ATOMIC_ALLOW_MODESET ATOMIC_TEST_ONLY`, and with `AQ_NO_ATOMIC=1` the legacy path fails the
+    # same way (`drmModeSetCrtc failed`).  wxrandr's own re-read is what catches it and says so, which is
+    # the behaviour this phase is here to prove.  Growing again needs a display device this rig cannot
+    # have on this host: `-device virtio-vga-gl` is refused by the plain dbus display ("The display
+    # backend does not have OpenGL support enabled") and `-display dbus,gl=on` dies with "egl: no drm
+    # render node available" -- there is no /dev/dri on the dsb guest at all.  The claim under test is
+    # "a second apply of the session lands", and two shrinks test it exactly.  The GROW is not dropped
+    # for being unanswerable here: it is the third apply below, an xwant that goes XPASS on the day the
+    # rig can answer, because `xrandr --mode 1920x1080` after `--mode 1280x1024` is an everyday script
+    # and X does it.
+    local one two three
+    guest "wxrandr --output $first --mode 1680x1050" >/dev/null 2>&1 || true
     sleep 2; one=$(hypr_mode "$first")
-    guest "wxrandr --output $first --mode 1920x1080" >/dev/null 2>&1 || true
+    guest "wxrandr --output $first --mode 1280x1024" >/dev/null 2>&1 || true
     sleep 2; two=$(hypr_mode "$first")
     if [ "$DISTRO" = arch ]; then
         xwant "the first apply of a session lands on Hyprland 0.56.2 (until arch-hypr's first run \
-says whether a fresh 0.56.2 session takes keyword monitor)" "^1280x1024$" "$one"
-        xwant "the second apply of a session lands too on 0.56.2 (until the same run)" "^1920x1080$" "$two"
+says whether a fresh 0.56.2 session takes keyword monitor)" "^1680x1050$" "$one"
+        xwant "the second apply of a session lands too on 0.56.2 (until the same run)" "^1280x1024$" "$two"
         note "0.56.2 is the bracket, and the two lines above are the whole measurement: the wlr apply"
         note "was dead from the first request of a fresh session [recon2/arch 3.4], while the only"
         note "keyword monitor tried there came after five timed-out wlr applies -- the state 0.53.3"
@@ -447,22 +539,32 @@ says whether a fresh 0.56.2 session takes keyword monitor)" "^1280x1024$" "$one"
         note "run until they answer: every step of it is an apply, and each would put a question about"
         note "the compositor in the log as a failure of ours.  resolute-hypr runs the dance."
     else
-        same "the FIRST apply of the session changes the mode, and hyprctl agrees" "1280x1024" "$one"
-        same "the SECOND apply lands too (the wlr path wedged here at 10.06 s)" "1920x1080" "$two"
+        same "the FIRST apply of the session changes the mode, and hyprctl agrees" "1680x1050" "$one"
+        same "the SECOND apply lands too (the wlr path wedged here at 10.06 s)" "1280x1024" "$two"
+        # And back up, which is the shape parity actually owes: xrandr grows a head as readily as it
+        # shrinks one.  It is the rig that refuses (the two modeset paths and their kernel errors are
+        # named above this pair), so the line stays as a check with its route rather than as a comment.
+        guest "wxrandr --output $first --mode 1920x1080" >/dev/null 2>&1 || true
+        sleep 2; three=$(hypr_mode "$first")
+        xwant "a mode that GROWS back lands (until the rig has a render node: -device virtio-vga-gl \
+with -display dbus,gl=on -- refused here with 'egl: no drm render node available', no /dev/dri on the \
+dsb guest -- or a different KMS device: qxl, bochs-display, virtio-gpu blob=on, untried)" \
+             "^1920x1080$" "$three"
         common_display_phase
-        # LAST, and on purpose: an apply through the wlr path is what stops a 0.53.3 session
-        # taking `keyword monitor` [recon2/hyprland 4], so this is the only place the wlr route
-        # can be forced without spoiling a later check.  Nothing after this phase applies anything
-        # -- mirror, root and nodialog only read.  TWO applies, because on a single head the first
-        # wlr apply of a session was measured to WORK (rc 0 in 0.25 s) and it is the second that
-        # times out; with a second output present even the first hung, so the second is the one
-        # that carries the message on either shape.  What is asserted is wxrandr/core.py's
-        # Hyprland clause (U08), not the rc: the generic "timed out" is true and useless on this
-        # compositor, and the clause says which backend does work.
-        guest "wxrandr --backend wlr --output $first --mode 1280x1024" >/dev/null 2>&1 || true
-        want "the wlr route's timeout names the Hyprland clause and the backend that works (U08)" \
-             "use --backend hypr" \
-             "$(guest "wxrandr --backend wlr --output $first --mode 1920x1080 2>&1" || true)"
+        # The other half of the wlr measurement at the top of this phase, and the one that is OURS.
+        # After a `keyword monitor` apply Hyprland stops timing the wlr path out and starts answering
+        # it: rc 0 in 0.64 s, empty stderr, and the head exactly where it was (measured 2026-09-09,
+        # Virtual-2 asked for 1920x1080 while sitting at 1280x1024, three times).  A silent success
+        # that changed nothing is worse for a script than the timeout it replaced, and no rung of
+        # AGENTS.md's ladder is needed to fix it: `HyprOutputs._verify_applied` already re-reads what
+        # it applied and says "Hyprland accepted the mode ... and did not apply it", and wxrandr's wlr
+        # backend does not.  NOT YET, so it is an xwant naming that fix, asserted on the OUTPUT rather
+        # than on the mode -- the mode here would also be held down by the rig's grow limit above, and
+        # the claim is that the tool SAYS something, not that the rig can do it.
+        local silent; silent=$(guest "wxrandr --backend wlr --output $first --mode 1920x1080 2>&1" || true)
+        note "the wlr route after a keyword apply: [$(ev "$silent")], $first at $(hypr_mode "$first")"
+        xwant "a wlr apply that changed nothing does not answer success in silence (fix wxrandr's wlr \
+backend: re-read what was applied, the way HyprOutputs._verify_applied does)" "." "$silent"
     fi
 }
 
@@ -482,11 +584,20 @@ phase_mirror() {
         note "one head only: a mirror needs a target, --heads 2 is what gives it"
         return 0
     fi
+    # The region offset is in LAYOUT coordinates, not in the source head's own -- wmirror refuses one
+    # that is not inside the source ("the region 800x600+100+100 is not inside Virtual-2, which is
+    # 1280x1024+1920+0", measured 2026-09-09 on the run where phase_display's applies started landing
+    # and left the anchor somewhere other than the origin).  So the offset is built from where the
+    # source actually IS, and this phase no longer depends on which layout the phase before it left.
+    local org rx ry
+    org=$(oracle_outputs | sed -n "s/^$first //p" | head -1)
+    rx=$(( ${org%%,*} + 100 )); ry=$(( ${org##*,} + 100 ))
+    local region="800x600+$rx+$ry"
     local out st=0
-    out=$(guest "wmirror $first --to $second --region 800x600+100+100") || st=$?
-    ok "wmirror $first --to $second --region 800x600+100+100" "$st"
+    out=$(guest "wmirror $first --to $second --region $region") || st=$?
+    ok "wmirror $first --to $second --region $region" "$st"
     want "the started line names target, source, region, scaling and the helper's pid" \
-         "$second <- $first +region 800x600\+100\+100 +scaling fit +wl-mirror pid [0-9]+" "$out"
+         "$second <- $first +region 800x600\+$rx\+$ry +scaling fit +wl-mirror pid [0-9]+" "$out"
     want "wmirror --list shows it running" "$second <- $first" "$(guest 'wmirror --list' || true)"
     want "wmirror --stop ends it" "^stopped +$second <- $first" "$(guest "wmirror --stop $second" || true)"
     same "and no wl-mirror is left behind" "" "$(guest 'pgrep -x wl-mirror' | tr -d ' \r\n' || true)"

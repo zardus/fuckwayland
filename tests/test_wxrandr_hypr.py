@@ -69,10 +69,18 @@ class _ApplyingHypr(support.FakeHypr):
             return b"ok"
         return super().reply_for(req)
 
+    def _rows_key(self) -> str:
+        """Whichever key this double is serving its monitor rows out of.  `support.FakeHypr` answers
+        `j/monitors all` off `monitors` unless a test planted `monitors all` itself, and a real `keyword
+        monitor` changes what BOTH questions answer -- so the apply has to land on the one being served or
+        the re-read that verifies it would see the row it started with."""
+        return "monitors all" if "monitors all" in self.payloads else "monitors"
+
     def _apply(self, spec: str):
         m = _LINE.match(spec)
         name, rest = m.group(1), m.group(2)
-        rows = json.loads(json.dumps(self.payloads["monitors"]))
+        key = self._rows_key()
+        rows = json.loads(json.dumps(self.payloads[key]))
         row = next((r for r in rows if r["name"] == name), None)
         if row is None:
             return
@@ -95,7 +103,7 @@ class _ApplyingHypr(support.FakeHypr):
                     row["transform"] = int(fields[i + 1])
                 elif fields[i] == "mirror":
                     row["mirrorOf"] = fields[i + 1]
-        self.payloads["monitors"] = rows
+        self.payloads[key] = rows
 
 
 class Base(unittest.TestCase):
@@ -238,6 +246,37 @@ class Snapshot(Base):
         out.snapshot(self.state())
         self.assertEqual(out.mirrors, {"HEADLESS-2": "Virtual-1"})
 
+    def test_the_mirror_is_remembered_by_name_when_hyprland_answers_with_an_id(self):
+        """What a real Hyprland puts in `mirrorOf` is the mirrored monitor's numeric `id` as a string, not
+        its name.  Measured live on resolute-hypr (0.53.3) 2026-09-09:
+
+            $ hyprctl keyword monitor "Virtual-3,1920x1080@60,3840x0,1,mirror,Virtual-1"   -> ok
+            $ hyprctl -j monitors all | ...                        -> Virtual-3 mirrorOf "0"
+
+        and `wxrandr --output Virtual-3 --same-as Virtual-1` produced the same "0".  Both spellings apply
+        (`,mirror,0` and `,mirror,Virtual-2` were each accepted in the same session), so the reason to
+        translate is what happens next: `self.mirrors` is re-emitted on a LATER apply that does not mention
+        the mirror, and an id is a position in Hyprland's own list that a hotplug moves."""
+        srv = self.hypr()
+        mons = json.loads(json.dumps(srv.payloads["monitors"]))
+        self.assertEqual(str(mons[0]["id"]), "0")           # the recording's own ids
+        mons[1]["mirrorOf"] = "0"                           # what the compositor really answers
+        srv.payloads["monitors"] = mons
+        out = self.outputs(srv)
+        out.snapshot(self.state())
+        self.assertEqual(out.mirrors, {"HEADLESS-2": "Virtual-1"})
+
+    def test_an_id_that_names_no_monitor_is_kept_as_it_came(self):
+        """A row that vanished between the read and the translation is not worth inventing a name for: the
+        value goes back out as Hyprland gave it, which is a spelling Hyprland takes."""
+        srv = self.hypr()
+        mons = json.loads(json.dumps(srv.payloads["monitors"]))
+        mons[1]["mirrorOf"] = "7"
+        srv.payloads["monitors"] = mons
+        out = self.outputs(srv)
+        out.snapshot(self.state())
+        self.assertEqual(out.mirrors, {"HEADLESS-2": "7"})
+
     def test_a_monitors_answer_that_is_not_a_list_is_one_line(self):
         srv = self.hypr(payloads={"monitors": {"oops": 1}})
         with self.assertRaises(core.Fatal) as cm:
@@ -345,6 +384,44 @@ class Apply(Base):
         self.assertEqual((code, err), (0, ""))
         self.assertEqual(srv.keywords[1:], ["HEADLESS-2,1920x1080@0.06,0x0,1"])
         self.assertFalse(srv.payloads["monitors"][1]["disabled"])
+
+    def test_the_reader_asks_for_all_and_never_the_plain_list(self):
+        """`j/monitors all` and `j/monitors` are two different questions, and only the first one lists a
+        head Hyprland has disabled.  Measured live on resolute-hypr (Hyprland 0.53.3) 2026-09-09, with
+        Virtual-3 off:
+
+            j/monitors      -> Virtual-1, Virtual-2
+            j/monitors all  -> Virtual-1, Virtual-2, Virtual-3 (disabled: true)
+
+        so asking the plain one made `--off` refuse with `Hyprland accepted the configuration for Virtual-3
+        and then stopped listing it`, and left `--auto`/`--right-of`/`--below` warning `output Virtual-3 not
+        found; ignoring` about an output that was there all along.  Asserted on the wire, because this is a
+        claim about the REQUEST and the double answers both from one payload."""
+        srv = self.plant()
+        self.run_cli("--query")
+        asked = [r for r in srv.requests if r.startswith("j/monitors")]
+        self.assertTrue(asked, srv.requests)
+        self.assertEqual(set(asked), {"j/monitors all"})
+
+    def test_a_head_disabled_earlier_is_still_there_to_turn_back_on(self):
+        """The live cascade, end to end, off the recorded three-head document: with Virtual-3 disabled,
+        `--query` must still list it (xrandr keeps an `--off` output in the listing, and X is the oracle)
+        and `--auto` must find it rather than warn it away."""
+        rows = support.fixture_json("hypr", "monitors-all-one-disabled.json")
+        # planted under `monitors all` and NOT under `monitors`, so the alias in support.FakeHypr does not
+        # carry this test: a reader that went back to the plain question would get the two-head recording
+        # instead of these three and go red here as well as in the wire test above
+        srv = self.plant(self.hypr(payloads={"monitors all": rows}))
+        code, out, err = self.run_cli("--query")
+        self.assertEqual((code, err), (0, ""))
+        self.assertIn("Virtual-3", out)
+        code, _out, err = self.run_cli("--output", "Virtual-3", "--auto")
+        self.assertEqual(code, 0, err)
+        self.assertNotIn("not found", err)
+        # 0x0 and not the 3840x0 the disabled row still publishes: `snapshot()` reads x/y only for an
+        # active head, and `xrandr --auto` on an output it is enabling with no position given puts it at
+        # the origin.  X is the oracle, so the friendlier answer would be a flag and not this line.
+        self.assertEqual(srv.keywords, ["Virtual-3,1920x1080@75,0x0,1"])
 
     def test_a_rotation_goes_out_as_the_wlroots_number(self):
         srv = self.plant()

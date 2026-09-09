@@ -244,6 +244,32 @@ class Wire(Case):
                          "wayfire backend: no answer from the compositor within 0.4s "
                          "(it is not responding)")
 
+    def test_the_timeout_is_a_constructor_argument_and_is_the_number_reported(self):
+        """requests-batch-6.md, from batch 10: `xkbmap.WayfireLayouts` runs inside `fetch()` while the
+        daemon holds its lock, so it may not inherit a command's 10-second deadline -- every other reader in
+        xkbmap.py bounds a wedged desktop at 2.0 s.  Two claims here, and both were red before the knob
+        landed: a silent Wayfire refuses within the caller's own deadline, and the sentence names that
+        deadline rather than IPC_TIMEOUT (a reader that waited 0.3 s and said it waited ten would send
+        someone looking for a ten-second stall that never happened)."""
+        self.backend(views=[view(3)])          # the gate, on the default deadline
+        self.srv.mode = "silent"
+        ipc = _WayfireIPC(self.srv.path, timeout=0.3)
+        self.addCleanup(ipc.close)
+        self.assertEqual(ipc.timeout, 0.3)
+        t0 = time.monotonic()
+        with self.assertRaises(CmdError) as cm:
+            ipc.call("window-rules/list-views")
+        elapsed = time.monotonic() - t0
+        self.assertLess(elapsed, 3, "the reader waited past its own deadline")
+        self.assertEqual(str(cm.exception),
+                         "wayfire backend: no answer from the compositor within 0.3s "
+                         "(it is not responding)")
+
+    # The one caller that passes the knob is pinned where its behaviour can be driven, not by a grep of
+    # this module's source: tests/test_xkbmap.py:TestTheActiveGroupFromWayfire
+    # test_a_wedged_wayfire_is_bounded_by_this_modules_deadline_not_the_backends puts a silent Wayfire
+    # under `WayfireLayouts.group` with WAYFIRE_TIMEOUT at 0.3 s and asserts it came back inside 3 s.
+
     def test_a_compositor_that_goes_away_is_one_line(self):
         """`gone` closes the connection after the first reply, so the gate is answered and the first window
         command reads EOF -- the shape of a session that ends mid-chain."""

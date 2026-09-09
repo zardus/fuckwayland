@@ -311,11 +311,21 @@ phase_mirror() {
     local pair first second
     pair=$(display_pair); first=${pair%% *}; second=${pair#* }
     if [ -z "$second" ]; then note "one head only: a mirror needs somewhere to put it, skipped"; return 0; fi
+    # The region offset is in LAYOUT coordinates and not in the source head's own, so it is built from
+    # where that head actually IS.  Measured in CI on 2026-09-09 (run 34308982263, job 102331500198): the
+    # fixed `+100+100` gave `wmirror: the region 400x300+100+100 is not inside Virtual-2, which is
+    # 1920x1080+1920+0`, and the three checks after it fell with the refusal -- four of that run's four
+    # FAILs on this flavor.  vm/live-smoke.d/hypr.sh's phase_mirror carries the same line for the same
+    # reason.
+    local org rx ry
+    org=$(oracle_outputs | sed -n "s/^$first //p" | head -1)
+    rx=$(( ${org%%,*} + 100 )); ry=$(( ${org##*,} + 100 ))
+    local region="400x300+$rx+$ry"
     st=0
-    out=$(guest "wmirror $first --to $second --region 400x300+100+100") || st=$?
-    ok "wmirror $first --to $second --region 400x300+100+100" "$st"
+    out=$(guest "wmirror $first --to $second --region $region") || st=$?
+    ok "wmirror $first --to $second --region $region" "$st"
     want "the mirror is running with the region it was given" \
-         "$second <- $first +region 400x300\+100\+100" "$out"
+         "$second <- $first +region 400x300\+$rx\+$ry" "$out"
     want "wmirror --list shows it" "$second <- $first" "$(guest 'wmirror --list' || true)"
     # The pixels, which is the half a headless bench cannot show.  wf-background and wf-panel paint the
     # SOURCE head on every boot of this flavor (the live run of 2026-09-08 measured standard deviation

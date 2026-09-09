@@ -2009,7 +2009,10 @@ class Detection(MutterCase):
         mock = self.mock
         wsession.find_session_bus = lambda: (os.getuid(), mock.address)
         self.orig_probe = mutter.probe
-        mutter.probe = lambda addr=None: self.orig_probe(mock.address)
+        # the flavour travels through the double: `_probe_cinnamon` asks this same function for MUFFIN's
+        # bus name, and the mock owns only Mutter's, so the cinnamon probe over it comes back unavailable
+        # rather than dying on an unexpected keyword
+        mutter.probe = lambda addr=None, flavor=mutter.MUTTER: self.orig_probe(mock.address, flavor=flavor)
         os.environ.pop("WAYLAND_DISPLAY", None)
         # the real Session, with its bus closed by tearDown
         self.orig_init = cli.Session.__init__

@@ -166,7 +166,8 @@ class SwayBackend(WindowBackend):
         results = self._msg(RUN_COMMAND, command)
         for r in results or []:
             if not r.get("success"):
-                raise CmdError("sway: %s" % (r.get("error") or "command failed: %s" % command))
+                raise CmdError("%s: %s" % (self.dialect(),
+                                           r.get("error") or "command failed: %s" % command))
 
     def dialect(self) -> str:
         """"i3" or "sway", from one GET_VERSION, cached for the life of the backend.
@@ -325,22 +326,28 @@ class SwayBackend(WindowBackend):
         (decoration included) while we report/take the content rect."""
         return (node.get("deco_rect") or {}).get("height", 0)
 
-    @staticmethod
-    def _refuse_fullscreen(node, what: str):
+    def _refuse_fullscreen(self, node, what: str):
         """sway silently ignores move/resize of fullscreen containers, which
-        would make --sync spin forever; refuse up front instead."""
+        would make --sync spin forever; refuse up front instead.
+
+        Not a staticmethod any more: the refusal opens with `dialect()` so an i3 session is not told
+        about sway."""
         if node.get("fullscreen_mode"):
             raise CmdError(
-                "sway: cannot %s a fullscreen window "
-                "(windowstate --remove FULLSCREEN first)" % what
+                "%s: cannot %s a fullscreen window "
+                "(windowstate --remove FULLSCREEN first)" % (self.dialect(), what)
             )
 
     def move_window(self, wid: int, x: int, y: int):
         node, _w, floating, _ws = self._node(wid)
         if not floating:
+            # the dialect, not the file's name: `dialect()` already answers i3 everywhere else here (the
+            # label, the ids, the floating flag, the pids), and a refusal that opens `sway:` on an i3
+            # session names a program the user is not running.  Measured on the first live resolute-i3 run,
+            # 2026-09-09 [requests-batch-9.md, from batch 16].
             raise SoftCmdError(
-                "sway: cannot move a tiled window to an absolute position "
-                "(floating enable it first)"
+                "%s: cannot move a tiled window to an absolute position "
+                "(floating enable it first)" % self.dialect()
             )
         self._refuse_fullscreen(node, "move")
         self.run("%s move absolute position %d %d" % (_sel(node), x, y - self._deco_h(node)))
@@ -352,8 +359,8 @@ class SwayBackend(WindowBackend):
             # axis the layout owns and unchanged on the other, which read as a silent partial success. Refuse it
             # the way a tiled move is refused.
             raise SoftCmdError(
-                "sway: cannot resize a tiled window to an absolute size "
-                "(floating enable it first)"
+                "%s: cannot resize a tiled window to an absolute size "
+                "(floating enable it first)" % self.dialect()
             )
         self._refuse_fullscreen(node, "resize")
         self.run("%s resize set %d px %d px" % (_sel(node), w, h + self._deco_h(node)))

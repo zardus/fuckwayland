@@ -2,7 +2,7 @@
 #
 # The oracle for every assertion in here is the hand smoke of 2026-09-08 on
 # noble-gnome, resolute-gnome and stonking-gnome: bridge v3 ACTIVE after one
-# reboot (debian/enable-bridge enabled it ~12 s after the session came up),
+# reboot (packaging/common/enable-bridge enabled it ~12 s after the session came up),
 # every window/desktop/input/display operation correct, the maximize pair
 # restoring to exactly 100,100 800x600 on all three (b7a60f0), `wdotool type
 # 'de: yz@ Straße'` byte-exact under a Super+Space switch, Mutter refusing a
@@ -84,7 +84,7 @@ phase_bridge() {
     # ~12 s on 46 and 50 (50 showed INITIALIZED first: timing, not a bug), so 30 s.
     info=$(await 30 'State: ACTIVE' "gnome-extensions info $BRIDGE_UUID" || true)
     if printf '%s\n' "$info" | grep -q 'State: ACTIVE'; then
-        pass "the bridge reaches ACTIVE within 30 s of the session (debian/enable-bridge enabled it)"
+        pass "the bridge reaches ACTIVE within 30 s of the session (packaging/common/enable-bridge enabled it)"
     elif printf '%s\n' "$info" | grep -q 'OUT OF DATE'; then
         fail "the bridge is OUT OF DATE as shipped on GNOME $major (F0.0/F6.2)"
         record_out_of_date

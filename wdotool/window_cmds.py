@@ -556,7 +556,14 @@ def cmd_windowreparent(ctx, args):
             "windows." % (dest_arg, len(dests))
         )
     ctx.resolve_windows(warg)  # validates the source ref
-    _warn_noop("windowreparent: reparenting is not possible on Wayland; ignoring")
+    # AGENTS.md: a missing feature is a route and its cost, never a sentence about what Wayland
+    # allows.  xdotool sends one XReparentWindow; the same call over the X plane this process
+    # already opens would do it for an XWayland window (route 5), and a native toplevel has no
+    # parent to change until route 6.  Until one of the two is taken this stays a warn-and-succeed,
+    # which is what the whole `warn and succeed` column of docs/WDOTOOL.md is.
+    _warn_noop("windowreparent: not done here yet -- for an XWayland window the route is one "
+               "XReparentWindow over the X plane (AGENTS.md route 5), for a native one a patched "
+               "compositor (route 6); ignoring")
     return nopts + used + 1
 
 

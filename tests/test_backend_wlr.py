@@ -699,9 +699,19 @@ class Capabilities(WlrTest):
             with self.assertRaises(CmdError) as cm:
                 call(*args)
             self.assertTrue(getattr(cm.exception, "unsupported", False), op)
-            self.assertEqual(str(cm.exception),
-                             "%s is not supported by the wlr backend: "
-                             "zwlr_foreign_toplevel_management_v1 carries no geometry and no stacking" % op)
+            # the protocol clause first, contiguous with the colon, because vm/live-smoke.d/labwc.sh:135
+            # and river.sh:176 pin exactly that much of the line -- plan C2's point on the wlroots family
+            # is that the reason names the PROTOCOL and not sway's tiling; the NOT-YET and its two routes
+            # follow it (AGENTS.md), so a user reading the refusal is told what would fix it
+            # `assertEqual` against `"%s ... %s" % (op, NO_GEOMETRY)` would be the format string restated,
+            # so the claims are made one at a time: the command names ITSELF (each of the four does, and
+            # a shared refusal that said `windowmove` for all four would be the bug), then the two halves
+            # of the sentence below
+            self.assertTrue(str(cm.exception).startswith(op + " is not supported by the wlr backend: "),
+                            str(cm.exception))
+            self.assertIn("is not supported by the wlr backend: "
+                          "zwlr_foreign_toplevel_management_v1 carries no geometry", str(cm.exception))
+            self.assertIn("AGENTS.md route 5", str(cm.exception))
 
     def test_there_are_no_desktops(self):
         """This compositor advertises no `ext_workspace_manager_v1`, which is sway 1.11's and Wayfire

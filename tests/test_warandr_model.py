@@ -1033,11 +1033,18 @@ class ForcedBackend(unittest.TestCase):
 
     def test_probe_backends_reads_wxrandrs_table(self):
         info = randr.probe_backends(self.fake_env())
+        # seven rows, not five: 67ab34b gave wxrandr `hypr` and `cinnamon` and tests/fixtures/
+        # fake_xrandr.py's own table grew with it, so a reader that dropped either name would be
+        # reading a table it had stopped understanding
         self.assertEqual({k: v["available"] for k, v in info.items()},
-                         {"sway": False, "kwin": False, "mutter": True,
-                          "wlr": False, "x11": True})
+                         {"sway": False, "hypr": False, "kwin": False, "mutter": True,
+                          "cinnamon": False, "wlr": False, "x11": True})
         self.assertEqual(info["sway"]["reason"],
                          "no sway or i3 IPC socket ($SWAYSOCK)")
+        self.assertEqual(info["hypr"]["reason"],
+                         "no Hyprland IPC socket ($HYPRLAND_INSTANCE_SIGNATURE)")
+        self.assertEqual(info["cinnamon"]["reason"],
+                         "org.cinnamon.Muffin.DisplayConfig is not on the session bus")
         self.assertTrue(info["x11"]["auto"])
         self.assertFalse(info["mutter"]["auto"])
 

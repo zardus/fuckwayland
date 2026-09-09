@@ -32,17 +32,9 @@
 
 SMOKE_PHASES="install passthrough x11root"
 
-# xfce.sh's `xterm -T fwsmoke` does not keep that title on these images: the test user's ~/.bashrc --
-# Ubuntu's /etc/skel/.bashrc, the `xterm*|rxvt*)` case, which prepends `\[\e]0;\u@\h: \w\a\]` to PS1 --
-# retitles the window on the first prompt, so WM_NAME became `test@resolute-i3-smoke: ~` a second after
-# the window appeared and `wdotool search --name fwsmoke` matched nothing at all (measured on the first
-# resolute-i3 run, 2026-09-09: `wmctrl -l` showed the prompt as the title; /etc/bash.bashrc's own
-# PROMPT_COMMAND for the same case is commented out on Ubuntu and is not what did it).  With `-e` there
-# is no interactive shell to rewrite it, so the title xterm is given is the title it keeps.
-editor_start() {
-    guest "setsid nohup xterm -T fwsmoke -e sh -c 'while :; do sleep 3600; done' \
-           >/dev/null 2>&1 </dev/null & sleep 2; true" >/dev/null || true
-}
+# The `-e` form of `editor_start` that this file used to override for itself is xfce.sh's own
+# since 2026-09-09 (requests-batch-11.md item 1), so the override is gone and the reason lives
+# where the function does.
 
 # F2.3 for an X11 session, which is a different claim from common.sh's phase_root: there the tools look
 # for a WAYLAND session, here they have to find a display AND a cookie, and on SDDM the cookie is the

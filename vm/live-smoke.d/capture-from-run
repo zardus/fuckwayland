@@ -1,0 +1,54 @@
+#!/usr/bin/env python3
+"""vmctl, plus a transcript of every `user`/`ssh` command and the bytes it answered.
+
+Why this exists beside `guest-capture.sh`.  That script is one ssh round trip that asks a
+fixed list of commands, and it is the right shape for a desktop whose step file asks the
+shared `windows`/`wm` list.  It is the wrong shape for a step file that overrides those
+phases: `vm/live-smoke.d/hypr.sh` has its own `phase_windows` and `phase_wm` (the minimize
+refusal, the cursorpos comparison, a second window, an X client), and a recording that does
+not ask what a phase asks cannot drive it -- `fake-vmctl` answers an unrecorded command with
+empty output and status 0, and a check that was green live goes red on the replay, or worse,
+passes on nothing.
+
+So this records the phases THEMSELVES.  Point the driver at it instead of vmctl and run the
+phases you want to record; every `vmctl user`/`vmctl ssh` command and its output lands in
+$CAPLOG in the transcript format `fake-vmctl` reads, in the order the phases asked them,
+which is the order the replay will ask them in:
+
+    CAPLOG=/tmp/cap.txt LIVE_SMOKE_VMCTL=vm/live-smoke.d/capture-from-run \\
+        vm/live-smoke.sh <flavor> --reuse --keep --phases windows,wm
+    mv /tmp/cap.txt tests/fixtures/live/<flavor>-<version>-windows-wm-replay.txt
+
+Nothing here is hand-written and nothing is interpreted: nothing but the framing is added.
+The shape is batch 13's (scratchpad/b13r/capvmctl, which recorded the wayfire run of
+2026-09-08 the same way); it is in the tree now so that a recording is reproducible from it.
+"""
+import os
+import subprocess
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+REAL = os.environ.get("CAPTURE_REAL_VMCTL") or os.path.join(os.path.dirname(HERE), "vmctl")
+LOG = os.environ.get("CAPLOG")
+if not LOG:
+    sys.stderr.write("capture-from-run: set CAPLOG to the transcript to append to\n")
+    sys.exit(2)
+
+argv = sys.argv[1:]
+# Only `user` and `ssh` carry a guest command; `start`, `shot`, `head` and the rest are
+# vmctl's own business and are executed untouched, output and status straight through.
+if not argv or argv[0] not in ("user", "ssh"):
+    os.execv(REAL, [REAL] + argv)
+
+p = subprocess.run([REAL] + argv, stdout=subprocess.PIPE,
+                   stderr=subprocess.STDOUT, text=True)
+# the guest command is the last word of the invocation (`vmctl user <name> -- sh -c '<cmd>'`),
+# and a newline inside it would break the one-line `### ` framing the transcript is parsed by
+cmd = argv[-1].replace("\n", " ")
+out = p.stdout or ""
+with open(LOG, "a", encoding="utf-8") as f:
+    f.write("### %s\n" % cmd)
+    f.write(out if not out or out.endswith("\n") else out + "\n")
+    f.write("### rc=%d\n" % p.returncode)
+sys.stdout.write(out)
+sys.exit(p.returncode)

@@ -202,8 +202,22 @@ class HyprOutputs:
 
     # -- query ---------------------------------------------------------------
 
+    #: `all`, and not the plain `j/monitors`, because a head Hyprland has disabled is not in the plain
+    #: answer at all -- the row VANISHES rather than gaining `disabled: true`.  Measured live on
+    #: resolute-hypr (Hyprland 0.53.3) 2026-09-09, after `wxrandr --output Virtual-3 --off`:
+    #:
+    #:     j/monitors      -> [('Virtual-1', False), ('Virtual-2', False)]
+    #:     j/monitors all  -> [('Virtual-1', False), ('Virtual-2', False), ('Virtual-3', True)]
+    #:
+    #: and the disabled row is complete: the same keys as an enabled one and all 26 `availableModes`.  X is
+    #: the oracle and `xrandr --output X --off` keeps X in the listing with no mode, so the plain form was
+    #: the wrong question: it made `--off` refuse ("Hyprland accepted the configuration for Virtual-3 and
+    #: then stopped listing it") and left `--auto`, `--right-of` and `--below` warning `output Virtual-3 not
+    #: found; ignoring` on an output that was there the whole time.
+    MONITORS = "monitors all"
+
     def monitors(self) -> list:
-        rows = self.ipc.json("monitors")
+        rows = self.ipc.json(self.MONITORS)
         if not isinstance(rows, list):
             raise Fatal("the compositor's j/monitors answer is not a list of monitors\n")
         return rows
@@ -217,12 +231,21 @@ class HyprOutputs:
         outs = []
         self.mirrors = {}
         self.rows = {}
-        for i, m in enumerate(self.monitors()):
+        rows = self.monitors()
+        # `mirrorOf` comes back as the mirrored monitor's numeric `id` AS A STRING, never its name --
+        # measured live on resolute-hypr 2026-09-09: `keyword monitor Virtual-3,...,mirror,Virtual-1`
+        # answers ok and `j/monitors all` then reports `mirrorOf: "0"`, Virtual-1's id.  Both spellings are
+        # accepted on the way in (`,mirror,0` and `,mirror,Virtual-2` both applied), so this is only about
+        # what we remember: an id is a position in Hyprland's own list and moves when a head is plugged,
+        # where a name does not, so the id is translated back here and the name is what a later
+        # `keyword monitor` re-emits.
+        by_id = {str(m.get("id")): str(m.get("name") or "?") for m in rows}
+        for i, m in enumerate(rows):
             name = str(m.get("name") or "?")
             self.rows[name] = m
             mirror = str(m.get("mirrorOf") or NO_MIRROR)
             if mirror != NO_MIRROR:
-                self.mirrors[name] = mirror
+                self.mirrors[name] = by_id.get(mirror, mirror)
             st = OutputState(
                 name=name, active=not m.get("disabled"), ident=i + 1,
                 mm_w=int(m.get("physicalWidth") or 0), mm_h=int(m.get("physicalHeight") or 0),

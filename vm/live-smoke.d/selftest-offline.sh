@@ -43,17 +43,37 @@ fails=0
 say() { echo "$*"; }
 bad() { fails=$((fails + 1)); echo "SELFTEST FAIL: $*"; }
 
-run_pass() {   # run_pass <label> <override-file-or-empty> [phases] [transcript] -> log on stdout
-    local label=$1 override=$2 phases=${3:-windows,wm} cap=${4:-$CAP}
+run_pass() {   # run_pass <label> <override-file-or-empty> [phases] [transcript] [flavor] -> log on stdout
+    local label=$1 override=$2 phases=${3:-windows,wm} cap=${4:-$CAP} flavor=${5:-noble-gnome}
     rm -rf "$WORK/state-$label"; mkdir -p "$WORK/state-$label"
     LIVE_SMOKE_VMCTL=$HERE/fake-vmctl \
     FAKE_VMCTL_TRANSCRIPT=$cap \
     FAKE_VMCTL_OVERRIDE=$override \
     FAKE_VMCTL_STATE=$WORK/state-$label \
     LIVE_SMOKE_OUT=$WORK/out \
-        "$REPO/vm/live-smoke.sh" noble-gnome --name fake-$label --reuse --keep \
+        "$REPO/vm/live-smoke.sh" "$flavor" --name fake-$label --reuse --keep \
             --phases "$phases" > "$WORK/$label.log" 2>&1 || true
     cat "$WORK/$label.log"
+}
+
+# <flavor> <phases> for a recording, read out of its NAME: strip `-replay.txt`, strip the
+# longest flavor prefix, drop the version token that follows it, and the rest is the phase
+# list with `-` for `,`.  So `resolute-hypr-0.53.3-windows-wm-replay.txt` is
+# `resolute-hypr windows,wm` and `resolute-i3-4.25.1-i3ipc-replay.txt` is `resolute-i3 i3ipc`.
+# The name IS the mapping -- tests/test_live_smoke.py:test_every_recording_resolves_to_a_flavor
+# says the same thing about the first half of it.
+replay_spec() {   # replay_spec <path> -> "<flavor> <phases>" or nothing
+    local base fl best rest
+    base=$(basename "$1" -replay.txt); best=""
+    for fl in "$REPO"/vm/flavors/*.yaml; do
+        fl=$(basename "$fl" .yaml)
+        case $base in "$fl"-*) [ ${#fl} -gt ${#best} ] && best=$fl ;; esac
+    done
+    [ -n "$best" ] || return 0
+    rest=${base#"$best"-}          # <version>-<phase>[-<phase>...]
+    rest=${rest#*-}                # drop the version token
+    [ -n "$rest" ] || return 0
+    printf '%s %s\n' "$best" "$(printf '%s' "$rest" | tr - ,)"
 }
 
 say "== pass 1: the recording as it was captured"
@@ -180,6 +200,35 @@ for f in "$HERE"/*.sh; do
         bad "step file $tok.sh has a recording AND is still listed in NOT-YET-RUN"
     else
         say "   $tok: $(if [ "$in_rec" != 0 ]; then echo recorded; else echo 'not yet run'; fi)"
+    fi
+done
+
+# ---- pass 6: every recording replays green against its own step file --------
+# `CAP` above is one recording and its two phases; every OTHER recording in the
+# directory used to be a file nothing ran.  Batch 16 checked its own by hand and
+# said so in requests-batch-11.md item 3; this is that, in the tree, for all of
+# them.  A recording is green or it is a claim about a desktop that nobody is
+# checking any more.
+say
+say "== pass 6: every recording replays green against its own flavor's step file"
+for cap in "$REPO"/tests/fixtures/live/*-replay.txt; do
+    [ -e "$cap" ] || continue
+    [ "$cap" = "$CAP" ] && continue          # pass 1 and 2 are this one, in more detail
+    spec=$(replay_spec "$cap") || true
+    if [ -z "$spec" ]; then
+        bad "$(basename "$cap") does not resolve to a flavor and a phase list"
+        continue
+    fi
+    set -- $spec
+    lbl=$(basename "$cap" -replay.txt)
+    run_pass "$lbl" "" "$2" "$cap" "$1" > "$WORK/$lbl.out"
+    p=$(grep -c '^PASS ' "$WORK/$lbl.out" || true)
+    f=$(grep -c '^FAIL ' "$WORK/$lbl.out" || true)
+    say "   $1 [$2]: $p pass, $f fail"
+    [ "$p" -ge 5 ] || bad "$(basename "$cap"): only $p checks ran against it"
+    if [ "$f" != 0 ]; then
+        grep '^FAIL ' "$WORK/$lbl.out" | sed 's/^/      /'
+        bad "$(basename "$cap"): $f check(s) failed against the desktop they were recorded from"
     fi
 done
 

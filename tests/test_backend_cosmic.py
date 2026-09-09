@@ -323,9 +323,15 @@ class Capabilities(CosmicTest):
             with self.assertRaises(CmdError) as cm:
                 call(*args)
             self.assertTrue(getattr(cm.exception, "unsupported", False), op)
-            self.assertEqual(str(cm.exception),
-                             "%s is not supported by the cosmic backend: the COSMIC toplevel protocol has "
-                             "no move, resize, raise or lower" % op)
+            # vm/live-smoke.d/cosmic.sh:160 matches the prefix alone, so the sentence after the colon is
+            # free to say what AGENTS.md asks a refusal to say: the lack, then NOT YET and the route
+            # not `assertEqual` against the format string this line is built from, which would restate it:
+            # the command names itself, and the two halves of the sentence are asserted below
+            self.assertTrue(str(cm.exception).startswith(op + " is not supported by the cosmic backend: "),
+                            str(cm.exception))
+            self.assertIn("is not supported by the cosmic backend: the COSMIC toplevel protocol has "
+                          "no move, resize, raise or lower", str(cm.exception))
+            self.assertIn("AGENTS.md route 6", str(cm.exception))
 
     def test_a_state_this_protocol_has_no_word_for(self):
         _comp, b = self.backend()
@@ -394,7 +400,7 @@ class Workspaces(CosmicTest):
         comp, b = self.backend(cls=ExtWorkspaceEnter)
         self.assertEqual(b.info_ver, 3)
         self.assertEqual([w.desktop for w in b.list()][1], 1)
-        self.assertEqual(comp.ws_ids[1], b._ws_rows()[1].oid,
+        self.assertEqual(comp.ws_ids[1], b._ws_handles()[1],
                          "the handle the enter named is the ext-workspace client's own")
 
     def test_a_window_that_left_its_workspace_has_none(self):

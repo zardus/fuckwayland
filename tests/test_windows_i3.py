@@ -307,6 +307,33 @@ class Floating(I3Base):
         self.assertIn("cannot move a tiled window", err)
         self.assertEqual(self.commands(), [])
 
+    def test_the_refusal_opens_with_i3_and_not_with_sway(self):
+        """`dialect()` answers i3 everywhere else in backend_sway.py -- the label, the ids, the floating
+        flag, the pids -- and the two tiled refusals and the fullscreen one were the last strings that did
+        not.  Measured verbatim on the first live resolute-i3 run, 2026-09-09:
+
+            $ FUCKWAYLAND_PASSTHROUGH=never env -u I3SOCK wdotool windowsize 10485774 400 300
+            sway: cannot resize a tiled window to an absolute size (floating enable it first)
+
+        which names a program the user is not running [requests-batch-9.md, from batch 16].  Asserted on
+        the PREFIX in both directions, because `vm/live-smoke.d/i3.sh:103` and `hypr.sh:155` match the
+        middle of the same sentence and neither would notice the word in front of it."""
+        b = self.backend(tree=tree_with_fwsmoke_on_ws2(floating=False))
+        _rc, _out, err = self.run_chain(b, ["windowmove", str(X_ID), "100", "100"])
+        self.assertIn("i3: cannot move a tiled window", err)
+        self.assertNotIn("sway:", err)
+        b2 = self.backend(tree=tree_with_fwsmoke_on_ws2(floating=False))
+        _rc, _out, err2 = self.run_chain(b2, ["windowsize", str(X_ID), "400", "300"])
+        self.assertIn("i3: cannot resize a tiled window", err2)
+        self.assertNotIn("sway:", err2)
+        # and the third of the three, which is why `_refuse_fullscreen` stopped being a staticmethod
+        tree = tree_with_fwsmoke_on_ws2(floating=True)
+        _find(tree, lambda n: n.get("window") == X_ID)["fullscreen_mode"] = 1
+        b3 = self.backend(tree=tree)
+        _rc, _out, err3 = self.run_chain(b3, ["windowmove", str(X_ID), "100", "100"])
+        self.assertIn("i3: cannot move a fullscreen window", err3)
+        self.assertNotIn("sway:", err3)
+
     def test_i3s_own_floating_field_is_read(self):
         """i3 also states it on the con (`user_on` / `auto_on` / `user_off` / `auto_off`, a field sway does
         not send), and a tree fetched without the wrapper -- or a future i3 that drops it -- still answers."""

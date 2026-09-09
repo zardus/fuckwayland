@@ -33,7 +33,17 @@ SMOKE_PHASES="install passthrough"
 EDITOR_CLASS=xterm
 ARGV_LOG=/tmp/fw-argv.log
 
-editor_start() { guest "setsid nohup xterm -T fwsmoke >/dev/null 2>&1 </dev/null & sleep 2; true" >/dev/null || true; }
+# `-e`, and not a bare `xterm -T fwsmoke`: an interactive bash retitles the window on its first prompt
+# (Ubuntu's /etc/skel/.bashrc, the `xterm*|rxvt*)` case, which prepends `\[\e]0;\u@\h: \w\a\]` to PS1 --
+# not /etc/bash.bashrc, whose PROMPT_COMMAND for the same case is commented out on Ubuntu).  Measured on
+# the resolute-i3 golden on 2026-09-09: about a second after the window appeared `wmctrl -l` said
+# `test@resolute-i3-smoke: ~` and `wdotool search --name fwsmoke` matched nothing, and the first live i3
+# run died at `no fwsmoke xterm to work on`.  With `-e` there is no interactive shell, so the title xterm
+# is given is the title it keeps.  Every X11 step file inherits this one [requests-batch-11.md item 1].
+editor_start() {
+    guest "setsid nohup xterm -T fwsmoke -e sh -c 'while :; do sleep 3600; done' \
+           >/dev/null 2>&1 </dev/null & sleep 2; true" >/dev/null || true
+}
 editor_save()  { :; }
 
 # /usr/local/bin comes before /usr/bin, and passthrough walks PATH for the real

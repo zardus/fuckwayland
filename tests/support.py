@@ -1556,8 +1556,13 @@ class FakeHypr(UnixServer):
       "badjson"  a `j/` request answered with bytes that are not JSON
       "wedged"   accepted and never answered; only the client's own deadline ends it
       "short"    a JSON reply truncated mid-object, which is what a compositor killed mid-write leaves
-      "refuse"   a dispatch answered `Invalid dispatcher` -- [R], read off HyprCtl.cpp rather than measured;
-                 no recon report recorded an unknown verb (requests-batch-5.md asks the live run for it)
+      "refuse"   a dispatch answered `Invalid dispatcher`
+
+    All three of the strings this double used to guess were recorded on the live resolute-hypr golden on
+    2026-09-09 (Hyprland 0.53.3), and all three were right: `j/cursorpos` really answers an object with the
+    keys `x` and `y`, `dispatch notaverb` really answers `Invalid dispatcher`, and an unknown `j/` request
+    (and an unknown bare one) really answers `unknown request` [requests-batch-5.md items 1-3]. Only
+    HYPR_CURSORPOS's numbers are the recon's session rather than that one.
 
     Every request is appended to `self.requests`, so a test can say which strings were sent and that nothing
     else was."""
@@ -1586,8 +1591,19 @@ class FakeHypr(UnixServer):
         """The bytes this request is answered with (before the mode mangles them)."""
         if req.startswith("j/"):
             name = req[2:].strip()
+            if name == "monitors all" and name not in self.payloads:
+                # `j/monitors all` is a request of its own, not a flag: it is the only one that lists a
+                # DISABLED head, where the plain form drops the row entirely (measured live on
+                # resolute-hypr, Hyprland 0.53.3, 2026-09-09, after `--output Virtual-3 --off`:
+                # `j/monitors` gave Virtual-1 and Virtual-2, `j/monitors all` those two plus Virtual-3 with
+                # `disabled: true`, the same keys and all 26 availableModes). `all` is a superset of the
+                # plain answer, so a double that sets only "monitors" answers both -- which is what keeps
+                # every test written before wxrandr/hypr.py started asking for `all`. A test about a
+                # disabled head sets "monitors all" itself; the recorded one is
+                # tests/fixtures/hypr/monitors-all-one-disabled.json.
+                name = "monitors"
             if name not in self.payloads:
-                # [R] from HyprCtl.cpp as well; no report recorded an unknown `j/` request either
+                # measured live 2026-09-09: an unknown `j/` request really is answered `unknown request`
                 return b"unknown request"
             return json.dumps(self.payloads[name]).encode()
         verb = req.split(" ", 1)[0]

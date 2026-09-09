@@ -325,24 +325,35 @@ phase_display() {
     want "...and names the bus interface it drives" "org\.cinnamon\.Muffin\.DisplayConfig \(D-Bus\)" "$out"
     same "warandr picks the same backend by the same name" "cinnamon" \
          "$(guest 'warandr --print-backend' | tr -d ' \r\n' || true)"
-    # The other half of U25 is missing and every display operation below fails on it: wxrandr/mutter.py
-    # HAS the MUFFIN flavour, and wxrandr/cli.py's `cinnamon` arm still raises `xrandr: the cinnamon
-    # backend is named by --backend and is not built into this install` (measured 2026-09-09; the arm is
-    # cli.py:1284).  Everything common_display_phase does is red until that arm builds a MutterOutputs on
-    # the MUFFIN flavour -- which is worth watching red rather than skipping, because the day it is wired
-    # the same lines say what Muffin does with a real two-head apply.
-    xwant "--listmonitors answers through the MUFFIN flavour (fix U25: wxrandr/cli.py's cinnamon arm)" \
-          "Monitors: [0-9]+" "$(guest 'wxrandr --listmonitors 2>&1' || true)"
-    # ...and that same xwant is the gate on everything that would apply a layout.  An unfinished fix must not
-    # turn a smoke run red (live-smoke.sh's own comment on xwant), and with the arm refusing before any apply
-    # common_display_phase is ten checks that all fail for that one reason.  The XPASS above is the signal to
-    # delete this `if` and call it unconditionally again.
-    if guest 'wxrandr --listmonitors 2>&1' | grep -q '^Monitors:'; then
-        common_display_phase
-    else
-        note "display applies skipped: wxrandr/cli.py's cinnamon arm refuses before any apply (fix U25);"
-        note "  the xwant above goes XPASS the day it lands, and then this gate comes out"
-    fi
+    # U25's other half landed on 2026-09-09: wxrandr/cli.py's `cinnamon` arm builds
+    # `MutterOutputs(bus=<the probe's connection>, flavor=MUFFIN)` where it used to raise `the cinnamon
+    # backend is named by --backend and is not built into this install`.  Measured on this flavor the same
+    # day, against a live Cinnamon 6.4.13 / muffin 6.4.1:
+    #
+    #     wxrandr --listmonitors  ->  Monitors: 2
+    #                                  0: +*Virtual-1 1920/508x1080/286+0+0  Virtual-1
+    #                                  1: +Virtual-2 1920/508x1080/286+1920+0  Virtual-2
+    #
+    # -- the primary FIRST, which is one of the eight cli.py sites that stopped keying on the token.  The
+    # other seven answered on the same session: `--gnome-overlap-status` and `--unsafe-gnome-overlap` both
+    # say "this is Cinnamon, whose Meta-0 typelib has no generation to check", `--brightness` warns
+    # "not supported on Muffin (no gamma LUT API)" and succeeds instead of dying on the wlr gamma path,
+    # `--noprimary` says "Cinnamon requires a primary output; keeping Virtual-1", and a `--dryrun --verbose`
+    # plan carries the neighbour keep_adjacent shifts (crtc 1 at +1280+0 after Virtual-1 goes to 1280x1024).
+    #
+    # The applies land too, which is why the gate that used to skip common_display_phase is gone.  On the
+    # same session: `--output Virtual-1 --mode 1280x1024` changed the mode and warned `output Virtual-2
+    # moved to +1280+0 to stay adjacent to Virtual-1`; the mode GREW back to 1920x1080 (Muffin applies
+    # through DisplayConfig, so the rig's virtio-gpu grow limit -- which stops a second `keyword monitor`
+    # dead on Hyprland -- does not reach here); `--output Virtual-2 --off` left one monitor and `--auto`
+    # brought it back with `output Virtual-2 enabled without a position; placing it right-of Virtual-1`;
+    # and a `--dryrun` ended `cinnamon verify: ok` on stderr.
+    #
+    # These were taken with the tree's zipapps copied in by hand on a session with /usr/bin/Xwayland moved
+    # aside, because that is the only way this flavor has a session at all on this rig (see the header).
+    want "--listmonitors answers through the MUFFIN flavour (U25)" \
+         "Monitors: [0-9]+" "$(guest 'wxrandr --listmonitors 2>&1' || true)"
+    common_display_phase
     # wmirror: muffin publishes neither capture protocol, so the refusal has to be about the COMPOSITOR
     # (the helper is installed on this image precisely so that it cannot be about the helper).  Mirroring
     # here is NOT YET, and the route is written down rather than left as a "no": route 4, a ScreenCast

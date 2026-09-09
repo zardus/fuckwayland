@@ -382,11 +382,22 @@ phase_mirror() {
         note "one head only: a mirror needs a target, --heads 2 is what gives it"
         return 0
     fi
+    # The region offset is in LAYOUT coordinates and not in the source head's own, so it is built from
+    # where that head actually IS: a fixed `+100+100` is inside the source only while the source sits at
+    # the origin, and `display_pair` picks the RIGHTMOST head.  Measured in CI on 2026-09-09 (run
+    # 34308982263, the labwc job): `wmirror: the region 800x600+100+100 is not inside Virtual-3, which
+    # is 1920x1080+9600+1080`, and the three checks after it fell with that refusal -- four FAILs each
+    # on labwc, xfce-wayland, budgie and lxqt-wayland, and four more on resolute-wayfire.
+    # vm/live-smoke.d/hypr.sh and wayfire.sh carry the same three lines for the same reason.
+    local org rx ry
+    org=$(oracle_outputs | sed -n "s/^$first //p" | head -1)
+    rx=$(( ${org%%,*} + 100 )); ry=$(( ${org##*,} + 100 ))
+    local region="800x600+$rx+$ry"
     local out st=0
-    out=$(guest "wmirror $first --to $second --region 800x600+100+100") || st=$?
-    ok "wmirror $first --to $second --region 800x600+100+100" "$st"
+    out=$(guest "wmirror $first --to $second --region $region") || st=$?
+    ok "wmirror $first --to $second --region $region" "$st"
     want "the started line names target, source, region, scaling and the helper's pid" \
-         "$second <- $first +region 800x600\+100\+100 +scaling fit +wl-mirror pid [0-9]+" "$out"
+         "$second <- $first +region 800x600\+$rx\+$ry +scaling fit +wl-mirror pid [0-9]+" "$out"
     want "wmirror --list shows it running" "$second <- $first" "$(guest 'wmirror --list' || true)"
     want "wmirror --stop ends it" "^stopped +$second <- $first" \
          "$(guest "wmirror --stop $second" || true)"

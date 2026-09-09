@@ -1639,17 +1639,33 @@ def _hypr_keyboard(devices):
 
       * never one of ours (`HYPR_INJECTED`): its index is the injected device's own, and reading it would
         be reading back the state we set;
-      * `main: true` among what is left -- Hyprland's own word for the session's keyboard;
+      * `main: true` among what is left -- Hyprland's word for the keyboard it last took input from,
+        which is not the same thing as "the real one": on the live resolute-hypr session of 2026-09-09
+        `main` was on `wdotool-virtual-keyboard` before a `switchxkblayout` and on the physical
+        `at-translated-set-2-keyboard` after it.  The rule above is what makes this one usable;
       * else a name that looks like a keyboard, and only then the first row, so that `power-button`
         (a keyboard to libinput, and one that has never switched a layout in its life) does not answer
         for the keyboard beside it.
 
     What comes back therefore describes the PHYSICAL keyboard. On the virtual-keyboard path that is
-    exactly right and also moot (wdotool uploads its own keymap and never consults this). On the
-    /dev/uinput path wdotool's device is a fresh keyboard to Hyprland with layout state of its own, and
-    whether Hyprland starts it on the session's group or on group 1 is unmeasured -- nothing in recon ran
-    `wdotool type` over uinput after a `switchxkblayout` on the physical keyboard. Batch 12's
-    resolute-hypr / arch-hypr smoke is where that gets settled.
+    exactly right and also moot (wdotool uploads its own keymap and never consults this).
+
+    **On the /dev/uinput path it is right about the session and wrong about the device, and that is now
+    measured.**  resolute-hypr, Hyprland 0.53.3, 2026-09-09, three keyboards and `kb_layout = us,de`:
+    after `hyprctl switchxkblayout at-translated-set-2-keyboard 1`, `j/devices` reported the physical
+    keyboard at `active_layout_index: 1` (`German`) and `wdotool-virtual-keyboard` still at `0`
+    (`English (US)`).  `keys explain --chars z` correctly answered `group 2 of 2, from wayland + hyprland
+    devices` -- and `wdotool type "zy@ Strasse"` into a `foot -e cat` wrote `zyq Strasse`: `@` was encoded
+    as the German AltGr+Q and landed in the injected device's US group as a plain `q`.  Before this reader
+    existed wdotool said it was guessing and typed CORRECTLY, because the guess (US) was what the injected
+    device really was [recon2/hyprland.md §3].
+
+    NOT YET, and the fourth rule is ours to write rather than a rung of AGENTS.md's ladder: the uinput
+    encoder must ask for the group ITS OWN device is in, which is a different question from the one
+    `keys explain` answers about the session, so this function stays right and the caller gains a second
+    one.  Below that sits route 2 -- `hyprctl switchxkblayout wdotool-virtual-keyboard <n>` before the
+    injection -- which moves the session's own state and would have to put it back.
+    `vm/live-smoke.d/hypr.sh:layout_phase` carries it as the xwant that names this.
     """
     kbs = devices.get("keyboards") if isinstance(devices, dict) else None
     if not isinstance(kbs, list):
@@ -1704,6 +1720,9 @@ class HyprLayouts(_IpcLayouts):
 WAYFIRE_STATE_METHOD = "wayfire/get-keyboard-state"
 
 
+WAYFIRE_TIMEOUT = 2.0      # the get-keyboard-state round trip is sub-millisecond; this only bounds a wedge
+
+
 class WayfireLayouts(_IpcLayouts):
     """Wayfire's active layout, off `wayfire/get-keyboard-state` on its JSON IPC socket.
 
@@ -1713,11 +1732,11 @@ class WayfireLayouts(_IpcLayouts):
     `No such method found!`, which is a fact about a config line rather than about this moment, so it is
     remembered too.
 
-    One deadline is wrong here and cannot be fixed from this file: `_WayfireIPC` has no timeout knob and
-    fixes itself at backend_wayfire.IPC_TIMEOUT (10.0 s), where every other reader in this module bounds a
-    wedged desktop at 2.0 s -- and these readers run from `fetch()` inside the daemon's lock, so a wedged
-    Wayfire stalls every `type` for the difference. Requested of batch 6 (`_WayfireIPC.__init__(self,
-    sockpath, timeout=IPC_TIMEOUT)`, and requests-batch-6.md); this reader passes 2.0 the moment it lands.
+    The deadline is WAYFIRE_TIMEOUT and not backend_wayfire.IPC_TIMEOUT (10.0 s): every reader in this
+    module bounds a wedged desktop at 2.0 s, and these run from `fetch()` inside the daemon's lock, where the
+    difference is eight seconds added to every `type`. `_WayfireIPC` took the knob on 2026-09-09
+    (requests-batch-6.md, batch 10 -> batch 6), and it bounds the connect too: a compositor wedged inside its
+    event loop still has a listening socket.
     """
 
     def __init__(self, sockpath=None):
@@ -1734,7 +1753,7 @@ class WayfireLayouts(_IpcLayouts):
             self.absent = not self.asked
             self._failed()       # a Wayfire that has answered before and is gone: back off, as KWin does
             return None
-        ipc = _WayfireIPC(path)
+        ipc = _WayfireIPC(path, timeout=WAYFIRE_TIMEOUT)
         try:
             state = ipc.call(WAYFIRE_STATE_METHOD)
         except CmdError as e:

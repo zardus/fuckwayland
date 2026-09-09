@@ -147,6 +147,59 @@ class Cosmic(WorkspaceTest):
         self.assertEqual(b.get_desktop(), 1)
 
 
+class TheHandleAccessors(WorkspaceTest):
+    """`handles()` and `active_handles()`, added 2026-09-09 for COSMIC (requests-batch-8.md item 1).
+
+    The public `backend.Workspace` carries no protocol object -- it is what `wwmctl -d` prints -- and
+    `wdotool/backend_cosmic.py` needs the `ext_workspace_handle_v1` object ids: `workspace_enter` names a
+    workspace by oid and `move_to_ext_workspace` takes one.  Before this it reached through to `_live()`.
+
+    The claim under test is that the two accessors run the SAME ordering rule `workspace_list()` runs, which
+    is the whole reason a second accessor is safe: `handles()[n]` is the handle of the desktop
+    `workspace_list()[n]` describes.  COSMIC's reversed announcement is the fixture that can tell the two
+    orders apart -- with arrival order the pairing would be inverted and every desktop number wrong."""
+
+    def test_the_handles_are_in_the_same_order_the_workspace_rows_are(self):
+        rows = tuple(reversed(wl_fake.COSMIC_WORKSPACES))
+        comp, b = self.backend(workspaces=rows)
+        self.assertEqual([w.name for w in b.workspaces()], ["1", "2"])
+        # `comp.ws_ids` is the compositor's own object id per workspace in the order IT announced them
+        # ("2" first, then "1"), so the coordinate rule has to hand the handles back REVERSED against
+        # announcement.  An arrival-order `handles()` would give desktop 0 the handle of "2".
+        self.assertEqual(b.ws.handles(), list(reversed(comp.ws_ids)))
+        self.assertEqual(len(set(comp.ws_ids)), 2, "two live workspaces, two distinct handles")
+
+    def test_active_handles_is_the_active_row_and_not_an_index(self):
+        """`active_index()` answers a position and loses which handle it was; a window's `workspace_enter`
+        names the handle, so visibility is a set membership over oids."""
+        comp, b = self.backend(workspaces=wl_fake.LABWC_WORKSPACES)
+        # labwc announces "one" active, and the oracle is the compositor's id for it, not a position
+        self.assertEqual(b.ws.active_handles(), {comp.ws_ids[0]})
+        self.assertEqual(b.ws.active_index(), 0)
+        # ...and it is read back rather than remembered: the compositor moves the bit and re-sends the
+        # states, the way `test_the_active_bit_is_read_back_and_not_remembered` drives it
+        comp.set_active(2)
+        b.num_desktops()                                  # the pump
+        self.assertEqual(b.ws.active_handles(), {comp.ws_ids[2]})
+        # and the two really are different numbers: an index that happened to equal an oid would make
+        # the lines above pass on either
+        self.assertNotEqual(list(b.ws.active_handles())[0], b.ws.active_index())
+
+    def test_a_removed_workspace_is_in_neither(self):
+        """The compositor sends `ext_workspace_handle_v1.removed` and both accessors drop that oid -- a
+        handle the compositor has destroyed must never reach a `move_to_ext_workspace`.  The one removed
+        here is labwc's ACTIVE workspace, so `active_handles()` is tested by more than an absence."""
+        comp, b = self.backend(workspaces=wl_fake.LABWC_WORKSPACES)
+        self.assertEqual(b.ws.handles(), list(comp.ws_ids))
+        gone = comp.ws_ids[0]
+        self.assertIn(gone, b.ws.active_handles())
+        comp.remove(0)
+        b.num_desktops()                                  # the pump
+        self.assertEqual(b.ws.handles(), list(comp.ws_ids[1:]))
+        self.assertNotIn(gone, b.ws.handles())
+        self.assertEqual(b.ws.active_handles(), set())
+
+
 class NoWorkspaceProtocol(WorkspaceTest):
     def test_sway_and_wayfire_keep_the_refusal_they_have(self):
         """sway 1.11 has an IPC socket instead and Wayfire 0.10 has nothing; on both, the wlr floor's

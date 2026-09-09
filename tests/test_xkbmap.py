@@ -2905,6 +2905,23 @@ class TestTheActiveGroupFromWayfire(unittest.TestCase):
         self.assertFalse(r.absent)
         self.assertGreater(r.retry_at, 0.0)
 
+    def test_a_wedged_wayfire_is_bounded_by_this_modules_deadline_not_the_backends(self):
+        """The same claim `test_a_wedged_hyprland_is_bounded_by_this_modules_deadline_not_the_backends`
+        makes, for the reader that got the knob on 2026-09-09 (requests-batch-6.md, batch 10 -> batch 6):
+        these run from `fetch()` while the daemon holds its lock, so a wedged Wayfire may not spend
+        `backend_wayfire.IPC_TIMEOUT` (10.0 s) of every `type`. WAYFIRE_TIMEOUT is the 2.0 s every other
+        reader in this module carries, driven at 0.3 s here so the test is not a wait."""
+        self.assertEqual(xkbmap.WAYFIRE_TIMEOUT, 2.0)
+        r = self.reader(cls=FakeWayfire, mode="silent")
+        with mock.patch.object(xkbmap, "WAYFIRE_TIMEOUT", 0.3):
+            started = time.monotonic()
+            self.assertIsNone(r.group(text("kde_us_de")))
+            waited = time.monotonic() - started
+        self.assertLess(waited, 3.0, "backend_wayfire's own 10 s default was used instead (%.1fs)" % waited)
+        self.assertGreater(r.retry_at, 0.0)
+        # and it did ask: the silence is on get-keyboard-state, not on a socket nobody spoke to
+        self.assertEqual([m for m, _d in self.srv.calls], [xkbmap.WAYFIRE_STATE_METHOD])
+
     def test_a_wayfire_without_the_method_is_remembered_too(self):
         """`No such method found!` is a fact about this session's `plugins` line, not about this moment:
         a Wayfire with no `ipc-rules` will not grow the method while it runs."""

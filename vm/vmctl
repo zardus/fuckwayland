@@ -114,10 +114,15 @@ DESKTOPS = {
     # A river session has no bar of its own; tinyrwm draws borders only [recon2/river].
     "river": dict(label="river on Wayland (greetd)", session="wayland", logind=("wayland", "tty"),
                   dm=("greetd",), compositor="river", shell=(), splash=None),
-    # cosmic-comp is a DRM compositor, so scanout_owner() is exactly right -- but
-    # whether it paints on virtio-vga with no 3D is unmeasured (pop-os/cosmic-comp#136
-    # reports a blank screen on virtio; the recon ran it nested on llvmpipe and it
-    # painted).  The first fedora44-cosmic build decides [recon2/cosmic].
+    # cosmic-comp is a DRM compositor, so scanout_owner() is exactly right, and it PAINTS on
+    # virtio-vga with no 3D: measured 2026-09-09 off a fedora44-cosmic disk (cosmic-comp
+    # 1.6.0-3.fc44, `-device virtio-vga,max_outputs=4,edid=on`, no host GPU),
+    # /sys/kernel/debug/dri/0/state says `allocated by = cosmic-comp` and a QMP screendump of
+    # head 0 (1280x800) measures standard deviation 0.131454 against this rig's 0.02
+    # flat-colour line.  pop-os/cosmic-comp#136 does not reproduce here and there is no winit
+    # fallback in the tree to need.  logind reports Type=tty for the seated session -- greetd
+    # registers a tty session and libseat does not flip it -- which is why the `logind` field
+    # below is a pair and not `wayland` alone [recon2/cosmic, vm/flavors/fedora44-cosmic.yaml].
     "cosmic": dict(label="COSMIC on Wayland (greetd)", session="wayland", logind=("wayland", "tty"),
                   dm=("greetd",), compositor="cosmic-comp", shell=("cosmic-panel",), splash=None),
     # budgie-desktop's session runs labwc; SDDM registers the seat session, so logind
@@ -159,6 +164,16 @@ def dm_units(desktop):
 
 DEFAULT_HEAD = "1920x1080"        # size of heads 0..N-1 for `start --heads N` (override: --head-size)
 GPU = "gpu0"
+#: virtio-gpu's cap on the host memory its resources may pin.  QEMU's default is 256 MiB and it is not
+#: enough for this rig: four heads at 1920x1080 are 33 MB of scanout, aquamarine reconfigures a swapchain of
+#: THREE buffers per mode change and allocates the new one before dropping the old, and the EDID mode list
+#: goes up to 5120x2160 (44 MB a buffer).  Measured on resolute-hypr 2026-09-09 with the default: the FIRST
+#: mode change of each head lands and every one after it fails -- `drmModeSetCrtc failed: No space left on
+#: device` in Hyprland's log, `virtio_gpu_dequeue_ctrl_func: response 0x1203` (OUT_OF_MEMORY) for commands
+#: 0x103/0x104/0x105 in the guest's dmesg -- while hyprctl answers `ok`, because the compositor asked
+#: correctly and the device refused.  It is a cap and not an allocation, so raising it costs nothing until
+#: a guest uses it.
+GPU_HOSTMEM = "1G"
 BUS_NAME = "org.qemu"             # what QEMU 8.2's dbus display owns (not org.qemu.Display1)
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,40}$")
 
@@ -889,7 +904,7 @@ def cmd_start(a):
     start_dbus(inst)
     inst.serial.unlink(missing_ok=True)
     cmd = qemu_common(mem, cpus, inst.disk, inst.seed, inst.port, inst.serial, inst.qemu_pid, inst.name) + [
-        "-device", f"virtio-vga,id={GPU},max_outputs={MAX_HEADS},edid=on",
+        "-device", f"virtio-vga,id={GPU},max_outputs={MAX_HEADS},edid=on,max_hostmem={GPU_HOSTMEM}",
         "-display", f"dbus,addr=unix:path={inst.bus},p2p=no",
         "-qmp", f"unix:{inst.qmp_sock},server,nowait"]
     inst.meta["qemu_cmd"] = cmd

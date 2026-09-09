@@ -48,6 +48,7 @@ _names = None        # cached ListNames result (None = no bus reachable)
 _probed = False
 _registry = None     # cached {interface: version} (None = no compositor reachable)
 _registry_probed = False
+_registry_conn = None    # the WlConn that registry was read on, kept for the chosen backend
 
 
 def _sway():
@@ -86,7 +87,11 @@ def _wayfire():
 
 def _wlr():
     from wdotool.backend_wlr import WlrBackend
-    return WlrBackend()
+    # detection's own connection, whose registry has already been read: plan A 1.0 step 6, and the reason a
+    # session opens ONE connection and not two.  A forced `WDOTOOL_BACKEND=wlr` reaches here without having
+    # asked for the registry, and session_conn() reads it then -- the same round trip the backend's own
+    # constructor would have paid, spent once.
+    return WlrBackend(conn=session_conn())
 
 
 def _cosmic():
@@ -94,7 +99,7 @@ def _cosmic():
         from wdotool.backend_cosmic import CosmicBackend
     except ModuleNotFoundError as exc:
         _not_built(exc, "wdotool.backend_cosmic", "cosmic")
-    return CosmicBackend()
+    return CosmicBackend(conn=session_conn())
 
 
 def _kwin():
@@ -123,14 +128,19 @@ _FORCED_NAMES = "sway, hypr, wayfire, wlr, cosmic, kwin, gnome, cinnamon"
 
 def reset():
     """Forget the cached bus/names/registry (tests re-detect against a fresh session)."""
-    global _bus, _names, _probed, _registry, _registry_probed
+    global _bus, _names, _probed, _registry, _registry_probed, _registry_conn
     if _bus is not None:
         try:
             _bus.close()
         except Exception:  # best effort on teardown
             pass
+    if _registry_conn is not None:
+        try:
+            _registry_conn.close()
+        except Exception:  # best effort on teardown
+            pass
     _bus, _names, _probed = None, None, False
-    _registry, _registry_probed = None, False
+    _registry, _registry_probed, _registry_conn = None, False, None
 
 
 def session_bus():
@@ -165,9 +175,11 @@ def session_registry() -> "dict[str, int] | None":
     Detection used to pay this round trip inside `_wlr()` and throw the registry away, so a compositor that has
     ext-foreign-toplevel and no wlr manager -- which is exactly COSMIC -- could only be reported as "does not
     offer wlr-foreign-toplevel" [M recon2/cosmic.md §3]. Reading it once and choosing from it costs the same
-    round trip. The chosen backend opens its own connection afterwards; threading this one through to it is
-    wdotool/backend_wlr.py's and backend_cosmic.py's to do."""
-    global _registry, _registry_probed
+    round trip. Since 2026-09-09 the connection is KEPT (`session_conn()`) and handed to `WlrBackend` /
+    `CosmicBackend`, which is plan A 1.0 step 6 and closes the last gap this docstring named: a session used
+    to open two connections, detection's and the backend's. A read that fails closes it here; a read that
+    succeeds gives it to `reset()` to close."""
+    global _registry, _registry_probed, _registry_conn
     if _registry_probed:
         return _registry
     _registry_probed = True
@@ -182,6 +194,8 @@ def session_registry() -> "dict[str, int] | None":
         for iface, ver in conn.get_registry().values():
             out[iface] = max(ver, out.get(iface, 0))
         _registry = out
+        _registry_conn = conn
+        conn = None                  # kept, not closed: session_conn() hands it to the backend
     except (OSError, RuntimeError, ValueError):
         _registry = None
     finally:
@@ -191,6 +205,17 @@ def session_registry() -> "dict[str, int] | None":
             except OSError:
                 pass
     return _registry
+
+
+def session_conn():
+    """The `WlConn` `session_registry()` read the registry on, or None when there is none to read.
+
+    The two foreign-toplevel backends take it (`WlrBackend(conn=...)`, `CosmicBackend(conn=...)`): they use
+    the connection they are given, never close one they did not open, and survive a constructor failure
+    without taking it down [tests/test_wire_hardening.py:WlrBackendGuards]. Anything else in this module
+    ignores it -- a KWin or GNOME session has no use for a Wayland registry connection."""
+    session_registry()
+    return _registry_conn
 
 
 def detect():
@@ -226,8 +251,15 @@ def detect():
     if session.find_wayfire_socket():
         try:
             return _wayfire()
-        except CmdError:
-            pass
+        except CmdError as e:
+            # Plan A 1.2: the API GATE is an answer and is not swallowed.  Wayfire advertises the wlr
+            # protocol, so falling through worked -- and left a user whose `plugins = ipc` is missing
+            # `ipc-rules` on the capability floor, never told that two words in wayfire.ini buy the
+            # window half.  Every other failure here (a stale socket file, a compositor that went away
+            # mid-handshake) has no `.api_gate` and is still swallowed, which is what the fall-through
+            # was for [requests-batch-1.md, from batch 6].
+            if getattr(e, "api_gate", False):
+                raise
     reg = session_registry() or {}
     # No swallow on these two arms, unlike the socket arms above: the registry we just read IS the evidence
     # that the protocol is there, so whatever the backend says on the way up is a better answer than the

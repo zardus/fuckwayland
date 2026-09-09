@@ -183,6 +183,22 @@ class WorkspaceClient:
         return [Workspace(index=i, name=r.name, active=bool(r.state & STATE_ACTIVE))
                 for i, r in enumerate(self._live())]
 
+    def handles(self) -> list[int]:
+        """The `ext_workspace_handle_v1` object ids, in the same desktop-number order `workspace_list()`
+        numbers its rows -- so `handles()[n]` is the handle of desktop `n`.
+
+        The rows themselves are private (`_live()`), and the public `backend.Workspace` deliberately carries
+        no protocol object: it is what `wwmctl -d` prints.  COSMIC needs the oids and nothing else --
+        `zcosmic_toplevel_handle_v1.workspace_enter` names a workspace by object id, which is the only way a
+        window gets a desktop number there, and `move_to_ext_workspace` (opcode 13) takes one
+        [requests-batch-8.md item 1]."""
+        return [r.oid for r in self._live()]
+
+    def active_handles(self) -> set[int]:
+        """The oids of the workspaces whose state carries `active`; empty when none of them says so.  A
+        window is visible when it sits on one of these, which is a set membership and not an index."""
+        return {r.oid for r in self._live() if r.state & STATE_ACTIVE}
+
     def active_index(self) -> int:
         """The active workspace's 0-based index, or -1 when none of them says it is active."""
         for i, r in enumerate(self._live()):
