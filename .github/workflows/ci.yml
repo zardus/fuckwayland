@@ -9,7 +9,8 @@
 #   deb      scripts/build-deb.sh, the fresh package proved to be the tree, then installed
 #            with apt on each release and every tool answering --version
 #   vm       ONE JOB PER FLAVOR of the QEMU rig, KVM on the runner: the golden image from the
-#            GHCR cache or built here (ISO installs included), then vm/live-smoke.sh --deb
+#            GHCR cache or built here (ISO installs included), then vm/live-smoke.sh --deb with
+#            the package the deb job built from this tree
 #
 # 26.10 is a development release that moves under the flavor, so its jobs may fail
 # without failing the run. Everything else must be green.
@@ -158,7 +159,7 @@ jobs:
           apt-get remove -y fuckwayland >/dev/null && ! command -v wdotool
 
   vm:
-    needs: plan
+    needs: [plan, deb]
     runs-on: ubuntu-24.04
     timeout-minutes: 150
     strategy:
@@ -172,6 +173,12 @@ jobs:
       VMIMAGES: /mnt/images
     steps:
       - uses: actions/checkout@v4
+      # the package the deb job just built from THIS tree replaces the committed one under
+      # release/, so the rig measures the push and not the last release
+      - uses: actions/download-artifact@v4
+        with:
+          name: deb
+          path: release
       - name: the host vm/README.md asks for, KVM opened to the runner, /mnt for the images
         run: |
           sudo apt-get update -qq
