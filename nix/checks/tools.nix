@@ -87,6 +87,17 @@ pkgs.stdenv.mkDerivation {
     : > "$out"
     fails=
     for f in tests/test_*.py; do
+      case "$f" in
+        # These six run the shipped shell scripts under the distro's own
+        # `/usr/bin:/bin` (that is the claim: a maintainer script needs nothing
+        # else), read /proc/<pid>/environ, or exec /usr/bin/install by path.  A
+        # sandbox has none of that by design, so they are the per-distro lanes'
+        # (Ubuntu, Fedora, Arch, each in its own container in CI), not this one's.
+        tests/test_build_scripts.py|tests/test_debian_scripts.py|tests/test_install_scripts.py| \
+        tests/test_passthrough_exec.py|tests/test_support_helpers.py|tests/test_vm_scripts.py)
+          echo "== $f: not in the sandbox (pins the distro's /usr/bin or /proc; the distro lanes run it)"
+          continue ;;
+      esac
       echo "== $f"
       # `if`, not a bare command: with set -e the loop would stop at the first
       # failing file and a build log that names one file is a build log that
