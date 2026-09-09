@@ -485,7 +485,14 @@ jobs:
           sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm
           ls -la /dev/kvm; qemu-system-x86_64 -display help | grep -w dbus
           sudo install -d -o "$USER" -g "$USER" /mnt/vm-data /mnt/images; df -h /mnt | tail -1
-          curl -fsSL https://github.com/oras-project/oras/releases/download/v1.2.0/oras_1.2.0_linux_amd64.tar.gz | sudo tar -xz -C /usr/local/bin oras
+          # to a file first, then extract: a stream that breaks mid-way left tar with a
+          # truncated archive and the whole rig job red (run 34388409584, noble-kde-x11)
+          for i in 1 2 3; do
+            curl -fsSL --retry 3 -o /tmp/oras.tgz https://github.com/oras-project/oras/releases/download/v1.2.0/oras_1.2.0_linux_amd64.tar.gz \
+              && sudo tar -xzf /tmp/oras.tgz -C /usr/local/bin oras && break
+            sleep 5
+          done
+          oras version
           echo "${{ secrets.GITHUB_TOKEN }}" | oras login ghcr.io -u "${{ github.actor }}" --password-stdin
       # only the `# vmctl-nix:` flavors: their golden is a nix build and nothing else here
       # needs nix. A cache hit skips the build, so this is paid on a miss and on nothing else.
