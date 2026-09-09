@@ -91,7 +91,7 @@ pkgs.stdenv.mkDerivation {
         # These six run the shipped shell scripts under the distro's own
         # `/usr/bin:/bin` (that is the claim: a maintainer script needs nothing
         # else), read /proc/<pid>/environ, or exec /usr/bin/install by path.  A
-        # sandbox has none of that by design, so they are the per-distro lanes'
+        # sandbox has none of that, so they are the per-distro lanes'
         # (Ubuntu, Fedora, Arch, each in its own container in CI), not this one's.
         tests/test_build_scripts.py|tests/test_debian_scripts.py|tests/test_install_scripts.py| \
         tests/test_passthrough_exec.py|tests/test_support_helpers.py|tests/test_vm_scripts.py)
