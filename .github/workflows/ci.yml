@@ -217,7 +217,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: DeterminateSystems/nix-installer-action@main
-      - run: sudo rm -f /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources 2>/dev/null; sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends xvfb x11-utils xterm wmctrl
+      - run: sudo find /etc/apt/sources.list.d -type f ! -name ubuntu.sources -delete; sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends xvfb x11-utils xterm wmctrl
       - name: the pinned oracles, then scripts/parity-oracle.sh
         run: |
           nix build --no-link --print-out-paths --inputs-from . nixpkgs#xdotool nixpkgs#wmctrl > /tmp/oracles
@@ -478,7 +478,7 @@ jobs:
           path: dist
       - name: the host vm/README.md asks for, KVM opened to the runner, /mnt for the images
         run: |
-          sudo rm -f /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources 2>/dev/null; sudo apt-get update -qq
+          sudo find /etc/apt/sources.list.d -type f ! -name ubuntu.sources -delete; sudo apt-get update -qq
           sudo apt-get install -y -qq --no-install-recommends qemu-system-x86 qemu-system-gui qemu-utils \
               cloud-image-utils dbus libglib2.0-bin socat imagemagick openssh-client genisoimage jq
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules >/dev/null
