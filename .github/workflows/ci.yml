@@ -5,7 +5,9 @@
 #   image        the unit-test container per Ubuntu release (24.04, 26.04, 26.10) plus the
 #                Fedora 44 and Arch ones, built once per change to its Dockerfile, in GHCR
 #   lint         ruff (the project's lint-only config), scripts/check-docs.py, bash -n on vm/
-#   unit         ONE JOB PER TEST FILE PER RELEASE, in that container, as an unprivileged user
+#   unit-2404  ONE JOB PER TEST FILE on 24.04, as an unprivileged user in that container
+#   unit-2604  the same on 26.04
+#   unit-2610  the same on 26.10 (one job per release: a matrix caps at 256 jobs)
 #   unit-distro  the WHOLE suite in one job on Fedora 44 and on Arch, one process per file
 #                as in `unit`: the same files against another distro's python, dbus and
 #                originals
@@ -134,19 +136,68 @@ jobs:
       - run: python3 scripts/check-docs.py
       - run: for f in vm/*.sh vm/live-smoke.d/*.sh scripts/*.sh; do bash -n "$f" || exit 1; done; sh -n gnome/install-bridge.sh; sh -n gnome/install-overlap.sh; sh -n packaging/common/enable-bridge; python3 -m py_compile vm/vmctl
 
-  unit:
+  # One job per test file per release, and one JOB per release: a matrix is capped at 256
+  # jobs and three releases times the files in tests/ passed that on 2026-09-09 (105 files,
+  # 315 jobs), which GitHub reports as a failed run with no job to show for it.
+  unit-2404:
     needs: [plan, image]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        distro: ["24.04", "26.04", "26.10"]
         file: ${{ fromJSON(needs.plan.outputs.files) }}
-    continue-on-error: ${{ matrix.distro == '26.10' }}
-    name: ${{ matrix.distro }} ${{ matrix.file }}
+    name: 24.04 ${{ matrix.file }}
     container:
-      image: ghcr.io/${{ github.repository_owner }}/fuckwayland-ci:${{ matrix.distro }}-${{ needs.plan.outputs.image_key }}
+      image: ghcr.io/${{ github.repository_owner }}/fuckwayland-ci:24.04-${{ needs.plan.outputs.image_key }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+      options: --user root --init
+    steps:
+      - uses: actions/checkout@v4
+      - name: ${{ matrix.file }}
+        run: |
+          chown -R ci "$PWD"
+          runuser -u ci -- env HOME=/home/ci XDG_RUNTIME_DIR=/tmp/xdg-ci FUCKWAYLAND_PASSTHROUGH=never \
+              dbus-run-session -- python3 tests/${{ matrix.file }}.py
+
+  unit-2604:
+    needs: [plan, image]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        file: ${{ fromJSON(needs.plan.outputs.files) }}
+    name: 26.04 ${{ matrix.file }}
+    container:
+      image: ghcr.io/${{ github.repository_owner }}/fuckwayland-ci:26.04-${{ needs.plan.outputs.image_key }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+      options: --user root --init
+    steps:
+      - uses: actions/checkout@v4
+      - name: ${{ matrix.file }}
+        run: |
+          chown -R ci "$PWD"
+          runuser -u ci -- env HOME=/home/ci XDG_RUNTIME_DIR=/tmp/xdg-ci FUCKWAYLAND_PASSTHROUGH=never \
+              dbus-run-session -- python3 tests/${{ matrix.file }}.py
+
+  unit-2610:
+    needs: [plan, image]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        file: ${{ fromJSON(needs.plan.outputs.files) }}
+    # 26.10 is the development Ubuntu and may fail without failing the run
+    continue-on-error: true
+    name: 26.10 ${{ matrix.file }}
+    container:
+      image: ghcr.io/${{ github.repository_owner }}/fuckwayland-ci:26.10-${{ needs.plan.outputs.image_key }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}

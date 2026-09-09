@@ -52,7 +52,7 @@ FLAVORS = os.path.join(ROOT, "vm", "flavors")
 #: rawhide is Fedora's development branch.  Fedora 43 and 44 and NixOS 26.05
 #: are released and are NOT in here.
 ROLLING = {
-    "unit": ("${{ matrix.distro == '26.10' }}", "the development Ubuntu"),
+    "unit-2610": ("true", "the development Ubuntu"),
     "deb-install": ("${{ matrix.distro == '26.10' }}", "the development Ubuntu"),
     "unit-distro": ("${{ matrix.distro == 'arch' }}", "rolling Arch, the fedora row is not"),
     "parity-arch": ("true", "wholly Arch, and its wmctrl help size is uncounted"),
@@ -101,14 +101,28 @@ class TheHeaderIsTheIndex(unittest.TestCase):
         listed = set(re.findall(r"^#   ([a-z][a-z0-9-]*) {2,}\S", header(), re.M))
         self.assertEqual(set(jobs()) - listed, set())
 
-    def test_the_fifteen_jobs_are_the_ones_the_plan_names(self):
+    def test_the_seventeen_jobs_are_the_ones_the_plan_names(self):
         """Named rather than counted: a job that disappears is the failure, and
-        `len(jobs) == 15` would go green on a rename."""
+        `len(jobs) == 17` would go green on a rename.  The unit tests are one
+        job per release because a matrix caps at 256 jobs and three releases
+        times the files in tests/ passed that (run 34393015905)."""
         self.assertEqual(sorted(jobs()),
                          ["deb", "deb-install", "image", "lint", "nix",
                           "nix-full", "parity", "parity-arch", "pkgbuild",
-                          "plan", "rpm", "rpm-install", "unit", "unit-distro",
-                          "vm"])
+                          "plan", "rpm", "rpm-install", "unit-2404", "unit-2604",
+                          "unit-2610", "unit-distro", "vm"])
+
+    def test_no_matrix_can_reach_githubs_cap_of_256_jobs(self):
+        """Each unit-* job has one matrix axis, the files; a second axis of
+        releases is what tripped the cap, and GitHub reports it as a failed run
+        with no job to show for it."""
+        files = len([f for f in os.listdir(os.path.join(ROOT, "tests")) if re.match(r"test_.*\.py$", f)])
+        for name in ("unit-2404", "unit-2604", "unit-2610"):
+            with self.subTest(name):
+                block = jobs()[name]
+                self.assertIn("file: ${{ fromJSON(needs.plan.outputs.files) }}", block)
+                self.assertNotIn("distro: [", block)
+                self.assertLess(files, 256)
 
 
 class ThePlanJob(unittest.TestCase):
@@ -188,7 +202,7 @@ class TheImagesAndTheContainers(unittest.TestCase):
         for distro in literals:
             with self.subTest(distro):
                 self.assertIn(distro, built)
-        for name in ("unit", "unit-distro"):
+        for name in ("unit-distro",):
             with self.subTest(name):
                 matrix = set(re.findall(r"^        distro: \[([^\]]+)\]$",
                                         jobs()[name], re.M))
