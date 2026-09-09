@@ -5,15 +5,15 @@
 # <uuid>, /usr/lib/udev/rules.d, /usr/lib/modules-load.d, /etc/xdg/autostart),
 # and the two dpkg maintainer scripts translate line for line into %post and
 # %postun.  Measured 2026-09-08 on the Ubuntu 26.04 guest, which has the same
-# rpm 6.0.1 Fedora 44 has: a portable variant of this file (the %pyproject_*
+# rpm 6.0.1 Fedora 44 has: a portable variant of this file (the %%pyproject_*
 # steps replaced by a hand copy, because those macros are Fedora-only and
-# rpmbuild here dies at "%pyproject_buildrequires: not found") built three
+# rpmbuild here dies at "%%pyproject_buildrequires: not found") built three
 # noarch packages -- fuckwayland 556,673 B, -bridge 28,507 B, -overlap
 # 32,388 B -- which installed into a scratch root and erased again leaving
 # nothing under /usr or /etc but empty directories [recon2/pkg-rpm.md 4].
 #
 # Everything below that differs from debian/ differs for a measured reason and
-# says which.  The first real build with the %pyproject_* macros is the CI
+# says which.  The first real build with the %%pyproject_* macros is the CI
 # `rpm` job in fedora:44; tests/test_rpm_spec.py and tests/test_rpm_scripts.py
 # hold every claim that can be held without rpmbuild.
 %global bridge_uuid  fuckwayland-bridge@fuckwayland

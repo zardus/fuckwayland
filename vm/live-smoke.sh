@@ -450,10 +450,24 @@ phase_remove() {
     # The node: the removal scriptlet removes the ACL entry rather than masking
     # it, because udev's uaccess builtin only ever ADDS entries and a left-over
     # one would make the next install a no-op and leave input broken.
-    same "/dev/uinput is back to root:root 0600" "root:root 600" \
-         "$(root "stat -c '%U:%G %a' /dev/uinput 2>/dev/null" | tr -d '\r' || true)"
-    wantnot "no ACL entry is left on /dev/uinput" "^user:[^:]+:" \
-            "$(root 'getfacl -p /dev/uinput 2>/dev/null' || true)"
+    local mode acls
+    mode=$(root "stat -c '%U:%G %a' /dev/uinput 2>/dev/null" | tr -d '\r' || true)
+    acls=$(root 'getfacl -p /dev/uinput 2>/dev/null' | grep -c '^user:[^:][^:]*:' || true)
+    if [ "$DISTRO" = nixos ]; then
+        # NixOS has no removal scriptlet: switching into a configuration without the
+        # module drops the rule file and the uaccess tag, and nothing resets the node
+        # (measured on nixos-sway, CI run 34360974165: root:root 660 and user:test:rw-
+        # left behind until the next boot). udev's uaccess builtin only ever ADDS an
+        # entry, so the route is AGENTS.md route 4, a rule in the base system that
+        # resets a node whose uaccess tag went away, or a reboot.
+        xwant "/dev/uinput is back to root:root 0600 (until NixOS resets a node whose module left: route 4, a base udev rule, or the next boot)" \
+              "^root:root 600$" "$mode"
+        xwant "no ACL entry is left on /dev/uinput (until NixOS resets a node whose module left: route 4, a base udev rule, or the next boot)" \
+              "^0$" "$acls"
+    else
+        same "/dev/uinput is back to root:root 0600" "root:root 600" "$mode"
+        same "no ACL entry is left on /dev/uinput" "0" "${acls:-0}"
+    fi
     same "no uaccess tag is left for the node" "" \
          "$(root "grep -l uinput /run/udev/tags/uaccess/* 2>/dev/null" | tr -d ' \n\r' || true)"
     # dh_python3 byte-compiles into dist-packages and nowhere else; a

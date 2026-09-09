@@ -340,7 +340,7 @@ class Detection(Base):
         self.assertIsNone(core.find_helper(path=self.tmp))
         lines = core.missing_helper_lines()
         self.assertIn("wl-mirror is not installed", lines[0])
-        self.assertIn("apt install wl-mirror", lines[1])
+        self.assertIn(distro.hint("wl-mirror"), lines[1])
 
     def test_helper_version_never_raises(self):
         """It says so in the docstring, but text=True decodes strict: a
@@ -548,7 +548,7 @@ class Cli(Base):
                            helper=None)
         self.assertEqual(rc, 1)
         self.assertIn("wmirror: wl-mirror is not installed", e)
-        self.assertIn("apt install", e)
+        self.assertIn(distro.hint("wl-mirror"), e)
         start.assert_not_called()
 
     def test_on_x11_the_missing_package_is_not_the_answer(self):
@@ -561,7 +561,7 @@ class Cli(Base):
                            helper=None, wayland=None)
         self.assertEqual(rc, 1)
         self.assertIn("X11 session", e)
-        self.assertNotIn("apt install", e)
+        self.assertNotIn(distro.hint("wl-mirror"), e)
         start.assert_not_called()
 
     @unittest.expectedFailure
@@ -583,7 +583,7 @@ class Cli(Base):
                        helper=None, capture=False, wayland=SOCKET)
         self.assertEqual(rc, 1)
         self.assertIn(core.SCREENCOPY, e)
-        self.assertNotIn("apt install", e)
+        self.assertNotIn(distro.hint("wl-mirror"), e)
 
     @unittest.expectedFailure
     def test_check_says_what_is_wrong_before_it_says_what_is_installed(self):
@@ -664,7 +664,7 @@ class Cli(Base):
         text = o.getvalue()
         self.assertEqual(rc, 1)
         self.assertIn("helper:   not installed", text)
-        self.assertIn("apt install wl-mirror", text)
+        self.assertIn(distro.hint("wl-mirror"), text)
         self.assertIn(core.SCREENCOPY, text)
         self.assertIn("mirrors:  none", text)
 

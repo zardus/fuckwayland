@@ -33,7 +33,7 @@ from unittest import mock
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-from fwcommon import passthrough
+from fwcommon import distro, passthrough
 from wdotool import cli as wdotool_cli
 from wwmctl import cli as wwmctl_cli
 from wxprop import cli as wxprop_cli
@@ -830,7 +830,7 @@ class HelpAndVersion(Base):
                                              env=self.env())
         self.assertEqual(rc, 127)
         msg = "".join(err)
-        self.assertIn("apt install xdotool", msg)
+        self.assertIn(distro.hint("xdotool"), msg)
         self.assertIn("WDOTOOL_REAL_XDOTOOL", msg)
         self.assertIn("X11 session", msg)
 
@@ -888,7 +888,7 @@ class HelpAndVersion(Base):
             rc = passthrough.maybe_exec_real("wmctrl", ["-v", "-l"],
                                              env=self.env())
         self.assertEqual(rc, 127)
-        self.assertIn("apt install wmctrl", "".join(err))
+        self.assertIn(distro.hint("wmctrl"), "".join(err))
 
     def test_wxprop_falls_back_to_its_native_x11_path(self):
         """wxprop is the one tool with a real X11 client of its own, so a box

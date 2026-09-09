@@ -87,7 +87,8 @@ pkgs.stdenv.mkDerivation {
       # `if`, not a bare command: with set -e the loop would stop at the first
       # failing file and a build log that names one file is a build log that
       # hides the other forty.  Every file runs; the summary is the last line.
-      if dbus-run-session -- python3 "$f"; then
+      # the sandbox has no /etc/dbus-1, so the session bus takes its config from the dbus package
+      if dbus-run-session --config-file=${pkgs.dbus}/share/dbus-1/session.conf -- python3 "$f"; then
         echo "$f" >> "$out"
       else
         fails="$fails $f"

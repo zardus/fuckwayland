@@ -42,6 +42,10 @@ RUN dnf -y install \
         rpm-build python3-devel pyproject-rpm-macros systemd-rpm-macros rpmlint acl cpio \
         ca-certificates curl xz zstd git procps-ng sudo \
     && dnf clean all
+# sway ships with cap_sys_nice in its file capabilities on this distro, and a container whose
+# bounding set lacks it refuses to exec the binary at all (EPERM from execve, run 34360974165);
+# the headless sway the live tests start needs no capability, so the file loses it here.
+RUN setcap -r /usr/bin/sway 2>/dev/null || true
 # Fedora's nodejs is a different major from the one tests/test_bridge_js.py was
 # written against, so the image takes the same tarball the Ubuntu one does.
 RUN curl -fsSL "https://nodejs.org/dist/${NODE}/node-${NODE}-linux-x64.tar.xz" | tar -xJ -C /opt \

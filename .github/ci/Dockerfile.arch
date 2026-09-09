@@ -29,6 +29,10 @@ RUN pacman-key --init && pacman -Syu --noconfirm --needed \
         namcap python-build python-installer python-wheel python-setuptools acl \
         curl xz zstd git procps-ng sudo \
     && pacman -Scc --noconfirm
+# sway ships with cap_sys_nice in its file capabilities on this distro, and a container whose
+# bounding set lacks it refuses to exec the binary at all (EPERM from execve, run 34360974165);
+# the headless sway the live tests start needs no capability, so the file loses it here.
+RUN setcap -r /usr/bin/sway 2>/dev/null || true
 # nodejs-lts-jod IS 22 today, but it is a rolling package name and
 # tests/test_bridge_js.py was written against one build; the tarball is the same
 # node on all three images and costs nothing to keep the same.

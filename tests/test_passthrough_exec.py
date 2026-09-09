@@ -34,6 +34,7 @@ os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
+from fwcommon import distro  # noqa: E402
 
 FIXTURES = os.path.join(ROOT, "tests", "fixtures")
 SHIM = os.path.join(FIXTURES, "fw_shim.py")
@@ -337,7 +338,7 @@ class NoOriginal(Tree):
     def test_missing_original_is_127_with_a_useful_message(self):
         p, out, err = self.run_tool("xdotool", "key", "a", env=self.env(real=False))
         self.assertEqual(p.returncode, 127)
-        self.assertIn("apt install xdotool", err)
+        self.assertIn(distro.hint("xdotool"), err)
         self.assertIn("WDOTOOL_REAL_XDOTOOL", err)
         self.assertEqual(out, "")
 
@@ -358,7 +359,7 @@ class NoOriginal(Tree):
         self.assertEqual(p.returncode, 127)
         self.assertNotIn("this is an X11 session", err)
         self.assertIn("a handover to the real tool was asked for", err)
-        self.assertIn("apt install xdotool", err)
+        self.assertIn(distro.hint("xdotool"), err)
 
     def test_help_and_version_still_answer(self):
         """M3: a help request must never exit 127."""
@@ -368,7 +369,7 @@ class NoOriginal(Tree):
             p, out, err = self.run_tool("xdotool", *args, env=self.env(real=False))
             self.assertEqual(p.returncode, 0, (args, err))
             self.assertIn(want, out + err, args)
-            self.assertNotIn("apt install", err, args)
+            self.assertNotIn(distro.hint("xdotool"), err, args)
         p, out, err = self.run_tool("wmctrl", "--help", env=self.env(real=False))
         self.assertEqual(p.returncode, 0, err)
         self.assertIn("wmctrl", out)
@@ -376,7 +377,7 @@ class NoOriginal(Tree):
         # answers (whatever it then says), the passthrough does not intercede
         p, out, err = self.run_tool("xrandr", "--version", env=self.env(real=False))
         self.assertNotEqual(p.returncode, 127)
-        self.assertNotIn("apt install", err)
+        self.assertNotIn(distro.hint("xdotool"), err)
 
     def test_wxprop_falls_back_to_its_own_x11_client(self):
         """wxprop has a real X11 client of its own, so it keeps working with
@@ -384,7 +385,7 @@ class NoOriginal(Tree):
         env = self.env(real=False, DISPLAY=":123")      # nothing listening
         p, out, err = self.run_tool("xprop", "-root", "WM_CLASS", env=env)
         self.assertNotEqual(p.returncode, 127)
-        self.assertNotIn("apt install", err)
+        self.assertNotIn(distro.hint("xdotool"), err)
         self.assertIn("xprop:", err)
 
     def test_override_beats_path(self):
@@ -405,7 +406,7 @@ class NoOriginal(Tree):
                                env=self.env(WDOTOOL_REAL_XDOTOOL=dud))
         self.assertEqual(p.returncode, 127)
         self.assertIn("WDOTOOL_REAL_XDOTOOL", err)
-        self.assertNotIn("apt install", err)    # not the "nothing found" one
+        self.assertNotIn(distro.hint("xdotool"), err)    # not the "nothing found" one
 
 
 class Recursion(Tree):

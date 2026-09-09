@@ -82,15 +82,15 @@ build() {
   # The typelibs first: see arch=('any') above.  gen-gir.py writes the .gir and
   # the .typelib for every record in generations.json, out of the checked-in
   # .gir sources, and refuses a layout it has not measured.
-  python gnome/overlap-typelib/gen-gir.py
-  python -m build --wheel --no-isolation
+  /usr/bin/python gnome/overlap-typelib/gen-gir.py
+  /usr/bin/python -m build --wheel --no-isolation
 }
 
 package() {
   cd "$_srcdir"
   # python -m installer also writes the __pycache__ trees (134 .pyc files,
   # measured), so no scriptlet has to compile anything.
-  python -m installer --destdir="$pkgdir" dist/*.whl
+  /usr/bin/python -m installer --destdir="$pkgdir" dist/*.whl
 
   local ext="usr/share/gnome-shell/extensions"
   install -Dm644 gnome/fuckwayland-bridge@fuckwayland/extension.js \
