@@ -134,7 +134,7 @@ class Base(unittest.TestCase):
         self.addCleanup(setattr, session, "RUN_USER_DIR", old)
         return srv
 
-    def outputs(self, srv=None) -> hypr.HyprOutputs:
+    def outputs(self, srv=None) -> "hypr.HyprOutputs":
         srv = srv or self.hypr()
         return hypr.HyprOutputs(ipc=HyprIPC(srv.path))
 
