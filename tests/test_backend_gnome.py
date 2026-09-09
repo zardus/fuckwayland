@@ -1892,14 +1892,16 @@ class DetectTests(_Base):
 
         def gated():
             self.made.append("_wayfire")
-            err = CmdError("wayfire backend: this Wayfire's IPC has no window-rules/list-views: "
-                           "Wayfire 0.9 or newer with `plugins = ipc ipc-rules` is required")
+            err = CmdError("wayfire backend: this Wayfire's IPC has no window-rules/list-views: the "
+                           "window half is Wayfire's own IPC (AGENTS.md route 2) and it is one config "
+                           "line away -- `plugins = ipc ipc-rules` in wayfire.ini on Wayfire 0.9 or "
+                           "newer -- at the cost of restarting Wayfire to load it")
             err.api_gate = True
             raise err
         backend_detect._wayfire = gated
         with self.assertRaises(CmdError) as cm:
             backend_detect.detect()
-        self.assertIn("`plugins = ipc ipc-rules` is required", str(cm.exception))
+        self.assertIn("`plugins = ipc ipc-rules` in wayfire.ini", str(cm.exception))
         self.assertEqual(self.made, ["_wayfire"])       # and NOT ["_wayfire", "_wlr"]
 
     def test_a_cosmic_registry_with_no_wlr_manager_picks_cosmic(self):
@@ -1967,7 +1969,10 @@ class DetectTests(_Base):
                 backend_detect.detect()
         self.assertEqual(str(cm.exception),
                          "wlr backend: compositor does not offer "
-                         "zwlr_foreign_toplevel_management_unstable_v1")
+                         "zwlr_foreign_toplevel_management_unstable_v1; not yet here, and the route is "
+                         "that protocol where the compositor grows it (AGENTS.md route 1), else a "
+                         "backend over the compositor's own IPC (route 2), which is what the sway, hypr "
+                         "and cinnamon backends already are")
         self.assertEqual(self.made, [])          # the stub was never reached
 
     def test_a_registry_that_chose_wlr_does_not_get_the_neither_family_sentence(self):

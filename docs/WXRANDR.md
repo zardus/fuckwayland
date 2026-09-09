@@ -47,6 +47,14 @@ the point, not an afterthought. House rules per Technical.md.
   backend" below. Unauthenticated (no portal, no polkit): the same path
   kscreen-doctor and the System Settings KCM take. Plasma 5.27 (Ubuntu 24.04)
   through 6.7+, no extension, no root.
+- **Hyprland**: `hyprctl -j monitors all` to read, `hyprctl keyword monitor` to write,
+  both over Hyprland's own IPC socket — see "Hyprland backend" below. It is second in the
+  auto order, after sway, so a Hyprland box never touches the session bus to choose a
+  backend.
+- **Cinnamon / muffin**: `org.cinnamon.Muffin.DisplayConfig` — Mutter's DisplayConfig
+  under Muffin's bus name, and the Mutter backend with three names swapped. See "Mutter
+  backend" below; everything it says about adjacency, gaps, mirroring and one-primary
+  holds verbatim, because muffin carries Mutter's validator with Mutter's strings.
 
 ## xrandr options that mean nothing here
 
@@ -78,18 +86,25 @@ the command runs. Nothing here warns about them, because a script that carries
 
 Precedence, one rule: **`--backend NAME` beats `WXRANDR_BACKEND=NAME` beats
 auto-detection.** `NAME` is `auto` (the default), `x11`, or one of
-`sway|wlr|kwin|mutter` (aliases `kde` and `gnome`). Detection is unchanged: a
-sway/i3 IPC socket wins, then a compositor advertising
-`kde_output_management_v2`, then a session bus owning
-`org.gnome.Mutter.DisplayConfig`, then wlr — which is the fallback and is
+`sway|hypr|wlr|kwin|mutter|cinnamon` (aliases `kde`, `gnome`, `muffin` and
+`hyprland`). Detection: a sway/i3 IPC socket wins, then a Hyprland IPC socket,
+then a compositor advertising `kde_output_management_v2`, then a session bus
+owning `org.gnome.Mutter.DisplayConfig`, then one owning
+`org.cinnamon.Muffin.DisplayConfig`, then wlr — which is the fallback and is
 therefore never probed for the decision. The KWin probe *is* the Wayland
 connection the backend then keeps, so a KDE session still opens exactly one,
 and a backend forced with the flag is probed the same way. Whatever the other
 probes opened on the way is closed as soon as the backend is chosen, rather
 than left to the collector — an unclosed socket comes back as a
 `ResourceWarning` on stderr at an arbitrary later moment.
-`--listproviders` names the chosen one (`name:sway`, `name:wlroots`,
-`name:kwin`, `name:mutter`).
+`--listproviders` names the chosen one (`name:sway`, `name:hypr`, `name:wlroots`,
+`name:kwin`, `name:mutter`, `name:muffin`). `--print-backend --verbose` names the
+compositor as well as the protocol, and two of those names are read off the session
+rather than off the backend token: `compositor: COSMIC (wlr-output-management)` when the
+registry also carries `zcosmic_output_manager_v1`, and
+`compositor: wlroots (XDG_CURRENT_DESKTOP=labwc:wlroots)` — or `Budgie`, `XFCE`,
+`LXQt:labwc:wlroots` — when the variable is set and is not `sway`. The token stays `wlr`
+either way, because it is the same backend.
 
 `x11` means *hand over to the real xrandr* — what happens by itself on an X11
 session. That handover is an `execve` at the top of `main()`, **before any
@@ -118,7 +133,7 @@ its usage text, so `--help` and every other byte stay xrandr's:
 
 * **`--backend NAME`**. An unknown name lists the valid ones
   (`xrandr: --backend: invalid argument 'banana'; valid: auto, x11, sway,
-  wlr, mutter, kwin` + xrandr's `Try 'xrandr --help' for more information.`,
+  hypr, wlr, mutter, cinnamon, kwin` + xrandr's `Try 'xrandr --help' for more information.`,
   exit 1). A backend that is not available *in this session* is one clear
   line naming what was missing and exit 1, never a silent fallback:
   `xrandr: --backend sway is not available in this session: no sway or i3 IPC
@@ -163,12 +178,18 @@ its usage text, so `--help` and every other byte stay xrandr's:
 
   ```console
   $ wxrandr --backends
-    sway    unavailable  no sway or i3 IPC socket ($SWAYSOCK)
-    kwin    unavailable  the compositor does not advertise kde_output_management_v2
-  * mutter  available    org.gnome.Mutter.DisplayConfig on the session bus
-    wlr     unavailable  the compositor does not advertise zwlr_output_manager_v1
-    x11     available    /usr/bin/xrandr
+    sway      unavailable  no sway or i3 IPC socket ($SWAYSOCK)
+    hypr      unavailable  no Hyprland IPC socket ($HYPRLAND_INSTANCE_SIGNATURE)
+    kwin      unavailable  the compositor does not advertise kde_output_management_v2
+  * mutter    available    org.gnome.Mutter.DisplayConfig on the session bus
+    cinnamon  unavailable  org.cinnamon.Muffin.DisplayConfig is not on the session bus
+    wlr       unavailable  the compositor does not advertise zwlr_output_manager_v1
+    x11       available    /usr/bin/xrandr
   ```
+
+  The name column is 8 characters wide because `cinnamon` is the longest token
+  `--backend` takes; a narrower one would put a row's state and reason out of line with
+  every other's.
 
   This is what warandr greys its Backend menu with.
 
@@ -1097,9 +1118,87 @@ window (a fullscreen window on the target is drawn on the source too --
 measured directly, both heads went entirely black, every pixel), so
 `--same-as` cannot host it; and it leaves a resident process that stops the
 compositor ever idling, which is not what a layout tool should leave behind.
-On GNOME and KDE there is still no route worth having: the only capture path
-is the desktop portal, which prompts the user for every session, which makes
+On GNOME and KDE the route left is the desktop portal's ScreenCast (AGENTS.md
+route 4), which asks once per session and is not wired up here yet, which makes
 it useless from the hotkey a layout script exists for.
+
+## Hyprland backend (`wxrandr/hypr.py`)
+
+`--backend hypr` (alias `hyprland`, `WXRANDR_BACKEND=hypr`) reads `hyprctl -j monitors
+all` and applies with one `hyprctl keyword monitor
+NAME,WxH@Hz,XxY,SCALE[,transform,N][,mirror,OTHER]` per touched output, over Hyprland's
+own request socket. It is second in the auto order, after sway, so a Hyprland box never
+touches the session bus to choose a backend.
+
+**Why it exists rather than `wlr`.** Hyprland advertises `zwlr_output_manager_v1`
+version 4 and **takes exactly one apply per session through it**. The second times out
+after 10 s with nothing changed and no `[COutputConfiguration] Applying configuration`
+in Hyprland's own log; with a second output present even the first one hangs;
+and `wlr-randr`, the reference client, hangs for ever on the same request. Measured on
+0.53.3 and again on 0.56.2, where the apply is dead from the first request of a fresh
+session. On 0.56.2 `hyprctl keyword monitor` was also seen answering `ok` and changing
+nothing — but only in a session five timed-out wlr applies had already been through, and
+never on a fresh one, so that reading is not what this backend rests on and
+`vm/live-smoke.d/hypr.sh` carries the Arch applies as `xwant` until `arch-hypr` settles
+it. `keyword monitor` on a session that has not touched the protocol applies at once,
+which is the route this backend takes. `--backend wlr` on a
+Hyprland session is still allowed, and its timeout says so:
+
+```
+xrandr: timed out waiting for the compositor to apply the output configuration (Hyprland
+answers only the first output-configuration apply of a session; use --backend hypr)
+```
+
+Three live measurements on `resolute-hypr` (0.53.3, three heads, 2026-09-09) sharpen
+that. On a virgin session both wlr applies time out (10.16 s, 10.26 s) with the head
+unchanged. A timed-out wlr apply does **not** stop the session taking `keyword monitor`:
+the two applies right after it landed in 0.28 s and 0.36 s. And after a `keyword monitor`
+apply the same wlr request stops timing out and answers rc 0 in 0.64 s **having changed
+nothing** — no stderr, the head still where it was. That last one is a defect of ours
+with no rung of the ladder under it: this backend re-reads what it applied and the wlr
+backend does not. **Not yet**; the fix is one re-read in our own code.
+
+**Every apply is verified by re-reading `j/monitors all`**: enabled or disabled,
+position, mode size and transform — and deliberately not the scale, because asked 1.37
+Hyprland applied 1.33 and answered `ok`. A compositor that answers `ok` and changes
+nothing gets one line and rc 1 rather than a reported layout that is not on the screen:
+`Hyprland accepted the mode 1920x1080 for Virtual-2 and did not apply it (it reports
+1280x1024)`.
+
+`j/monitors all` and not `j/monitors` is load-bearing: a head Hyprland has disabled is
+not in the plain answer at all — the row VANISHES rather than gaining `disabled: true`.
+Measured live with Virtual-3 off, `j/monitors` answers Virtual-1 and Virtual-2 while
+`j/monitors all` answers all three with `disabled: true` on the third and the same 26
+`availableModes` an enabled row has. So `--output NAME --off`, and `--auto`/`--right-of`/
+`--below` after it, work; before it, `--off` refused with "Hyprland accepted the
+configuration for Virtual-3 and then stopped listing it" and the three commands after it
+warned `output Virtual-3 not found; ignoring` about an output that was there the whole
+time. `wxrandr --query` prints `Virtual-3 connected (normal left inverted right x axis y
+axis)` for a head that is off, which is xrandr's own shape.
+
+`--same-as` works, and the value Hyprland reports back is the mirrored monitor's numeric
+`id` **as a string**, never its name (`mirrorOf: "0"` after `,mirror,Virtual-1`). Both
+spellings are accepted on the way in, and the id is translated back to a name before it
+is remembered, because an id is a position in Hyprland's list that a hotplug moves.
+
+Two things are **not yet** here. `--persistent` is accepted and says once that it does
+nothing: Hyprland's layout lives in `hyprland.conf`, and the route is a `monitor=` line
+in a snippet that file sources (route 2), at the cost of owning a file the user
+hand-edits; this layout lasts as long as the session. `--dryrun` prints its plan
+unchecked, because `keyword` **is** the apply and there is nothing to validate against;
+the route is a validating call in Hyprland's IPC (route 6).
+
+`--brightness`/`--gamma` are unaffected by any of this — they go over
+`zwlr_gamma_control_manager_v1`, which Hyprland advertises at v1, and not through the
+backend.
+
+**`wxrandr/hypr.py` carries a second copy of `wdotool/hypr_ipc.py`'s reader on purpose.**
+`scripts/build-pyz.sh` builds `dist/wxrandr` out of `fwcommon` and `wxrandr` alone, so a
+`from wdotool...` there would work from the .deb and quietly not from the zipapp — and on
+Hyprland "quietly" means falling back to a wlr path that cannot apply. This is the same
+trade `wdotool/layoutbox.py` already makes with Mutter's logical-size rule, and it is
+pinned the same way: `tests/test_wxrandr_hypr.py:TheTwoClients` drives both clients
+against one double and insists on the same bytes and the same sentences.
 
 ## Mutter backend (`wxrandr/mutter.py`)
 
@@ -1232,6 +1331,57 @@ an X-plane artefact wxrandr does not imitate.
 Tests: `tests/test_wxrandr_mutter.py` runs the whole CLI against a wire-level mock
 DisplayConfig service on `dbus_mini`'s mock bus that validates like mutter
 (serial, ids, scales, adjacency, overlap, primary, offset) and emits `MonitorsChanged`.
+
+### Cinnamon, which is this backend with three names swapped
+
+`--backend cinnamon` (aliases `muffin`, `WXRANDR_BACKEND=cinnamon`) builds
+`MutterOutputs` with a MUFFIN flavour: the bus name is `org.cinnamon.Muffin.DisplayConfig`,
+the object path and the interface follow it, and nothing else about the code path changes.
+`GetCurrentState` and `ApplyMonitorsConfig` are byte-for-byte Mutter's signatures,
+`APPLY_SIG` applies unchanged, and a real mode change applied and read back with only
+those three names swapped. Everything the Mutter section above says about adjacency,
+gaps, mirroring and one primary holds verbatim, because muffin carries Mutter's validator
+with Mutter's strings — `Logical monitors not adjacent`, `Logical monitors overlap`,
+`Logical monitor scales must be identical`, `Config contains multiple primary logical
+monitors` — and on a live three-head `resolute-cinnamon-wayland` a muffin was made to
+print `not adjacent` for the first time.
+
+Eight behaviours used to be keyed on the token `mutter` and are keyed on the
+implementation's flavour instead. What a Cinnamon user sees that they did not:
+
+| what | before | now |
+|---|---|---|
+| `--gnome-overlap-status` | `reason: this session is cinnamon, which places overlapping monitors without any of this` | `reason: this is Cinnamon, whose Meta-0 typelib has no generation to check; not yet here, and the route is org.Cinnamon.Eval reaching MetaMonitorsConfig inside muffin with nothing installed (route 2), at the cost of an offset record measured per Cinnamon release instead of per Meta generation` |
+| `--gnome-overlap-allow` | the same sentence, as a Fatal | the same function's sentence |
+| `--unsafe-gnome-overlap` | `only means anything on GNOME; this session is cinnamon, which places overlapping monitors without it` | `only means anything on GNOME; this is Cinnamon, whose Meta-0 typelib has no generation to check`, with the same route and cost after it |
+| `--brightness` / `--gamma` | rc 1, `cannot set gamma: no wayland socket` (the wlr path) | `--brightness/--gamma are not supported on Muffin (no gamma LUT API)`, rc 0 |
+| `--noprimary` | silence | `Cinnamon requires a primary output; keeping eDP-1` |
+| `--dryrun` | silence | `cinnamon verify: ok` |
+| `--dryrun --verbose` plan | a screen 240 px too wide (`5760x1600` where the run leaves `5520x1600`) | the neighbours the apply shifts are in the plan |
+| `--listmonitors` | the primary not first | the primary first, as RandR 1.5 does |
+
+Every GNOME string is byte-identical, because the words come off `wxrandr/mutter.py`'s
+`Flavor` record (`.name`, `.desktop`, `.compositor`). One wording change reaches beyond
+Cinnamon: `--unsafe-gnome-overlap` on `kwin`, `sway` and `wlr` now ends *...which places
+overlapping monitors without any of this* where it used to end *...without it* — one
+sentence for the flag, the status query and the apply gate, which is the point of having
+one function behind all three.
+
+Two differences that are Cinnamon's rather than the backend's. A refusal is relayed as
+*Cinnamon's Muffin refused this layout: ...*. And `--persistent` warns about Cinnamon's
+own dialog — *Keep these display settings?*, with GNOME's 20-second countdown — and backs
+up `~/.config/cinnamon-monitors.xml` rather than `monitors.xml`: `xrandr: Cinnamon will
+ask "Keep these display settings?" for 20 s; confirm the dialog or the layout reverts`.
+That dialog has been answered live over `org.Cinnamon.Eval`
+(`global.window_manager.complete_display_change(true)` answers `(true, '"undefined"')`)
+and the file, absent before the apply, is written. The discarded-file warning names the
+reader that discarded it, so on Cinnamon it reads *Cinnamon has already discarded ...
+Muffin's reader drops the whole file, not the one bad entry* where GNOME's says
+*GNOME ... Mutter's reader ...*; the `Fractional Scaling` label in the layout-mode warning
+is GNOME Settings' own name for that switch and stays capitalised on both.
+
+Tests: `tests/test_wxrandr_cinnamon.py` — `FakeMutter` on a `MutterMockBus(flavor=MUFFIN)`,
+the same fake with three names swapped.
 
 ## KWin backend (`wxrandr/kwin.py`)
 
@@ -1432,7 +1582,7 @@ no autostart entry: `wxrandr` and `warandr` change the screen when you run them 
 then exit, and nothing here watches for a monitor being plugged in. (The only
 resident process the toolbox ever leaves behind is `wdotool`'s input daemon, which
 owns input devices and has nothing to do with outputs.) What becomes of a layout
-after that is the desktop's business, and the four desktops do not agree.
+after that is the desktop's business, and no two desktops agree.
 
 Measured on GNOME 50 (Mutter), Plasma 6 (KWin), sway 1.11 (wlroots) and Xfce 4.20 on
 X11, on three heads with one of them rotated:
@@ -1443,6 +1593,14 @@ X11, on three heads with one of them rotated:
 | **KDE Plasma** (KWin) | comes back in full | **kept** | `~/.config/kwinoutputconfig.json`, written by every apply KWin takes |
 | **sway** (wlroots) | comes back in full, every output | lost | nothing on disk; only `~/.config/sway/config` makes a layout stick |
 | **Xfce** (X11) | **lost**: the head comes back at the end of a plain row, unrotated, and `primary` is cleared | lost, `primary` with it | nothing; `displays.xml` is byte-identical after an apply |
+| **Hyprland** | not measured on the rig yet | lost | `hyprland.conf`, which nothing here writes: `--persistent` says so in one line. Saving there is **not yet**, and the route is a `monitor=` line in a snippet that file sources (route 2), at the cost of owning a file the user hand-edits |
+| **Cinnamon** (Muffin) | not measured on the rig yet | lost, unless a `--persistent` apply was confirmed | `~/.config/cinnamon-monitors.xml` — Mutter's rule under Cinnamon's file name, behind Cinnamon's own *Keep these display settings?* dialog. Measured written on `resolute-cinnamon-wayland`, 2026-09-09, where it was absent before the apply |
+| **labwc**, and Budgie / Xfce / LXQt on it | one head in every configuration comes back where labwc chose, which is what `WlrOutputs.apply`'s second send is for | lost | nothing on disk |
+
+Two of those rows say "not measured on the rig yet" and mean it: the hotplug column is a
+`vmctl head ... off` / `on` cycle, and neither the `resolute-hypr` nor the
+`resolute-cinnamon-wayland` run has taken one. Nothing here may be read as a promise about
+either until one has.
 
 Restarting the compositor is a third event, and it splits the same way: `swaymsg
 reload` puts sway's outputs back in its own enumeration order, while `xfwm4
@@ -1522,6 +1680,61 @@ accepted. What each group does here:
   that stops being accepted, or that starts appearing in the help, is reported.
   (`--q1` and `--q12` are xrandr's own compatibility tokens, accepted and ignored,
   and absent from its usage text as well.)
+
+## What differs on the wlroots floor, and on i3
+
+* **A layout the compositor rearranges after accepting it.** Handled, since
+  `WlrOutputs.apply` reads the layout back and re-sends the identical configuration once
+  when a head is not where it was put. Measured on `resolute-labwc` (labwc 0.9.3 on
+  wlroots 0.19.2, three 1920x1080 heads, 2026-09-09): `--output Virtual-3 --off` followed
+  by `--output Virtual-3 --auto` asks for Virtual-3 at 0,0 — which is what xrandr does, an
+  output that comes back from `--off` lands on the origin and on top of whatever is there
+  — and labwc answers `succeeded` and then lays the three heads out itself. From then on
+  one head in every configuration of that session came back where labwc chose:
+
+  ```
+  asked   V-1 0,0    V-2 1920,0    V-3 3840,0
+  got     V-1 0,0    V-3 3840,0    V-2 5760,0
+  ```
+
+  and the stray head landed hard against the right edge of everything labwc did place;
+  three applies later the rig's own mirror step was refusing `800x600+100+100` because
+  Virtual-3 had drifted to `1920x1080+9600+1080`. This is not our wire: the three
+  `set_position` requests were read off it in the guest and carried exactly those numbers,
+  and `wlr-randr` 0.4.1 — the reference client, and that flavor's own oracle — produces the
+  identical layout from the identical starting state. Re-sending lands every head where it
+  was asked, on the first retry, every time it was tried, so the cost is one extra apply on
+  a compositor that has rearranged and nothing at all on one that has not. labwc 0.9.3 is
+  the only compositor measured that reaches the second send; sway 1.11 forced onto
+  `--backend wlr` does not, and Hyprland is not on this code path at all — detection sends
+  it to `wxrandr/hypr.py`, whose `_verify_applied` is this read-back's analogue there. A
+  compositor that ignores the retry too gets the numbers in a sentence — `xrandr: the
+  compositor accepted the position 1920,0 for Virtual-2 and put it at 5760,0 both times` —
+  instead of a layout nobody asked for.
+* **`--persistent` on sway and i3** says once that it saves nothing. The route is an
+  `output` line in a file sway's config sources (route 2), at the cost of owning a file the
+  user hand-edits. **Not yet.**
+* **`--scale WxH` with W != H** — xrandr's transform matrix — warns and applies the first
+  axis for both. No output-management protocol carries a per-axis scale, so the route is a
+  patched compositor (route 6). The warning stays a warning: the apply goes on.
+* **`--backend sway` reads "sway (also on i3)"**, and on i3 three things differ.
+  `--print-backend --verbose` says `compositor: i3 4.25.1 (2026-02-06)` where it used to
+  say `sway 4.25.1`. `--query` does not list i3's `xroot-0` pseudo-output (an
+  `active: false` row covering the X screen) and invents no mode table, because i3's
+  `GET_OUTPUTS` carries no `modes` and no `current_mode` at all. And **any apply is
+  refused up front**, in one line and with nothing sent:
+
+  ```
+  xrandr: this is i3, which has no output command; the X server owns the layout here --
+  use xrandr (or drop --backend sway)
+  ```
+
+  i3 has no `output` command; every apply used to die with i3's 30-token parse error after
+  phase 1 had already recorded the modes.
+* **Reading the layout with no `zwlr_output_manager_v1`** — which is what `wmirror` needs
+  to place a mirror — is **not yet** on Cinnamon and the desktops with no output protocol.
+  The route is the compositor's own display bus or IPC, which wxrandr already speaks four
+  of (route 2), at the cost of one layout reader per compositor.
 
 ## Known limitations
 

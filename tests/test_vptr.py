@@ -530,21 +530,23 @@ class RelativeMotion(VptrTest):
             d.handle({"op": "pointer"})
         self.assertEqual(str(cm.exception), daemon.POINTER_UNKNOWN)
 
-    @unittest.expectedFailure
     def test_the_unknown_position_refusal_owes_a_route(self):
         """`xdotool getmouselocation` always answers, so a session where ours does not is a gap of ours and
-        AGENTS.md wants the rung that would close it in the sentence.  `daemon.POINTER_UNKNOWN` stops at what
-        the protocol and sway's IPC do not carry.
+        AGENTS.md wants the rung that would close it in the sentence.  `daemon.POINTER_UNKNOWN` used to stop
+        at what the protocol and sway's IPC do not carry; it was expectedFailure here from 2026-09-09 until
+        the string was moved the same day.
 
-        The routes are written down in wdotool/vptr.py's header: a wlr-layer-shell overlay whose
-        `wl_pointer.motion` IS the cursor (route 1, at the cost of a surface that eats the events it reads)
-        or evdev integration off /dev/input (route 4, at the cost of read access and an anchor).  The string
-        lives in wdotool/daemon.py, which no batch of this wave owns -- see
-        <scratchpad>/requests-unowned-batch-19.md -- so this is expectedFailure until someone applies it, and
-        turns into an unexpected success the day they do."""
+        Both routes are worked out in wdotool/vptr.py's header and the sentence carries the short form of
+        each: a wlr-layer-shell overlay whose `wl_pointer.motion` IS the cursor (route 1, at the cost of a
+        surface that eats the events it reads) or evdev off /dev/input (route 4, at the cost of read access
+        and an anchor to count from)."""
         # the shape the rest of the tree prints, not the bare word: `route` alone would turn green on any
         # edit that happened to use it, and the deliverable is the rung
-        self.assertIn("AGENTS.md route", daemon.POINTER_UNKNOWN)
+        self.assertIn("AGENTS.md route 1", daemon.POINTER_UNKNOWN)
+        self.assertIn("route 4", daemon.POINTER_UNKNOWN)
+        self.assertIn("not yet", daemon.POINTER_UNKNOWN)
+        # and the head the two byte-for-byte pins in this file read is still the head
+        self.assertTrue(daemon.POINTER_UNKNOWN.startswith("wdotool does not know where the pointer is:"))
 
     def test_a_position_that_was_known_survives_it_exactly(self):
         d = self.daemon(uinput=False)
@@ -740,6 +742,23 @@ class ACosmicShapedSession(VptrTest):
         self.assertIn("--vkbd on type types there", said,
                       "and it points at the half that does work")
         self.assertEqual(d.mouse.events, [], "it must not silently use uinput")
+
+    def test_the_forced_refusal_names_the_rung_auto_would_have_taken(self):
+        """The other half of the sentence above, added 2026-09-09.  `--vkbd on` is the only way to meet this
+        on COSMIC at all -- the very next test shows `auto` clicking through the kernel devices on the same
+        session -- so the gap is the sink the user named, and the rung is the one they said no to.  Read off
+        a real refusal and not off `daemon.VPTR_FORCED_ROUTE`, which would be the constant asserting itself:
+        what has to be true is that _pick_pointer appends it to what vptr.py raised."""
+        d = self.daemon(uinput=True)
+        with self.assertRaises(RuntimeError) as cm:
+            d.handle({"op": "click", "btn": 1, "repeat": 1, "delay_ms": 0,
+                      "vkbd_mode": "on"})
+        said = str(cm.exception)
+        self.assertIn("not yet forced here", said)
+        self.assertIn("AGENTS.md route 4", said)
+        self.assertIn("/dev/uinput", said)
+        self.assertTrue(said.endswith(daemon.VPTR_FORCED_ROUTE),
+                        "the rung goes last, after the protocol's own reason")
 
     def test_vkbd_auto_click_falls_back_to_uinput(self):
         """`auto` is the kernel devices unless they cannot be used at all, and on COSMIC there is nothing

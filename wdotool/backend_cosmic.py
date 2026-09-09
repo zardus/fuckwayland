@@ -82,6 +82,16 @@ _MGR_SET_STICKY, _MGR_UNSET_STICKY = 11, 12
 _MGR_MOVE_TO_EXT_WORKSPACE = 13
 _MGR_EV_CAPABILITIES = 0
 
+#: `activate` takes a wl_seat and this backend will not send a null one (tests/test_backend_cosmic.py
+#: proves no null goes on the wire).  Nobody has produced a COSMIC session without a wl_seat: cosmic-comp
+#: builds its SeatState unfiltered [R recon2/cosmic/state.rs:694], and the sandbox filter it does apply
+#: covers the toplevel manager and the workspaces [same file, 748-762], so a filtered client loses the
+#: manager and fails the constructor's precondition long before it reaches here.  The branch exists
+#: because the request takes a seat, and the rung is written for the session that turns up anyway: the
+#: protocol names a seat in `activate`, so nothing below a patched cosmic-comp answers it.
+NO_SEAT = ("compositor offers no wl_seat; cannot activate windows; not yet here, and the route is a "
+           "patched cosmic-comp that activates a toplevel without naming a seat (AGENTS.md route 6)")
+
 #: The refusal for the four commands with no request behind them.
 NO_GEOMETRY = ("the COSMIC toplevel protocol has no move, resize, raise or lower; not yet here, "
                "and the route is a patched cosmic-comp (AGENTS.md route 6)")
@@ -404,7 +414,7 @@ class CosmicBackend(XPlaneViews, WindowBackend):
     def activate(self, wid: int):
         rec = self._by_wid(wid)
         if self.seat is None:
-            raise CmdError("cosmic backend: compositor offers no wl_seat; cannot activate windows")
+            raise CmdError("cosmic backend: %s" % NO_SEAT)
         self._act(rec, _MGR_ACTIVATE, CAP_ACTIVATE, "windowactivate", [("u", self.seat)])
 
     def close(self, wid: int):

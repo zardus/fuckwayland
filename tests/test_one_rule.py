@@ -38,7 +38,9 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from wdotool import backend_cosmic, backend_wlr, window_cmds     # noqa: E402
+from wdotool import (backend, backend_cosmic, backend_wayfire, backend_wlr,   # noqa: E402
+                     daemon, window_cmds)
+from wxrandr import gnome_overlap                               # noqa: E402
 
 #: the file suffixes that carry sentences a human reads -- code, shell, the
 #: extension's JS, the rig's yaml and nix, and every document
@@ -64,8 +66,6 @@ BANNED = (
 ALLOWED_BY_DESIGN = {
     # our own security posture, in the README's own section about it
     "**What the tools do by design.** `wdotool` injects keystrokes and pointer events as a",
-    # our state file's format
-    '"""One of the store\'s sub-dicts, coerced.  The state file is a plain JSON file, hand-editable by design',
     # our lock's own contract
     "the other's load. The lock is best effort by design: a runtime dir that",
     # our deliberate difference from XWayland's fabricated CVT list, which is not
@@ -146,11 +146,18 @@ class TheBannedSentences(unittest.TestCase):
     def test_no_file_says_the_compositor_is_right_to_refuse(self):
         self.assertEqual(self.hits(BANNED[2]), [])
 
-    def test_every_by_design_is_one_of_the_eight_that_earned_it(self):
-        """Not a ban: a review gate.  Eight lines in the tree say "by design"
+    def test_every_by_design_is_one_of_the_seven_that_earned_it(self):
+        """Not a ban: a review gate.  Seven lines in the tree say "by design"
         and every one is about our own design or a documented third-party API,
-        which is the opposite of citing a compositor's design as our reason.  A
-        ninth has to be written down here with its sentence."""
+        which is the opposite of citing a compositor's design as our reason.  An
+        eighth has to be written down here with its sentence.
+
+        It was eight until 2026-09-09: wxrandr/core.py's `_container` docstring
+        said the state file was "hand-editable by design", which is our own
+        design and honest -- and still the one line of the eight that a reader
+        grepping the tree for the banned phrase would have to stop and judge.
+        It now reads "meant to be hand-edited", which says the same thing and
+        needs no allow-list entry."""
         stripped = set()
         for hit in self.hits(BY_DESIGN):
             stripped.add(hit.split(": ", 1)[1])
@@ -212,6 +219,144 @@ class ARefusalCarriesItsRoute(unittest.TestCase):
         # labwc's two, river's one and cosmic's two -- so a step file that quietly lost its check
         # cannot leave this test asserting nothing
         self.assertEqual(len(checked), 5, checked)
+
+    def test_the_sentences_outside_the_five_backends_carry_a_rung_too(self):
+        """The ten wordings that lived in files batch 19 did not own, moved
+        2026-09-09 (requests-unowned-batch-19.md, plus the four it declined).
+        Each is read out of its own module rather than transcribed: a copy
+        here would stay green on the day the product's sentence loses its
+        rung, which is the whole failure this file exists to catch.
+
+        `backend.WindowBackend`'s four are the ones a backend reaches by NOT
+        overriding the method (set_num_desktops on six backends, select_window
+        and events on wlr and cosmic, set_desktop_for_window on wlr), so the
+        gap they describe is ours and not a compositor's."""
+        owed = {
+            "daemon.POINTER_UNKNOWN": daemon.POINTER_UNKNOWN,
+            "daemon.VPTR_FORCED_ROUTE": daemon.VPTR_FORCED_ROUTE,
+            "backend.NOT_YET_NUM_DESKTOPS": backend.WindowBackend.NOT_YET_NUM_DESKTOPS,
+            "backend.NOT_YET_SELECT_WINDOW": backend.WindowBackend.NOT_YET_SELECT_WINDOW,
+            "backend.NOT_YET_EVENTS": backend.WindowBackend.NOT_YET_EVENTS,
+            "backend.NOT_YET_SET_WINDOW_DESKTOP": backend.WindowBackend.NOT_YET_SET_WINDOW_DESKTOP,
+            "backend_wlr.NO_MANAGER": backend_wlr.NO_MANAGER,
+            "backend_wlr.NO_SEAT": backend_wlr.NO_SEAT,
+            "backend_cosmic.NO_SEAT": backend_cosmic.NO_SEAT,
+            "gnome_overlap.CINNAMON_REASON": gnome_overlap.CINNAMON_REASON,
+        }
+        for name, sentence in owed.items():
+            with self.subTest(name):
+                self.assertIn("AGENTS.md route", sentence, name)
+                self.assertIn("not yet", sentence.lower(), name)
+        # The eleventh is Wayfire's api gate, and it is the one that must NOT say "not yet": the window half
+        # is there and `plugins = ipc ipc-rules` switches it on, so the sentence names the rung it stands on
+        # (2, Wayfire's own IPC) and what it costs the user rather than promising work of ours.
+        self.assertIn("AGENTS.md route 2", backend_wayfire.NO_IPC_RULES)
+        self.assertNotIn("not yet", backend_wayfire.NO_IPC_RULES.lower())
+        self.assertIn("wayfire.ini", backend_wayfire.NO_IPC_RULES)
+
+    def test_the_base_defaults_actually_print_the_rung_they_carry(self):
+        """The constants above are what a reader greps; this is what a user
+        reads.  `_unsupported` grew an optional `why` on 2026-09-09 and the
+        four reachable defaults pass one, so the failure this catches is a
+        constant that is right and a call site that forgot to hand it over.
+
+        The bare form is still what a backend with no `why` prints, which is
+        the fake backend in tests/test_windows_cmds.py and nothing shipped."""
+        b = backend.WindowBackend()
+        for call, op, owed in (
+                (lambda: b.set_num_desktops(2), "set_num_desktops", b.NOT_YET_NUM_DESKTOPS),
+                (lambda: b.select_window(), "selectwindow", b.NOT_YET_SELECT_WINDOW),
+                (lambda: b.events(), "window events", b.NOT_YET_EVENTS),
+                (lambda: b.set_window_desktop(1, 2), "set_desktop_for_window",
+                 b.NOT_YET_SET_WINDOW_DESKTOP)):
+            with self.subTest(op):
+                with self.assertRaises(backend.CmdError) as cm:
+                    call()
+                self.assertEqual(str(cm.exception),
+                                 "%s is not supported by the none backend: %s" % (op, owed))
+                self.assertTrue(cm.exception.unsupported,
+                                "a capability gap stays downgradable to a warning")
+        with self.assertRaises(backend.CmdError) as cm:
+            b.lower(1)
+        self.assertEqual(str(cm.exception), "windowlower is not supported by the none backend")
+
+    def test_the_heads_the_rest_of_the_tree_greps_survived_the_rewording(self):
+        """Every sentence above kept its old opening clause contiguous.  Two of
+        them are read from outside the unit suite: tests/test_wire_hardening greps
+        `does not offer` out of the wlr constructor's refusal, and
+        vm/live-smoke.d/cinnamon-wayland.sh:404 quotes the Cinnamon reason as it
+        was measured on a live 6.4.13.  A reword that moved either head instead of
+        appending to it would leave those two reading for text that is no longer
+        first.
+
+        The other four are kept contiguous for the reader rather than for a
+        grepper (checked against vm/live-smoke.d/ on 2026-09-09: cosmic.sh:14
+        quotes backend_detect's `no Wayland session found` sentence, not
+        NO_MANAGER, and wayfire.sh:81 is that step's own sys.exit, not
+        NO_IPC_RULES).  The head is the half that says what happened, and it stays
+        the half a user reads first."""
+        heads = (
+            (backend_wlr.NO_MANAGER,
+             "wlr backend: compositor does not offer zwlr_foreign_toplevel_management_unstable_v1"),
+            (backend_wlr.NO_SEAT, "compositor offers no wl_seat; cannot activate windows"),
+            (backend_cosmic.NO_SEAT, "compositor offers no wl_seat; cannot activate windows"),
+            (gnome_overlap.CINNAMON_REASON,
+             "this is Cinnamon, whose Meta-0 typelib has no generation to check"),
+            (backend_wayfire.NO_IPC_RULES, "wayfire backend: this Wayfire's IPC has no %s"),
+            (daemon.POINTER_UNKNOWN, "wdotool does not know where the pointer is:"),
+        )
+        for sentence, head in heads:
+            with self.subTest(head):
+                self.assertTrue(sentence.startswith(head), sentence)
+        # and the forced-pointer rung is a TAIL, appended to whatever vptr.py raised
+        self.assertTrue(daemon.VPTR_FORCED_ROUTE.startswith("; "), daemon.VPTR_FORCED_ROUTE)
+
+    def test_the_wl_seat_refusals_do_not_borrow_the_sandbox_filters_rung(self):
+        """Corrected 2026-09-09, in review of the batch above.  Both seat
+        refusals offered "run it unsandboxed" as rung 1, on the strength of
+        cosmic-comp's `client_not_sandboxed`, and that filter does not reach the
+        seat: `SeatState::<Self>::new()` takes no filter [R
+        recon2/cosmic/state.rs:694] while the toplevel info, the manager, the
+        workspaces and the layer shell each take one [same file, 736-762].  A
+        sandboxed COSMIC client therefore keeps its wl_seat and loses the
+        manager: it dies at the constructor's precondition, which is a different
+        sentence, and never reaches `activate` at all.  The route named a case
+        that cannot arise.
+
+        So the two are asserted apart rather than the sandbox rung being banned:
+        the refusals that ARE the filter's still name it, and the seat's names
+        route 6, because `activate` takes a wl_seat in the request itself and
+        nothing below a patched cosmic-comp changes that."""
+        seat = backend_cosmic.NO_SEAT
+        self.assertIn("AGENTS.md route 6", seat)
+        for wrong in ("sandbox", "route 1"):
+            self.assertNotIn(wrong, seat, "the seat is not behind cosmic-comp's filter")
+        self.assertNotIn("sandbox", backend_wlr.NO_SEAT)
+        with open(os.path.join(ROOT, "wdotool", "backend_cosmic.py"), encoding="utf-8") as f:
+            src = f.read()
+        self.assertIn("unsandboxed run of the protocol", src,
+                      "the manager refusals keep the sandbox rung -- this is a split, not a ban")
+
+    def test_the_picker_refusal_does_not_deny_the_geometry_cosmic_sends(self):
+        """Corrected 2026-09-09, same review.  The sentence told every backend
+        that lands here that "this backend's protocols carry no pointer position
+        and no window geometry", and the second half is true of wlr --
+        `zwlr_foreign_toplevel_management_v1` has none, which is what its own
+        NO_GEOMETRY says -- and false of cosmic: `zcosmic_toplevel_info_v1` has a
+        `geometry` event and this tree parses it into `rec.geometry`
+        (backend_cosmic._on_cosmic).  What is true on cosmic is a measurement,
+        not a lack: the event is sent only alongside an output_enter or a change
+        and never arrived in the nested rig.  A refusal that reports a protocol
+        lack the protocol does not have is the same defect as one that reports a
+        verdict, so it is pinned here."""
+        s = backend.WindowBackend.NOT_YET_SELECT_WINDOW
+        self.assertIn("no window geometry on wlr", s)
+        self.assertIn("on cosmic", s)
+        self.assertNotIn("no window geometry to put a click in", s)
+        with open(os.path.join(ROOT, "wdotool", "backend_cosmic.py"), encoding="utf-8") as f:
+            src = f.read()
+        self.assertTrue(re.search(r"_CH_EV_GEOMETRY[\s\S]{0,120}?rec\.geometry\s*=", src),
+                        "cosmic parses the geometry event; a sentence saying it has none is wrong")
 
     def test_windowreparent_warns_with_a_route_instead_of_a_verdict(self):
         """xdotool's windowreparent is one XReparentWindow and it succeeds, so

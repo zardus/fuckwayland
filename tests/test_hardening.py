@@ -404,9 +404,13 @@ class TestWarningsNameTheRunningTool(unittest.TestCase):
         backend.set_program("wwmctl")
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
-            backend.warn("windowlower: sway cannot lower windows; ignoring")
-        self.assertEqual(err.getvalue(), "wwmctl: windowlower: sway cannot "
-                                         "lower windows; ignoring\n")
+            # A neutral sample, on purpose: this test is about the `wwmctl: ` prefix, and the literal it
+            # used to carry (`windowlower: sway cannot lower windows; ignoring`) is the sentence
+            # backend_sway retired on 2026-09-09 -- keeping a copy of it here left the tree holding the
+            # wording the rule replaced, where a grep for it would find a live-looking hit in a test.
+            backend.warn("windowlower: not yet here (AGENTS.md route 6); ignoring")
+        self.assertEqual(err.getvalue(), "wwmctl: windowlower: not yet here "
+                                         "(AGENTS.md route 6); ignoring\n")
 
     def test_no_backend_carries_a_tool_name_of_its_own(self):
         """The rule, not one instance of it: a new warning must not bring

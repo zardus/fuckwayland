@@ -161,13 +161,20 @@ def generation_for(version):
 
 
 #: Cinnamon's Muffin speaks the same DisplayConfig and enforces the same adjacency rule, so a Cinnamon user
-#: meets exactly the refusal this flag exists for -- and there is nothing here that could answer it.  The
-#: route reads a private `MetaMonitorsConfig` at offsets chosen from GENERATIONS, and every one of those
-#: records is keyed on a version muffin does not have: its GIR namespace is `Meta-0` and its library
-#: `libmuffin.so.0` for every release ever made, where mutter numbers both (`Meta-14`, `Meta-18`, `Meta-51`)
-#: [M recon2/cinnamon.md §2.3].  Nothing to key a description on is not a gap to be filled in later by
-#: measuring one more build; it is the reason this is a sentence and not a table row.
-CINNAMON_REASON = ("this is Cinnamon, whose Meta-0 typelib has no generation to check")
+#: meets exactly the refusal this flag exists for.  Overlapping monitors are an X feature, so this is a gap
+#: of ours: what is missing is the OFFSETS.  The GNOME route reads a private `MetaMonitorsConfig` at offsets
+#: chosen from GENERATIONS, and every record there is keyed on a version muffin does not have -- its GIR
+#: namespace is `Meta-0` and its library `libmuffin.so.0` for every release ever made, where mutter numbers
+#: both (`Meta-14`, `Meta-18`, `Meta-51`) [M recon2/cinnamon.md §2.3].  So the table would be keyed on the
+#: Cinnamon release instead, which is a record measured per release rather than per Meta generation.
+#:
+#: The rung is 2 and not 3: `org.Cinnamon.Eval` reaches into muffin with nothing installed, and AGENTS.md
+#: lists Eval under rung 2, so the extension GNOME needs (rung 3) is the alternative and not the route --
+#: what it would buy is surviving a Cinnamon restart, which Eval does not.
+CINNAMON_REASON = ("this is Cinnamon, whose Meta-0 typelib has no generation to check; not yet here, and "
+                   "the route is org.Cinnamon.Eval reaching MetaMonitorsConfig inside muffin with nothing "
+                   "installed (AGENTS.md route 2), at the cost of an offset record measured per Cinnamon "
+                   "release instead of per Meta generation")
 
 #: An X11 session reaches the same flag with the opposite problem: it does not need it.  The X server places
 #: overlapping monitors natively, which is why `--unsafe-gnome-overlap` on a handed-over run is already

@@ -15,9 +15,17 @@ so there is no cairo drawing: the canvas is built from widgets (a `Gtk.Fixed`
 inside a scrolled window; one CSS-coloured `Gtk.EventBox` + label per output,
 dragged with button/motion events). Everything that is not the window
 (`xrandr_parse`, `model`, `randr`, `cli --save/--command`) stays stdlib-only
-and is what the tests exercise without a display. A missing GTK is one line:
-`warandr: GTK 3 for Python is not available (...) - on Ubuntu/Debian: sudo apt
-install python3-gi gir1.2-gtk-3.0`.
+and is what the tests exercise without a display. A missing GTK is one line,
+and it names the box's own packages, read from `/etc/os-release` through
+`fwcommon/distro.py`: `warandr: GTK 3 for Python is not available (...) - on
+Ubuntu/Debian: sudo apt install python3-gi gir1.2-gtk-3.0`, `on Fedora: sudo dnf
+install python3-gobject gtk3`, `on Arch: sudo pacman -S python-gobject gtk3`, and
+`on NixOS: nix-env -iA nixpkgs.python3Packages.pygobject3 nixpkgs.gtk3` — no `sudo`
+on that last one, because `nix-env` is per-user. The Debian bytes are unchanged, and
+an unidentifiable distribution gets them. MATE is the one X11 desktop measured where
+the pair is satisfied out of the box and `arandr` is absent, so `warandr` is a real
+addition there; a minimal sway or i3 image has `python3-gi` and not the GTK 3
+typelib, which is what the repo README's footnote (h) actually names.
 
 ## Backend selection (`warandr/randr.py`)
 
@@ -25,8 +33,9 @@ First match wins:
 
 0. an explicit choice — `warandr --backend NAME`, or the GUI's
    **Layout ▸ Backend**. `NAME` is `auto` (the default: everything below),
-   `x11`, or one of wxrandr's own backends `sway|wlr|mutter|kwin` (aliases
-   `gnome`, `kde`), spelled exactly as wxrandr's own flag. `x11` runs the
+   `x11`, or one of wxrandr's own backends `sway|hypr|wlr|mutter|cinnamon|kwin`
+   (aliases `hyprland`, `gnome`, `muffin`, `kde`), spelled exactly as wxrandr's
+   own flag. `x11` runs the
    real `xrandr`; a Wayland backend runs wxrandr with `--backend NAME`,
    which inside wxrandr beats `$WXRANDR_BACKEND` and its detection — so the
    documented rule holds end to end: **flag > environment > detection**.
@@ -357,9 +366,9 @@ onto that one". On wlroots the route is the existing
 [wl-mirror](https://github.com/Ferdi265/wl-mirror), which since 0.2 the
 `wmirror` command drives and supervises (`WMIRROR.md`) — a mirror there is a
 resident process, not a layout, so nothing the GUI could save would describe
-it. On GNOME and KDE the only capture route is the desktop portal, which
-prompts the user for every session — useless from the hotkey that is the
-whole point of a layout script.
+it. The route on GNOME, KDE and Cinnamon is the desktop portal's ScreenCast
+(AGENTS.md route 4), which asks once per session and is not wired up here yet
+— useless from the hotkey that is the whole point of a layout script.
 
 ## Command line (`Layout.args()`)
 
@@ -542,8 +551,12 @@ stepping through arandr's 1:4 / 1:8 / 1:16 radios, which follow; default
 **Help** (About). Layout also carries **Backend ▸** (right after Script
 Properties, with the two things it governs — arandr has no such menu, and
 View is about how the canvas is drawn, not about who answers): radio items
-*Automatic*, *X11 (xrandr)*, *sway*, *wlroots (wlr)*, *GNOME (mutter)*,
-*KDE (kwin)*. A backend this session cannot reach is **insensitive** with the
+*Automatic*, *X11 (xrandr)*, *sway*, *Hyprland (hypr)*, *wlroots (wlr)*,
+*GNOME (mutter)*, *Cinnamon (muffin)*, *KDE (kwin)* — the seven backends
+`wxrandr --backends` prints, plus *Automatic*, which is the GUI's own entry and
+no backend at all. The menu's order is the reading order of a layout tool
+(X11 first, KDE last); `--backends` prints its own — `AUTO_ORDER` (sway, hypr,
+kwin, mutter, cinnamon), then the `wlr` fallback, then `x11`. A backend this session cannot reach is **insensitive** with the
 reason in its tooltip (GTK 3 pops no tooltip over an insensitive item, so the
 same table is spelled out in Script Properties ▸ Backend); the current choice
 is never greyed out from under the user. Choosing one re-reads the layout

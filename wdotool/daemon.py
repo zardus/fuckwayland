@@ -380,6 +380,15 @@ BTN_GONE_WARNING = (
     "a button cannot be left down on a pointer nothing is going to inject "
     "through")
 
+# The tail on `--vkbd on`'s pointer refusal (_pick_pointer). It is deliberately about the FORCED mode and not
+# about the compositor: the three that do not implement zwlr_virtual_pointer_manager_v1 -- Mutter, KWin and
+# cosmic-comp -- are exactly where `--vkbd auto` reaches the kernel devices and clicks, which is rung 4 already
+# in hand. What a user meets here is the sink they named, so the route is the sink they did not.
+VPTR_FORCED_ROUTE = (
+    "; not yet forced here, and the route is the kernel devices `--vkbd "
+    "auto` takes on the same session (AGENTS.md route 4), at the cost of "
+    "access to /dev/uinput")
+
 # Names for that warning, one per _Daemon._BTN entry.
 _BTN_LABELS = {uinput.BTN_LEFT: "left", uinput.BTN_MIDDLE: "middle",
                uinput.BTN_RIGHT: "right", uinput.BTN_SIDE: "side",
@@ -390,12 +399,24 @@ _BTN_LABELS = {uinput.BTN_LEFT: "left", uinput.BTN_MIDDLE: "middle",
 # nothing at all -- zero events on the object, across motion, buttons and axes -- and sway's IPC has no cursor
 # position either, so there is nothing to fall back to and no /dev/uinput error worth quoting: uinput is not
 # what the user would have to fix.
+#
+# `xdotool getmouselocation` always answers, so a session where this one refuses is a gap of ours and owes a
+# route. Two reach it and both are written up in wdotool/vptr.py's header, which is where the cost of each was
+# worked out; the sentence carries the short form of both because the user reading it is the one who has to
+# decide whether to wait for it.
 POINTER_UNKNOWN = (
     "wdotool does not know where the pointer is: it has not moved it, and "
     "zwlr_virtual_pointer_v1 cannot be asked -- the protocol delivers no "
     "events, and neither sway's IPC nor Xwayland carries the cursor "
     "position. Move the pointer once (mousemove) and this answers exactly "
-    "where it was put; on GNOME and KDE the compositor answers it directly.")
+    "where it was put; on GNOME and KDE the compositor answers it directly. "
+    "Answering it here is not yet done, and the routes are a wlr-layer-shell "
+    "overlay whose wl_pointer.motion is the cursor (AGENTS.md route 1), at "
+    "the cost of a surface that eats the events it reads and has to be "
+    "unmapped before the user's next click, or evdev off /dev/input (route "
+    "4), at the cost of read access to the devices and an anchor to count "
+    "from, since the kernel says how far the pointer moved and never where "
+    "it is.")
 
 _UNSET = object()
 
@@ -965,9 +986,17 @@ class _Daemon:
             try:
                 return self._vptr(warnings), True
             except vptr.VptrError as e:
-                # Forced and impossible: say exactly what was asked for and
-                # what refused it, and do not quietly click through uinput.
-                raise RuntimeError(f"--vkbd on: cannot use zwlr_virtual_pointer_v1: {e}") from None
+                # Forced and refused: say exactly what was asked for and what
+                # refused it, and do not quietly click through uinput.
+                #
+                # The rung goes on the FORCED mode only. `--vkbd auto` on the
+                # same session takes the route VPTR_FORCED_ROUTE names -- the
+                # kernel devices -- and clicks, so the gap here is the one the
+                # user opted into by naming a sink, and the sentence has to say
+                # that rather than describe a compositor that is missing
+                # nothing it could offer.
+                raise RuntimeError("--vkbd on: cannot use zwlr_virtual_pointer_v1: %s%s"
+                                   % (e, VPTR_FORCED_ROUTE)) from None
         # auto: the kernel devices unless they cannot be used at all.
         if self._vp is not None and self.btns and self._btns_virtual:
             # Never change sinks under a held button, for the same reason as under a held key: a button held on

@@ -40,7 +40,12 @@ What is installed where
   /usr/lib/fuckwayland/enable-bridge
   /usr/lib/fuckwayland/enable-bridge.desktop
         the once-per-user helper that enables the extension (see below) and
-        its autostart entry, which reaches /etc/xdg/autostart as a symlink:
+        its autostart entry.  Both are packaging/common/enable-bridge and
+        its .desktop in the source tree, not debian/: they were never
+        Debian-specific, and all three packagings install the same two
+        files (the rpm rewrites the Exec= path to /usr/libexec and nothing
+        else touches them).  The autostart entry reaches /etc/xdg/autostart
+        as a symlink:
         a regular file under /etc is a conffile, and a conffile outlives
         `apt remove` -- an autostart entry pointing at a helper the removal
         has just deleted.  The symlink goes when the package goes.
@@ -149,5 +154,21 @@ PATH, so it is one symlink per tool and no packaged file is disturbed:
   sudo ln -sfn /usr/bin/wwmctl  /usr/local/bin/wmctrl
   sudo ln -sfn /usr/bin/wxprop  /usr/local/bin/xprop
   sudo ln -sfn /usr/bin/wxrandr /usr/local/bin/xrandr
+
+The other two packagings
+------------------------
+
+The same tree builds a Fedora rpm and an Arch package, and each has a file of
+this one's shape beside its recipe: packaging/rpm/README.Fedora and
+packaging/arch/README.Arch.  Three things differ from the .deb and each is a
+decision rather than an accident: the rpm is three packages where this is one
+(the two extensions are subpackages, and the overlap one has no Supplements,
+so nothing installs it for you); the rpm's GTK stack is Recommends rather
+than a hard dependency; and neither of the two is committed to the tree,
+because both land in a version-pinned site-packages while this .deb is
+Architecture: all and installs on both supported Ubuntu releases from one
+file.  The udev procedure is the same procedure in three dialects, and the
+tests compare postinst/postrm, %post/%postun and post_install/post_remove
+phrase for phrase, so a change to one turns the other two red.
 
  -- Antonio Bianchi <antonio.bianchi.333@gmail.com>

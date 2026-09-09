@@ -544,7 +544,7 @@ class State:
 
     # custom modes -----------------------------------------------------------
     def _container(self, key: str) -> dict:
-        """One of the store's sub-dicts, coerced.  The state file is a plain JSON file, hand-editable by design
+        """One of the store's sub-dicts, coerced.  The state file is a plain JSON file, meant to be hand-edited
         and shared by every wxrandr in the session: a value of the wrong type used to survive setdefault() and
         come back as a str, an int or a list, whose next [] or .get() raises a TypeError somewhere else
         entirely.  __init__ already does exactly this for the top level."""

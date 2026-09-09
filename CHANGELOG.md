@@ -4,6 +4,109 @@ Every claim in this file was measured on the VM rig, or on a real desktop, befor
 was written down. The README keeps one short section per version; this is the long
 form.
 
+## Unreleased
+
+The version in `fwcommon.VERSION` is still 0.4.0 and nothing below has been released.
+Everything here was measured on the rig or on a real desktop, and the flavor, the run
+and the bytes are named wherever a number is.
+
+- **Hyprland gets a first-class backend on both sides.** `wdotool/backend_hypr.py` and
+  `wxrandr/hypr.py` speak Hyprland's own request socket, one connection per request,
+  where the generic wlroots floor had reported the whole output as every window's
+  rectangle, pid 0 and desktop -1. Window ids are a hash of the compositor's `address`,
+  so they no longer move when another window closes; `getwindowgeometry`, `windowmove`
+  and `windowsize` are real; XWayland windows are listed under their real X id.
+  `wxrandr --print-backend` answers `hypr` and not `wlr`, and that is not a preference:
+  Hyprland advertises `zwlr_output_manager_v1` v4 and takes exactly one apply per
+  session through it — the second times out after 10 s having changed nothing, with
+  `wlr-randr`, the reference client, hanging for ever on the same request. Measured on
+  0.53.3 and again on 0.56.2.
+- **A Wayfire backend over Wayfire's JSON IPC.** Where the wlr floor refused
+  `windowmove`, `windowsize`, `windowraise`, `windowlower`, `getwindowpid`,
+  `selectwindow` and every desktop command, Wayfire with `plugins = ipc ipc-rules` now
+  answers all of them. `wwmctl -l -x` prints the real X window id and `xterm.XTerm`
+  where it printed a synthetic id and `XTerm.XTerm`. Wayfire has a real `windowlower`,
+  which sway has never had, and a `getmouselocation` that answers from the compositor
+  before anything has warped the pointer.
+- **Cinnamon, both session types.** `org.Cinnamon.Eval` carries the window plane with
+  nothing installed, and `wxrandr --backend cinnamon` is Mutter's DisplayConfig under
+  Muffin's bus name — eight behaviours that used to be keyed on the token `mutter` are
+  keyed on the implementation's flavour instead, so `--dryrun`, `--noprimary`,
+  `--listmonitors`, the overlap-status sentences and `--brightness`/`--gamma` all answer
+  on Cinnamon where they used to answer about GNOME or die. `--persistent` writes
+  `~/.config/cinnamon-monitors.xml` behind Cinnamon's own *Keep these display settings?*
+  dialog, and that dialog has now been answered live over Eval.
+- **A COSMIC backend, and the wlroots floor made honest.** cosmic-comp publishes no
+  `zwlr_foreign_toplevel_manager_v1` at all, so `wdotool/backend_cosmic.py` drives the
+  COSMIC toplevel protocols instead: real workspaces, ids minted from the 32-character
+  `identifier`, and activate/close/maximize/minimize/fullscreen gated on the manager's
+  own capability array. On the generic wlr floor the four geometry refusals stopped
+  borrowing sway's tiling excuse and now name the protocol; desktops work wherever the
+  compositor publishes `ext_workspace_manager_v1`; toplevels are joined to
+  `_NET_CLIENT_LIST` so XWayland windows appear under their real X ids; and a compositor
+  that accepts a request and does nothing — river 0.4 — is waited for and reported
+  rather than believed.
+- **i3 is a dialect and not a lie.** The sway backend asks `GET_VERSION` once and knows
+  which compositor it is talking to: every id is the window's X id and not i3's 47-bit
+  container pointer, `windowmove`/`windowsize` work on a floating i3 window,
+  `getwindowpid` answers from `_NET_WM_PID`, `--onlyvisible` matches, and any
+  `wxrandr` apply is refused up front in one line, because i3 has no `output` command
+  and the X server owns the layout there. The four `sway:`-prefixed refusals say `i3`
+  on i3.
+- **Five desktops answer which keyboard layout is live, where two did.**
+  `hyprctl devices` on Hyprland, `wayfire/get-keyboard-state` on Wayfire and
+  `org.cinnamon.desktop.input-sources` through Eval on Cinnamon joined KWin and GNOME's
+  input-sources setting; COSMIC needs no reader at all, because
+  `zcosmic_keyboard_layout_manager_v1` puts the group on the wire the way sway does.
+  Neither of the two write methods is ever called: one of them recompiles Wayfire's
+  keymap as the selected layout duplicated, and the other moves the session's own state.
+- **Every refusal names a route and its cost.** A missing feature is written down as
+  **not yet** plus the lowest-numbered route on [AGENTS.md](AGENTS.md)'s ladder and what
+  that route costs, in the tools' own stderr as well as in these documents.
+  `windowreparent` used to print a sentence saying reparenting was not possible; it now
+  names one `XReparentWindow` over the X plane for an XWayland window and a patched
+  compositor for a native one, and stays a warn-and-succeed.
+  `tests/test_one_rule.py` is the gate.
+- **A Fedora package and an Arch package.** `packaging/rpm/` and `packaging/arch/`,
+  built by `scripts/build-rpm.sh` and `scripts/build-pkgbuild.sh` — `build-deb.sh`'s
+  siblings, same options, same first gate: the version has to agree everywhere before
+  anything runs, and it is now written in eight places rather than four. Neither package
+  is committed and neither is published yet, though since the tree became BSD-2-Clause
+  nothing about the licence stands in the way: both carry the BSD-2-Clause tag and both
+  build scripts refuse a build whose tag disagrees with `LICENSE`'s own SPDX header.
+- **The udev procedure is one procedure in three dialects.** `%post`/`%postun`,
+  `post_install`/`post_upgrade`/`post_remove` and dpkg's `postinst`/`postrm` are compared
+  phrase for phrase by the tests, so a change to any one of them turns the other two red.
+  The ordering reason is the same on all three: the trigger has to follow the reload,
+  because both Fedora's systemd-udev file trigger and Arch's
+  `35-systemd-udev-reload.hook` run *after* the scriptlet.
+- **`debian/enable-bridge` and its `.desktop` are now `packaging/common/`.** They were
+  never Debian-specific — a per-user gsettings enable and an XDG autostart entry — and an
+  Arch recipe reaching into a directory named for dpkg is what said so. Same bytes, one
+  copy, three packagings.
+- **The flake is more than one derivation.** `nixosModules.default` and
+  `homeManagerModules.default`, six packages instead of one (and 330.9 MiB less closure
+  for anyone who only wants the CLI tools), `meta.mainProgram` so `nix run` works at all,
+  and five `checks` so `nix flake check` stops passing with zero tests.
+  `packages.xdotool` and `packages.wmctrl` exist, so `scripts/parity-oracle.sh`'s
+  instructions are true, and `meta.license` is `bsd2` now that `LICENSE` exists.
+- **The rig grew from thirteen flavors to 38, over four distributions.** Ubuntu gained
+  `resolute-hypr`, `resolute-wayfire`, `resolute-labwc`, `resolute-xfce-wayland`,
+  `resolute-budgie`, `resolute-lxqt-wayland`, `resolute-cinnamon`,
+  `resolute-cinnamon-wayland`, `resolute-mate`, `resolute-i3`, `resolute-lxqt` and
+  `noble-gnome-x11`; Fedora 43 and 44, Arch and NixOS arrived with GNOME, KDE, sway,
+  Hyprland, COSMIC and river behind them. `vm/build-image.sh` is package-manager and
+  display-manager neutral in one file, `vm/build-nixos-golden.sh` is a third golden
+  builder, and `arch-river` is the rig's first from-source build step, pinned to a commit
+  and a sha256.
+- **The smoke has a package axis per distribution.** `vm/live-smoke.sh --pkg` installs
+  the flavor's own package — the `.deb` on Ubuntu, the rpms on Fedora, the
+  `.pkg.tar.zst` on Arch — and on NixOS nothing at all, because the package is in the
+  image; `--remove` is the mirror, and on NixOS it is a `switch-to-configuration test`
+  into a `without-fuckwayland` specialisation. Two phases belong to a distribution
+  rather than to a desktop and the driver appends them itself: `selinux` on Fedora and
+  `pkgverify` (`rpm -V`, `pacman -Qkk`) on both.
+
 ## Version 0.4
 
 Everything here was measured on the rig or on a real desktop, and most of it was found

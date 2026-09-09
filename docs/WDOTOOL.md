@@ -78,12 +78,12 @@ Wayland forces a few honest approximations:
 | | |
 |---|---|
 | `key`/`type` `--window` | activates the target first, then injects (no XSendEvent) |
-| `getmouselocation` | asks the compositor where the pointer is (GNOME, KDE); on sway/wlroots nothing can be asked — the IPC has no pointer query and `zwlr_virtual_pointer_v1` has no events at all — so it reports the position wdotool itself put the pointer at, which is exact, and **refuses with that reason** rather than guessing when wdotool has not moved it. Where the compositor *has* a pointer query and it failed — a bridge marked out of date for the running GNOME Shell, KWin's scripting service refusing — the refusal is that failure, the same line every other command prints, not the wlroots one |
+| `getmouselocation` | asks the compositor where the pointer is (GNOME, KDE); on sway/wlroots nothing can be asked — the IPC has no pointer query and `zwlr_virtual_pointer_v1` has no events at all — so it reports the position wdotool itself put the pointer at, which is exact, and **refuses with that reason** rather than guessing when wdotool has not moved it — and the refusal names what would close it: a wlr-layer-shell overlay whose `wl_pointer.motion` IS the cursor (route 1), at the cost of a surface that eats the events it reads and has to be unmapped before the user's next click, or evdev off `/dev/input` (route 4), at the cost of read access to the devices and an anchor to count from. Wayfire is the one member of the family that needs none of that: its IPC publishes the cursor. Where the compositor *has* a pointer query and it failed — a bridge marked out of date for the running GNOME Shell, KWin's scripting service refusing — the refusal is that failure, the same line every other command prints, not the wlroots one |
 | `--clearmodifiers` | clears and restores the modifiers **wdotool itself** holds (from `keydown`). One held on a physical keyboard cannot be cleared through uinput at all — the kernel drops a key-up from a device that does not hold the key — and pressing it back afterwards would leave it stuck, so it is left alone; wdotool names it if it may read `/dev/input/event*` (root), and is silent, with identical behaviour, if it may not. On the virtual-keyboard path there is no such gap: modifier state there is per device, so a modifier on a real keyboard does not reach our keystrokes in the first place. On a *pointer* command the modifier still rides the click whichever device sends it, because modifier state reaches the seat from the seat's keyboards, so that warning stays |
 | `type` non-US chars | typed through the session's active layout; characters it cannot produce warn and skip |
 | `search --role` | roles don't exist on Wayland; matches against empty string |
 | `windowraise`/`lower` | floating windows only (tiling has no z-order) |
-| `set_window`, `windowreparent`, viewport/desktop-count setters | warn and succeed (cosmetic on Wayland; scripts keep running) |
+| `set_window`, `windowreparent`, viewport/desktop-count setters | warn and succeed (cosmetic here; scripts keep running). `windowreparent`'s warning names its routes: one `XReparentWindow` over the X plane for an XWayland window (route 5), a request in the compositor for a native one (route 6) |
 | `behave`, `behave_screen_edge` | both wait on X events that do not exist here, so both are unsupported and fail cleanly. Every other `--sync`, `windowmap`'s included, is implemented and bounded: see [`--sync` waits are bounded](#--sync-waits-are-bounded) |
 | `selectwindow` | click-to-select on GNOME (a bridge grab, needs bridge v2 or newer) and on KDE (KWin's own picker); Escape cancels with rc 1, as does a second picker or a shell that is already modal (the GNOME overview, a menu). sway and i3 have no picker in their IPC, so there the wait ends on the next focus *change* and re-selecting the focused window never returns |
 
@@ -284,6 +284,39 @@ one where the old guess typed *nothing at all*: it assumed Russian, and `y` and 
 are not on it. And on a session rebooted with German last used, before anything is
 touched, the first command types German — the old build typed `zy"` there too.
 
+**Three more desktops answer it now, and one puts the answer on the wire.** The reader is
+picked per desktop and gated the same way — asked only where the keymap cannot settle it,
+and every failure leaving group 1 assumed with the notice printed:
+
+* **Hyprland** — `hyprctl devices` (`j/devices` over the IPC socket). Hyprland keeps XKB
+  state *per device*, so the reader picks a row: never one of ours
+  (`wdotool-virtual-keyboard`, `hl-virtual-keyboard-*`, because reading the injected
+  device's index would be reading back the state we set), then `main: true`, then a name
+  that looks like a keyboard, then the first row. `active_layout_index + 1`. Nothing is
+  ever dispatched. What that gets right and what it does not is the Hyprland section under
+  [Backend notes](#backend-notes): the answer describes the *physical* keyboard, which is
+  the session's own state and the wrong state for the `/dev/uinput` path.
+* **Wayfire** — `wayfire/get-keyboard-state` over the JSON IPC, whose `layout-index` is
+  the same 0-based index into the configured list KWin's `getLayout` gives, so the group is
+  `index + 1`. It needs `plugins = ipc ipc-rules` and not the window backend's whole set.
+  `wayfire/set-keyboard-state` is **never** called and must never be: one call recompiled
+  the keymap as the selected layout *duplicated* and the second layout was gone until
+  restart.
+* **Cinnamon** — `org.cinnamon.desktop.input-sources` through `org.Cinnamon.Eval`, one
+  read-only constant program. The schema has `sources`, `current`, `show-all-sources` and
+  `xkb-options` and **no `mru-sources`**, so unlike GNOME the live index really is
+  `current`, the mapping is `current + 1` with no chunking (muffin appends no group of its
+  own), and there is no portal call and no forked child, because Eval identifies nobody.
+* **COSMIC** needs no reader at all: cosmic-comp publishes
+  `zcosmic_keyboard_layout_manager_v1`, whose `group` event the protocol says is "received
+  even when the client has no focused window", so the group arrives on the wire the way
+  sway's does and `wdotool keys explain` says `from wayland`, not `from wayland + <who>`.
+
+So `wdotool keys explain`'s source line now has five spellings after `wayland + `:
+`kwin`, `gnome input-sources`, `hyprland devices`, `wayfire` and `cinnamon input-sources`.
+Xfce-on-Wayland, labwc, river and Budgie are the sessions left guessing, and they are left
+guessing because nothing in them publishes the answer.
+
 The measured engineering behind all of it — the reverse map, the US bypass, the group
 guess, the cache — is [the active layout](#the-input-daemon), below.
 
@@ -344,15 +377,32 @@ one of them is a pointer, so wlroots ships `zwlr_virtual_pointer_v1` beside it �
 absolute and relative motion, buttons and scroll, equally unprivileged. wdotool uses
 both, under one policy and one flag.
 
-**Who has them, and what that means for privileges.** Measured on all four desktops
-this branch is tested on, as the session user and as root:
+**Who has them, and what that means for privileges.** Measured on every desktop this
+branch is tested on, as the session user and as root:
 
 | session | `zwp_virtual_keyboard_v1` | `zwlr_virtual_pointer_v1` | what injects | typing needs | pointer (`click`, `mousemove`, `mousedown/up`) needs |
 |---|---|---|---|---|---|
 | **sway 1.11 / wlroots** | **yes**, v1, advertised to every client and restricted to none | **yes**, v2, likewise | `/dev/uinput` when it can be opened, the protocol when it cannot | **nothing** — no root, no group, no udev rule | **nothing** either |
+| **Hyprland 0.53 / 0.56** | **yes** | **yes** | the same | **nothing** | **nothing** |
+| **Wayfire 0.10** | **yes**, measured typing byte-exact on a box with no `/dev/uinput` at all | **yes** | the same | **nothing** | **nothing** |
+| **labwc 0.9.3, and Budgie / Xfce / LXQt on it; river 0.4** | **yes** | **yes** | the same | **nothing** | **nothing** |
+| **COSMIC 1.6 / 1.7 (cosmic-comp)** | **yes** — one of 53 globals | **no**, and it is the only member of the family without it | the protocol for the keyboard, `/dev/uinput` for the pointer | **nothing** | root, or the udev rule |
 | **GNOME 46 / 50 (Mutter)** | no | no | `/dev/uinput`, always | root, or the udev rule | root, or the udev rule |
 | **Plasma 5.27 / 6.6 (KWin)** | no — the interface is in no Plasma library, and 5.27 does not advertise it either | no | `/dev/uinput`, always | root, or the udev rule | root, or the udev rule |
-| X11 (Xfce, ...) | not applicable — wdotool hands over to the real `xdotool` | not applicable | X | nothing | nothing |
+| **Cinnamon 6.4 (muffin)** | no. Muffin master, the 6.6/6.8 line, adds `virtual-keyboard-unstable-v1`, so a future Cinnamon gets the keyboard half | no, and master does not add one | `/dev/uinput`, always | root, or the udev rule | root, or the udev rule |
+| X11 (Xfce, MATE, i3, LXQt, Cinnamon, GNOME/KDE on Xorg) | not applicable — wdotool hands over to the real `xdotool` | not applicable | X | nothing | nothing |
+
+Forcing `--vkbd on` where `zwlr_virtual_pointer_manager_v1` is absent — Mutter, KWin,
+cosmic-comp — is refused, and the refusal ends `; not yet forced here, and the route is the
+kernel devices `--vkbd auto` takes on the same session (AGENTS.md route 4), at the cost of
+access to /dev/uinput`. The rung is on the **forced** mode only: `auto` already clicks
+through the kernel devices on those sessions, so nothing about the compositor changed.
+
+The COSMIC split is measured on a live session rather than read off a registry dump:
+`wdotool type 'hello cosmic'` landed byte-exact with no `/dev/uinput` node on the box at
+all, while `wdotool mousemove 400 300` answered `cannot create uinput devices`. The two
+refusals name that split rather than a protocol's absence, so a COSMIC user is told which
+half of their session already works.
 
 So on sway **every injecting command** wdotool has — `key`, `keydown`, `keyup`,
 `type`, `click`, `mousedown`, `mouseup`, `mousemove`, `mousemove_relative` — needs
@@ -1085,8 +1135,9 @@ Daemon notes:
   compositor reads them through whatever XKB layout the session has active, so
   the fixed US table is wrong for everyone else: `type y` gives `z` on German,
   `key ctrl+z` arrives as `ctrl+y`. X11's trick (rebind a spare keycode to the
-  wanted keysym) has no Wayland equivalent and Mutter does not implement
-  zwp_virtual_keyboard_v1, so the lookup is reversed instead: every Wayland
+  wanted keysym) is not on the table here -- no compositor takes a keymap edit
+  from a client, and Mutter does not implement zwp_virtual_keyboard_v1 either --
+  so the lookup is reversed instead: every Wayland
   client is handed the full keymap on `wl_keyboard.keymap` as an fd, and
   `xkbmap.fetch()` binds the seat, takes the keyboard, reads it, and
   `xkbmap.build()` turns the active group into char → (keycode, modifier mask).
@@ -1400,7 +1451,23 @@ Daemon notes:
   `events()` (bridge `WindowEvent` signals), `monitors()`, `real_pointer()`
   (diagnostic: the compositor's pointer vs the daemon's). The bridge exports no
   hit-test; `backend.hit_test()` is client-side over `ListWindows` so it cannot
-  drift from the generic rule. Without the bridge name but with `org.gnome.Shell`
+  drift from the generic rule. **`org.gnome.Shell` on the bus is not proof of GNOME
+  Shell**, and detection reaches this backend only when one of GNOME's own two names is
+  beside it — `org.gnome.Mutter.DisplayConfig` (gnome-shell's own, and what wxrandr's
+  mutter backend drives) or `org.fuckwayland.Bridge` (which can only be owned from inside
+  gnome-shell). With neither, the registry decides, and a compositor publishing a
+  foreign-toplevel protocol is not Mutter, which publishes none. Measured on the
+  `resolute-budgie` golden (Ubuntu Budgie 10.10.2 over labwc 0.9.3, 2026-09-09, `busctl
+  --user list --acquired`, recorded whole in
+  `tests/fixtures/live/busnames-resolute-budgie-10.10.2.txt`): `org.gnome.Shell` is owned
+  there by **budgie-power-dialog**, pid 2697, and no `org.gnome.Mutter.*` name is on that
+  bus at all, so before this rule every window command on Budgie answered with a bridge
+  hint about logging out of a GNOME Shell that was not running. That reading **corrects
+  `recon2/budgie.md` §2 and §6**, which list "no `org.gnome.Shell`" among Budgie's
+  absences. The GNOME arm is still never swallowed where nothing under it could answer: a
+  session owning `org.gnome.Shell` whose compositor offers neither toplevel family still
+  gets the bridge hint, because that is the shape a real GNOME session has. Without the
+  bridge name but with `org.gnome.Shell`
   owned the constructor diagnoses (locked screen, disabled/broken extension, or
   "run `gnome/install-bridge.sh` and restart the session") without touching
   `org.gnome.Shell.Eval`; only `WDOTOOL_GNOME_AUTOLOAD=1` makes it try one Eval
@@ -1419,6 +1486,302 @@ Daemon notes:
   `--pid`, `--all/--any`, `--limit N`, `--onlyvisible`, `--sync`. Writes `ctx.stack`.
   Exact output formats for search/getwindowgeometry/getmouselocation (+ `--shell`
   variants): copy from the manpage and `cmd_*.c`.
+### Hyprland
+
+Hyprland is detected from its own IPC socket, above the D-Bus checks (a Hyprland session
+owns neither `org.kde.KWin` nor `org.gnome.Shell`), and gets a first-class backend rather
+than the wlroots floor. What changes against that floor, all measured on 0.53.3:
+
+* **window ids are stable.** On the floor two foots listed as `0x000f4240`/`0x000f4241`
+  and closing the first renamed the survivor; here the id is a hash of the compositor's
+  `address` and is the same in two processes.
+* `getwindowgeometry`, `windowmove` and `windowsize` are real. The floor reported the
+  whole output for a window the compositor had at `at: 22,61 size: 1876,997`.
+* a tiled window refuses an absolute move or resize (`setfloating it first`), as on sway.
+* `windowstate`: FULLSCREEN, the MAXIMIZED pair (both axes at once — a lone axis is
+  refused) and STICKY (`pin`, floating windows only).
+* `wwmctl -d`, `-s`, `-r -t` work: workspace N+1 is desktop N, and a special
+  (scratchpad) workspace is -1.
+* `getmouselocation` is the compositor's own cursor (`j/cursorpos`), 0 px error measured
+  twice.
+* `getdisplaygeometry` and `wwmctl -d`'s work area are **logical** pixels: `j/monitors`
+  publishes the MODE's size, so a head at transform 1/3/5/7 is measured the tall way
+  round and every head is divided by its `scale` (the recorded scale-2.0 HEADLESS is
+  960x540 of layout). The same rule wxrandr reads the row with.
+* XWayland windows get their real X id and `WM_CLASS` pair, joined to
+  `_NET_CLIENT_LIST` on pid, class, title and geometry.
+
+Three things are **not yet** here, each with its route and its cost.
+`windowminimize`/`windowunmap`/`windowmap`: Hyprland has no minimize, and the route is a
+special workspace to stash the window in over the IPC we already speak (route 2), at the
+cost of the bookkeeping to bring it back and of keeping the window in the listing while it
+is stashed. `windowlower`: `alterzorder bottom` over that same IPC (route 2), and it has
+been run — `alterzorder top,address:0x...` on a floating window answers `ok` — but
+`j/clients` publishes **nothing** that orders windows front to back (the whole key list is
+`address at class contentType floating focusHistoryID fullscreen fullscreenClient grouped
+hidden inhibitingIdle initialClass initialTitle mapped monitor pid pinned pseudo size
+swallowing tags title workspace xdgDescription xdgTag xwayland`), so the cost is sending
+it unverified, and `raise_()` keeps `focuswindow` for the same reason. `windowstate`
+`MAXIMIZED_VERT`/`_HORZ` alone, and any state with no dispatcher: one dispatcher each in
+Hyprland (route 6). `selectwindow` waits for the next focus as it does on sway; xdotool's
+click-to-pick would be evdev for the press (route 4) plus `j/cursorpos` and `j/clients`
+for the hit test (route 2).
+
+**The layout gap on the uinput path, measured and not yet fixed.** On Hyprland XKB state
+is per device. `xkbmap.HyprLayouts` reads the PHYSICAL keyboard's group and is right about
+the session — and that is exactly what makes `type` wrong when the text goes through
+`/dev/uinput`, because wdotool's own device is a fresh keyboard to Hyprland with layout
+state of its own. Measured on `resolute-hypr` 2026-09-09 with `kb_layout = us,de`, after
+`hyprctl switchxkblayout at-translated-set-2-keyboard 1`:
+
+```console
+$ hyprctl -j devices     # abridged
+at-translated-set-2-keyboard  active_layout_index 1  German
+wdotool-virtual-keyboard      active_layout_index 0  English (US)
+$ wdotool keys explain --chars z
+layout: German -- group 2 of 2
+$ wdotool type "zy@ Strasse"
+zyq Strasse
+```
+
+The `@` was encoded as the German AltGr+Q and landed in the injected device's US group as
+a plain `q`. Before the reader existed wdotool said it was guessing and typed correctly.
+**Not yet**, and the fix is ours rather than a rung of the ladder: the uinput encoder must
+ask for the group ITS OWN device is in. Below that sits route 2,
+`hyprctl switchxkblayout wdotool-virtual-keyboard <n>` around the injection, which moves
+the session's own state and would have to put it back. On the virtual-keyboard path the
+question is moot, because wdotool uploads its own keymap.
+
+### Wayfire
+
+* Wayfire's JSON IPC is **opt-in**. `[core] plugins` in `~/.config/wayfire.ini` REPLACES
+  the default list rather than adding to it, and every IPC method comes from a loaded
+  plugin. `plugins = ... ipc ipc-rules` is the minimum: with it the socket answers 23
+  methods — every `window-rules/*` read and write, plus `wayfire/*` and `input/*`.
+  Without `ipc-rules` the table is `["list-methods"]` alone, and wdotool says so by name
+  instead of failing one command at a time:
+  `wayfire backend: this Wayfire's IPC has no window-rules/list-views: the window half is
+  Wayfire's own IPC (AGENTS.md route 2) and it is one config line away -- `plugins = ipc
+  ipc-rules` in wayfire.ini on Wayfire 0.9 or newer -- at the cost of restarting Wayfire
+  to load it`. That is deliberately not a *not yet*: nothing of ours is missing, so the
+  sentence names the rung it is standing on rather than promising work. It is reserved for
+  the one thing it describes: a compositor that accepts the connection and then says nothing, or
+  one that closes it, keeps its own line and is never reported as a configuration mistake.
+* Three more plugins buy three more capabilities, each refused by name when it is
+  missing: `wm-actions` (minimize, fullscreen, sticky, always-on-top, lower) — **not** in
+  Wayfire's stock plugin list — `grid` (maximize) and `vswitch` (desktops). `stipc` adds
+  the Xwayland display for the X-id half.
+* **Wayfire has a real `windowlower`**, which sway has never had
+  (`wm-actions/send-to-back`).
+* **Wayfire has no plain raise.** `windowraise` focuses the window, which raises it inside
+  its layer; `set-always-on-top` is a state, not a raise, and is deliberately not used for
+  one.
+* `windowstate --add MAXIMIZED_VERT --add MAXIMIZED_HORZ` is one `grid/slot_c`; a single
+  axis is **not yet**, and the route is `window-rules/configure-view` on the same IPC
+  (route 2), at the cost of a saved rectangle to restore, because a geometry is not a
+  state and the view would not report itself maximized. The grid plugin's slots are halves
+  of the screen and not axes (`grid/slot_t` is the top half, `tiled-edges` 13), so there
+  is no per-axis maximize to express.
+* `windowstate --toggle ABOVE` is refused: Wayfire takes always-on-top and never reports
+  it back (the view record's `layer` stayed `workspace` on both sides of the call), so
+  there is nothing to toggle from. `--add` and `--remove` work. A Wayfire that put
+  always-on-top in the view record would fix it, which is route 6.
+* `getmouselocation` answers from the compositor
+  (`window-rules/get_cursor_position`) **before any move** — the one thing no other
+  wlroots backend can do. Measured live: `x:960 y:540`, the compositor's own
+  `960.0, 540.0` to the pixel, at scale 1, which is the only scale the rig has measured.
+* `wxprop -spy` works here, and so does wdotool's own `selectwindow`:
+  `window-rules/events/watch` is mapped onto the `(id, change)` vocabulary
+  `WindowBackend.events()` documents (`view-mapped` → new, `view-unmapped` → close,
+  `view-focused` → focus, `view-title-changed` → title, `view-geometry-changed` → move,
+  `view-fullscreen` → fullscreen_mode). `selectwindow` still waits for the next window to
+  take focus, as on sway: Wayfire's IPC has a cursor position but no picker and no way to
+  grab a button press from outside the compositor, so the click-to-pick route is evdev for
+  the press (route 4) with the hit test ours.
+* `windowsize` is exact only to the client's own quantisation. `wdotool windowsize <foot>
+  800 600` reads back `798x598` and `wwmctl -e 0,10,20,300,200` reads back `300x195`,
+  because a terminal commits the nearest whole character cell. X11 has no single answer to
+  be equal to: `xdotool windowsize 800 600` on an `xterm` read back `800x600` under no
+  window manager and under xfwm4, and `796x589` under openbox and marco, which honour the
+  `WM_NORMAL_HINTS` increments — and under openbox the POSITION moved too (`100,100`
+  asked, `102,140` read back). On Wayfire the position is exact to the pixel.
+
+### Cinnamon
+
+* **Nothing to install**: `org.Cinnamon.Eval`, one constant JS program per operation, with
+  only integers ever interpolated into one.
+* **Shading works** (`windowstate --add SHADED`): muffin kept `shade`/`unshade`/
+  `is_shaded` where mutter dropped shading and KWin 6 removed it, and
+  `_NET_WM_STATE_SHADED` is in muffin's `_NET_SUPPORTED` too. `wxprop -id` does not print
+  it back yet, though, where the real `xprop` on a Cinnamon X11 session does — **not yet**,
+  one atom in `wxprop/core.py`.
+* `SKIP_TASKBAR`, `SKIP_PAGER` and `MODAL` warn and succeed, as on GNOME; `BELOW` is
+  refused by name. All four are **not yet**: for an XWayland window `wwmctl` already sets
+  them on the X plane (route 5), and for a native one it is one setter each in muffin
+  (route 6).
+* **A resize is asynchronous**: a native Wayland client takes the new size when it acks
+  the configure, so `windowsize` polls `get_frame_rect()` for up to half a second and
+  answers when it has landed.
+* `-spy` / `events()` is **polled** — one list diff every 250 ms. Eval has no signal
+  route: a program run through it cannot register a D-Bus object, and `org.Cinnamon`
+  publishes no window signal. A window that is already focused in the poll that first sees
+  it gets both `new` and `focus`, the way sway sends them, because the rising edge a later
+  poll would look for has already gone by.
+* `selectwindow` is **not yet**: `global.stage.grab` does not exist in muffin's Clutter
+  (`global.begin_modal` does, and is a keyboard grab, not a click). The route is a reactive
+  full-stage Clutter actor pushed in through `org.Cinnamon.Eval`, which installs nothing
+  (route 2); shipping the same actor as a Cinnamon extension is route 3 and only buys
+  surviving a Cinnamon restart. Either way the cost is a modal grab that must be released
+  even when wdotool dies holding it.
+* No `--vkbd`: Cinnamon 6.4 advertises no virtual-keyboard protocol, so input is
+  `/dev/uinput`, i.e. the udev rule or root. Muffin master (the 6.6/6.8 line) adds
+  `virtual-keyboard-unstable-v1` and `wlr-layer-shell`, so a future Cinnamon gets a
+  privilege-free keyboard path; there is still no virtual pointer, no foreign-toplevel and
+  no output management there.
+
+### The wlroots floor, and COSMIC
+
+The `wlr` backend is what answers on labwc, Budgie, Xfce-on-Wayland, LXQt-on-Wayland and
+river, and on sway or Wayfire when `WDOTOOL_BACKEND=wlr` forces it. What it can and cannot
+do is `zwlr_foreign_toplevel_management_v1`'s shape and is stated as such:
+
+* `windowmove`, `windowsize`, `windowraise` and `windowlower` refuse by naming the
+  protocol — `zwlr_foreign_toplevel_management_v1 carries no geometry and no stacking` —
+  and not by borrowing sway's tiling excuse, which is wrong for labwc, a stacking
+  compositor. **Not yet**, route 5 for an XWayland window (`ConfigureWindow` over the X
+  plane) and route 6 for a native one.
+* Native-window geometry is `0,0` plus the output rectangle, for the same reason.
+* Desktops work where the compositor publishes `ext_workspace_manager_v1` (labwc, Budgie
+  10.10, Xfce 4.20 on Wayland) and the refusal stands where it does not (sway 1.11,
+  Wayfire 0.10) — route 1 where the compositor grows the protocol, else route 2, the
+  compositor's own IPC, which is one backend per compositor. `window_desktop` stays -1 on
+  every one of them, because neither foreign-toplevel protocol carries a workspace
+  association.
+* `windowstate` SHADED/ABOVE/BELOW/SKIP_* is **not yet**, route 6: the handle's state
+  array has exactly maximized, minimized, activated and fullscreen, so it is one state bit
+  and one request in the compositor. `FULLSCREEN` against a v1 manager is route 1 —
+  version 2 of the protocol, which it already defines: a newer compositor build and no
+  code of ours.
+* `windowminimize` on a compositor with no minimized state (sway forced onto this backend,
+  river-classic 0.3.17) warns after waiting 0.5 s for the handle to say otherwise. On sway
+  the route is 2, its own scratchpad, which the sway backend already takes.
+* **river 0.4 accepts every one of these and does nothing**, and the backend says so
+  rather than believing it: see README footnote **(n)**.
+* The backend's own precondition says the same kind of thing: `wlr backend: compositor
+  does not offer zwlr_foreign_toplevel_management_unstable_v1; not yet here, and the route
+  is that protocol where the compositor grows it (route 1), else a backend over the
+  compositor's own IPC (route 2), which is what the sway, hypr and cinnamon backends
+  already are`.
+* `windowactivate` takes a `wl_seat` and the backend will not send a null one, so a
+  registry with no seat gets `compositor offers no wl_seat; ... not yet here, and the
+  route is a registry that carries one (route 1), else the compositor's own IPC where it
+  has one, which focuses a window by id and needs no seat at all (route 2)`. COSMIC's twin
+  says route 6 instead, because the COSMIC request names a seat in its own signature.
+
+COSMIC is its own backend on its own protocols, one tier above the floor: real workspaces,
+ids minted from the 32-character `identifier`, and activate/close/maximize/minimize/
+fullscreen gated on `zcosmic_toplevel_manager_v1`'s capability array. No move, no resize,
+no raise, no lower — `set_rectangle` is a minimise hint — and no pid, so `kill` answers
+`no pid for window N`. `FULLSCREEN` and `STICKY` are refused where cosmic-comp's capability
+array is `[1,2,3,4,6]` and carries neither 5 nor 7: the request works anyway, and the array
+decides, because a compositor that advertises a capability it does not have is the case
+worth reporting. `set_desktop_for_window` sends `move_to_ext_workspace`, gated on
+capability 6, because cosmic-comp's handler for the deprecated `move_to_workspace` is an
+empty arm while its capability array still advertises 6 rather than 8. Geometry is the
+output rectangle, silently, where the `geometry` event never arrives — which is the only
+COSMIC session ever measured — so a warning there would be one line of stderr on every
+window command (`CosmicBackend.geometry_is_floor` is the flag for a caller that wants to
+say so). A **sandboxed** COSMIC client gets none of this: cosmic-comp builds the toplevel
+list, the info and the manager behind `client_not_sandboxed`, so a Flatpak or snap wdotool
+is announced none of them; the route is an unsandboxed run of the protocol that is already
+there (route 1), and on a compositor that really has neither it is a backend over its own
+IPC (route 2).
+
+### What the base class answers, and for whom
+
+Four gaps live in `wdotool/backend.py:WindowBackend`'s defaults rather than in any one
+backend: a backend reaches them by not overriding the method. Measured 2026-09-09 against
+the eight backend modules — gnome and kwin reach none of them.
+
+| command | which backends land here | not yet, with its route and cost |
+|---|---|---|
+| `set_num_desktops`, `wwmctl -n` | sway, wlr, cosmic, hypr, cinnamon, wayfire | counting workspaces into existence. Route 1 on wlr and cosmic — the same `ext_workspace_manager_v1` `set_desktop` already drives, whose group creates a workspace and whose handle removes one; route 2 on sway, hypr, cinnamon and wayfire, each compositor's own IPC or bus. The cost is honouring the per-workspace capability that gates both, and a count that does not read back where a compositor drops a workspace as soon as it empties |
+| `selectwindow` | wlr, cosmic | a picker. Neither protocol carries a pointer position or a window geometry to put a click in, so the route is a wlr-layer-shell overlay that takes the press (route 1) over a geometry source, at the cost of a surface that eats the click it reads |
+| `behave`, window events | wlr, cosmic | an event stream. The toplevel protocol already delivers title, app_id, state and closed, so the route is that same protocol (route 1), at the cost of a connection held open for the whole wait and its vocabulary mapped onto sway's |
+| `set_desktop_for_window` | wlr | binding a toplevel to a workspace. The handle has no such request and `ext_workspace_manager_v1` names workspaces without taking windows, so the route is a protocol that does both — cosmic-comp ships `move_to_ext_workspace` and the COSMIC backend already sends it (route 1) — else a patched compositor (route 6) |
+
+### i3
+
+`WDOTOOL_BACKEND=sway` is also i3's spelling (`i3` is an alias of it; the dialect is
+detected off `GET_VERSION`, not off the variable), and on i3 the backend answers what it
+used to get wrong. None of it is what an i3 user gets by default — the four tools hand over
+to the originals there — so this section is about `FUCKWAYLAND_PASSTHROUGH=never`.
+
+* every id is the window's **X id**, the same number `wmctrl -l`, `xwininfo` and
+  `xprop -id` use. i3's own container ids are 47-bit pointers; the one this printed
+  truncated to `0x5168c680` and `wxprop -id` answered `BadWindow`.
+* `windowmove` / `windowsize` work on a floating i3 window. They used to refuse every
+  window as tiled, because i3 wraps a floated view in a `floating_con`. Measured live:
+  `2640,398` → `125,159`.
+* `getwindowpid` answers from `_NET_WM_PID`; i3's tree carries no pid at all.
+* `search --onlyvisible` matches: "visible" on i3 means "on a workspace `GET_WORKSPACES`
+  calls visible", which excludes both the scratchpad and every workspace that is not the
+  one shown on its output.
+* `getdisplaygeometry` answers (`3840 1080` on the measured two-head session) instead of
+  exiting 2 with "no Wayland session found": when the daemon's `wl_output` query has
+  nothing to read, the window backend is asked before the refusal. The refusal is
+  unchanged when there is no backend either.
+* the four `sway:`-prefixed refusals say `i3` on an i3 session. They used to name a
+  program the user was not running.
+* **the one difference left, stated rather than fixed**: desktop numbers. i3's own
+  `_NET_WM_DESKTOP` is dense by position; ours is `workspace number - 1`, so on a session
+  whose only workspace is number 2, `wwmctl -d` says 1 where `wmctrl -d` says 0. And
+  `wwmctl -d` differs from `wmctrl -d` in the geometry columns too: i3 publishes no
+  `_NET_DESKTOP_GEOMETRY` and no `_NET_WORKAREA`, so the original prints `DG: N/A ... WA:
+  N/A` and we print the workspace rect.
+
+### Reloading the bridge
+
+On GNOME the bridge is an extension, and "log out and back in" is only half the story.
+Measured on `noble-gnome-x11` (GNOME Shell 46.0, mutter 46.2, 2026-09-09) and true on
+Wayland too:
+
+* An extension the running shell already knows can be taken out and put back **in that
+  process**: `gnome-extensions disable` releases `org.fuckwayland.Bridge` (`NameHasOwner`
+  → `(false,)` about 3 s later), `enable` takes it back (about 4 s later), and
+  gnome-shell's pid never changes. That is what the package's autostart uses.
+* The logout is for a shell that has never **scanned** the extension directory, i.e. a
+  fresh install.
+* A bridge whose `extension.js` has **changed** still needs one, and that is **not yet**.
+  `org.gnome.Shell.Extensions.ReloadExtension` answers `NotSupported: ReloadExtension is
+  deprecated and does not work` on 46.2, so route 2 refuses. The lowest route left is 3,
+  code we install into the compositor: `extension.js` is an ES module and GJS re-reads a
+  module imported under a URL it has not seen, so a stub extension that dynamic-imports
+  the real module with a cache-busting query and re-imports it on a `Reload` method would
+  do it — at the cost of splitting the bridge in two, a hop through the stub on every
+  method, and a `disable()` that drops every signal and timeout by hand, because GJS
+  cannot unload the old module. Below that is route 6, a package of ours that patches the
+  shell or its unit. Nobody has written or measured either.
+
+**Do not run `gnome-shell --replace` to reload it.** On a systemd-managed GNOME session
+that is not a reload, it is a way to lose your extensions:
+`/usr/lib/systemd/user/org.gnome.Shell@x11.service` is `Restart=always`, `RestartSec=0ms`,
+`RefuseManualStart=on`, `RefuseManualStop=on`, with
+`OnFailure=org.gnome.Shell-disable-extensions.service`. A hand-run `--replace` makes the
+unit's shell exit, systemd restarts it instantly, the hand-started one still holds the WM
+selection, and after four rounds the unit goes `failed (Result: protocol)`. That OnFailure
+unit runs `gsettings set org.gnome.shell disable-user-extensions true`, a **persistent**
+dconf key, so afterwards the bridge reads `Enabled: No / State: INITIALIZED` in every later
+session of that user. It does not come back on a reboot, on `gnome-extensions enable`, or
+on deleting `/run/user/1000/gnome-shell-disable-extensions` — all three tried. One thing
+recovers it, live and with no logout:
+
+```sh
+gsettings set org.gnome.shell disable-user-extensions false
+```
+
+after which the shell loads the extension and takes the name within four seconds.
+
 ### What differs from X on KDE Plasma
 
 The bullets above are the mechanism. This is the same story as a script writer meets

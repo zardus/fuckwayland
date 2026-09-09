@@ -41,6 +41,17 @@ IPC_TIMEOUT = 10.0
 #: [R recon2/wayfire.md §3.3], so the presence of this one name is what says "0.9 or newer, with ipc-rules".
 GATE_METHOD = "window-rules/list-views"
 
+#: The gate's refusal.  Not a NOT-YET: nothing is missing that we would have to route around, because the
+#: window half is already there and two words in wayfire.ini switch it on -- so the sentence names the rung
+#: it is standing on (route 2, Wayfire's own IPC) and what it costs the user, which is one config line and a
+#: restart.  Batch 19 declined to touch it for that reason and batch 23 kept the substance, naming the rung
+#: so a reader does not have to work out which one this is.  `this Wayfire's IPC has no %s` stays first: no
+#: step file greps it (checked against vm/live-smoke.d/ on 2026-09-09), but it is the half that says what
+#: happened.
+NO_IPC_RULES = ("wayfire backend: this Wayfire's IPC has no %s: the window half is Wayfire's own IPC "
+                "(AGENTS.md route 2) and it is one config line away -- `plugins = ipc ipc-rules` in "
+                "wayfire.ini on Wayfire 0.9 or newer -- at the cost of restarting Wayfire to load it")
+
 #: wlroots' edge bits, as `tiled-edges` reports them: TOP 1, BOTTOM 2, LEFT 4, RIGHT 8. Measured against the
 #: grid plugin on this box (wayfire 0.10.0): `grid/slot_l` -> 7, `slot_t` -> 13, `slot_r` -> 11, `slot_b` ->
 #: 14, `slot_c` -> 15. So a full-height window has both of TILED_V and a full-width one both of TILED_H.
@@ -255,8 +266,7 @@ class WayfireBackend(WindowBackend):
             # raises a wire error without this flag and is still swallowed, which is the case the
             # fall-through was protecting.
             self.ipc.close()
-            err = CmdError("wayfire backend: this Wayfire's IPC has no %s: Wayfire 0.9 or newer with "
-                           "`plugins = ipc ipc-rules` is required" % GATE_METHOD)
+            err = CmdError(NO_IPC_RULES % GATE_METHOD)
             err.api_gate = True
             raise err
         self._x = "unset"     # the X11 connection, opened at most once per process

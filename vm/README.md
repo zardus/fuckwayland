@@ -1,11 +1,12 @@
 # vm/ — test VMs
 
-**`vmctl`** is the rig: full, default-configured Ubuntu desktops in QEMU/KVM, in
-**thirteen flavors**. Eleven are four desktops (GNOME, KDE Plasma, Xfce, sway) over three
-releases, built from an Ubuntu *cloud* image plus a desktop metapackage. The other two
-(**`resolute-gnome-iso`**, **`noble-gnome-iso`**) are installed from the Ubuntu 26.04 and
-24.04 desktop **ISOs by the Ubuntu installer itself** — the images a claim about "a default
-Ubuntu desktop install" has to rest on, one per supported LTS.
+**`vmctl`** is the rig: full, default-configured desktops in QEMU/KVM, in **38 flavors** over
+four distributions — Ubuntu, Fedora, Arch and NixOS — and 19 desktop tokens, from GNOME and
+Plasma down to river with a reference window manager built from source. Most are a *cloud* image
+plus a desktop metapackage; two (**`resolute-gnome-iso`**, **`noble-gnome-iso`**) are installed
+from the Ubuntu 26.04 and 24.04 desktop **ISOs by the Ubuntu installer itself** — the images a
+claim about "a default Ubuntu desktop install" has to rest on, one per supported LTS — and two
+(**`nixos-sway`**, **`nixos-gnome`**) are NixOS configurations built with `nix build`.
 
 Each autologins user `test` on a **multi-head virtio-vga** whose monitors are plugged,
 unplugged and resized from the host at runtime, with host-side screenshots of every head.
@@ -23,7 +24,7 @@ repo README.
 
 ```console
 $ vm/vmctl build noble-gnome            # ~7 min, once; golden image -> ~/vm-data/golden/
-$ vm/vmctl build resolute-kde           # any of the eleven cloud-image flavors (see Flavors below)
+$ vm/vmctl build resolute-kde           # any of the 34 cloud-image flavors (see Flavors below)
 $ vm/build-iso-golden.sh resolute-gnome-iso   # ~14 min: the real installer, off the desktop ISO
 $ vm/build-iso-golden.sh noble-gnome-iso      # ~21 min: the same, off the 24.04 desktop ISO
 $ vm/vmctl start gnome1 --flavor noble-gnome --heads 3
@@ -140,43 +141,175 @@ keys/id_ed25519[.pub]            guest root ssh key, generated once
 
 ## Flavors
 
-Thirteen golden images. **Eleven** are four desktops over three Ubuntu releases — Plasma twice on
-each LTS, once on Wayland and once on Xorg, and GNOME on 26.10 as well — each an Ubuntu
-*cloud* image plus that desktop's metapackage; the other **two**, `resolute-gnome-iso` and `noble-gnome-iso`, are real Ubuntu
-26.04 and 24.04 desktop **installations**, done by the Ubuntu installer off the release ISOs
-with every question left alone. The eleven exist because one script gets four desktops out of
-them; the two exist because "it works out of the box on a default Ubuntu desktop" is a claim
+**38 flavors** across four distributions: 25 Ubuntu, 6 Arch, 5 Fedora and 2 NixOS. By builder,
+34 are a cloud image plus a desktop metapackage, 2 are an Ubuntu desktop ISO run through the
+real installer (`resolute-gnome-iso`, `noble-gnome-iso`) and 2 are NixOS configurations built
+with `nix build` (`nixos-sway`, `nixos-gnome`). CI builds 30 of them on every push and 8 on
+demand. The cloud-image flavors exist because one script gets 19 desktops out of them; the
+two ISO ones exist because "it works out of the box on a default Ubuntu desktop" is a claim
 about an *installed* system — one per supported LTS, because the two releases install
 differently — and a cloud image plus `ubuntu-desktop` is not one (26.04: 226 packages a
 default install does not have, 55 it has and the cloud image has not, a different kernel with
 no firmware at all, 8 snaps against the default 13; 24.04: 240 / 55 and the same story —
 *The default install* and *The second default install*, below).
 
-A flavor is one `vm/flavors/<flavor>.yaml` (cloud-init user-data). Its `# vmctl-base:` header
-names the base cloud image — or, for an ISO flavor, `# vmctl-iso:` names the ISO — and its
-`# vmctl-desktop:` header (`gnome`, `kde`, `kde-x11`, `xfce`, `sway`) is what `vmctl`
-and `selftest.sh` key off: which display manager owns the session, what `loginctl` calls its
-`Type`, which sockets `vmctl user` must export, which process paints the first frame, and which
-native tool reports monitors.
+The 25 Ubuntu flavors are what the *Desktop support* matrix in the repo README is measured on,
+minus four that stand behind that table rather than in it: the two `stonking-*` images (Ubuntu
+26.10, a development release), which are probes for one protocol change each, and the two
+`*-gnome-iso` ones, which are the default-install check rather than a desktop of their own. That
+leaves 21 images under the matrix, which is the number the README's own sentence carries.
 
-| flavor | release | desktop (as built) | display manager | session | native display tool |
-|---|---|---|---|---|---|
-| `noble-gnome` | 24.04 LTS | GNOME Shell 46 / mutter 46 (`ubuntu-desktop`) | GDM | Wayland | mutter's `org.gnome.Mutter.DisplayConfig.GetCurrentState` |
-| `resolute-gnome` | 26.04 LTS | GNOME Shell 50 / mutter 50 (`ubuntu-desktop`) | GDM | Wayland | the same |
-| `noble-kde` | 24.04 LTS | Plasma 5.27 / KWin 5.27 (`kubuntu-desktop`, `plasma-workspace-wayland`) | SDDM | Wayland | `kscreen-doctor -o` |
-| `noble-kde-x11` | 24.04 LTS | the same packages, started as the **Plasma X11 session** (Xorg + `kwin_x11`) | SDDM | **X11** | `kscreen-doctor -o` (libkscreen's XRandR backend); `xrandr` |
-| `resolute-kde` | 26.04 LTS | Plasma 6.6 / KWin 6.6 (`kubuntu-desktop`) | SDDM | Wayland | `kscreen-doctor -o` |
-| `resolute-kde-x11` | 26.04 LTS | Plasma 6.6 / KWin 6.6 on **X11** (`kubuntu-desktop` **plus `plasma-session-x11`, `kwin-x11`** — 26.04 installs no X11 session by itself) | SDDM | **X11** | the same |
-| `noble-xfce` | 24.04 LTS | Xfce 4.18 (`xubuntu-desktop`) | LightDM | **X11** | `xrandr` |
-| `resolute-xfce` | 26.04 LTS | Xfce 4.20 (`xubuntu-desktop`) | LightDM | **X11** | `xrandr` |
-| `resolute-sway` | 26.04 LTS | sway 1.11 / wlroots, Xwayland, `foot`, `grim` | greetd | Wayland | `swaymsg -t get_outputs` |
-| `stonking-kde` | 26.10 | Plasma 6.7 / KWin 6.7 (`kde-plasma-desktop`) | SDDM | Wayland | `kscreen-doctor -o` |
-| `stonking-gnome` | 26.10 | GNOME Shell 51 / mutter 51 (`ubuntu-desktop-minimal`) | GDM | Wayland | the same |
-| **`resolute-gnome-iso`** | 26.04 LTS | **GNOME Shell 50.1 / mutter 50.1 — installed from `ubuntu-26.04.1-desktop-amd64.iso` by the Ubuntu installer, default source `ubuntu-desktop-minimal`** | GDM | Wayland | the same |
-| **`noble-gnome-iso`** | 24.04 LTS | **GNOME Shell 46.0 / mutter 46 — installed from `ubuntu-24.04.4-desktop-amd64.iso` by the Ubuntu installer, default source `ubuntu-desktop-minimal`** | GDM | Wayland | the same |
+The 13 Fedora, Arch and NixOS flavors have no golden in CI yet: `scripts/ci-golden.sh` has no
+fetch rule for them, so every one of their jobs on run 34340513060 ended before the smoke
+started.
 
-The eleven cloud-image flavors (the two ISO flavors keep their installer's defaults instead —
-see below for what that changes):
+A flavor is one `vm/flavors/<flavor>.yaml`, a cloud-config whose comments carry the headers
+every rig script reads with the same `sed -n 's/^#[[:space:]]*vmctl-<key>:...` idiom:
+
+| header | values | default | who reads it |
+|---|---|---|---|
+| `# vmctl-desktop:` | a key of `vm/vmctl`'s `DESKTOPS` table | `gnome` | vmctl, `selftest.sh`, `live-smoke.sh` |
+| `# vmctl-base:` | a cloud image in `$VMIMAGES` | — | `vmctl build` |
+| `# vmctl-iso:` (+ `-iso-sha256`, `-iso-url`) | a release ISO | — | `vm/build-iso-golden.sh` |
+| `# vmctl-nix:` | a `nixosConfigurations` attribute | — | `vm/build-nixos-golden.sh` |
+| `# vmctl-distro:` | `ubuntu` \| `fedora` \| `arch` \| `nixos` | `ubuntu` | the host side only: the package-list shape, the archive to wait for, the display-manager hint |
+| `# vmctl-ci:` | `push` \| `on-demand` | `push` | CI's plan job |
+| `# vmctl-base-sha256:` | 64 hex digits | — | `scripts/ci-golden.sh` |
+
+Exactly one of `-base`, `-iso` and `-nix` per flavor: they are three different builders, and the
+header is how each recognises its own. `# vmctl-distro:` is host-side only — the guest derives
+its package manager from `/etc/os-release`'s `ID`, so a yaml cannot lie to the guest about what
+it is. The `# vmctl-desktop:` header is what `vmctl` and `selftest.sh` key off: which display
+manager owns the session, what `loginctl` calls its `Type`, which sockets `vmctl user` must
+export, which process paints the first frame, and which native tool reports monitors.
+`vmctl flavors` prints the whole table — flavor, distro, desktop, CI class, what it is built
+from — which is the answer to "what can I build".
+
+The table's last two columns are `# vmctl-distro:` and `# vmctl-ci:` written out verbatim, and
+`tests/test_docs_matrix.py` reads them back against each yaml cell by cell; the `release` column
+beside the flavor is prose, and it is the column
+`tests/test_backend_gnome.py::ShippedFilesTests` pulls `GNOME Shell <major>` out of to check the
+bridge claims every shell the rig carries, so the header line is an anchor as well as a heading.
+
+| flavor | release | desktop (as built) | display manager | session | native display tool | distro | CI |
+|---|---|---|---|---|---|---|---|
+| `noble-gnome` | Ubuntu 24.04 LTS | GNOME Shell 46 / mutter 46 (`ubuntu-desktop`) | GDM | Wayland | mutter's `org.gnome.Mutter.DisplayConfig.GetCurrentState` | `ubuntu` | push |
+| **`noble-gnome-iso`** | Ubuntu 24.04 LTS | **GNOME Shell 46.0 / mutter 46 — installed from `ubuntu-24.04.4-desktop-amd64.iso` by the Ubuntu installer, default source `ubuntu-desktop-minimal`** | GDM | Wayland | the same | `ubuntu` | push |
+| `noble-gnome-x11` | Ubuntu 24.04 LTS | GNOME Shell 46 on **Xorg** (`ubuntu-xorg.desktop`, the same `ubuntu-desktop` as `noble-gnome`) | GDM with `WaylandEnable=false` | **X11** | `xrandr`, with `org.gnome.Mutter.DisplayConfig` as a second opinion that must agree | `ubuntu` | push |
+| `noble-kde` | Ubuntu 24.04 LTS | Plasma 5.27 / KWin 5.27 (`kubuntu-desktop`, `plasma-workspace-wayland`) | SDDM | Wayland | `kscreen-doctor -o` | `ubuntu` | push |
+| `noble-kde-x11` | Ubuntu 24.04 LTS | the same packages, started as the **Plasma X11 session** (Xorg + `kwin_x11`) | SDDM | **X11** | `kscreen-doctor -o` (libkscreen's XRandR backend); `xrandr` | `ubuntu` | push |
+| `noble-xfce` | Ubuntu 24.04 LTS | Xfce 4.18 (`xubuntu-desktop`) | LightDM | **X11** | `xrandr` | `ubuntu` | push |
+| `resolute-budgie` | Ubuntu 26.04 LTS | Ubuntu Budgie 10.10.2 **on labwc** (magpie is gone) | SDDM (`Session=budgie-desktop.desktop`) | Wayland | `wlr-randr`; second opinion `org.buddiesofbudgie.*` on the session bus | `ubuntu` | push |
+| `resolute-cinnamon` | Ubuntu 26.04 LTS | Cinnamon 6.4.13 on muffin 6.4.1 (`ubuntucinnamon-desktop`, `cinnamon.desktop`) | LightDM, `autologin-session=cinnamon` | **X11** | `xrandr` | `ubuntu` | push |
+| `resolute-cinnamon-wayland` | Ubuntu 26.04 LTS | the same packages — Cinnamon 6.4.13 on muffin 6.4.1 — started as `cinnamon-wayland.desktop` ("Cinnamon on Wayland (Experimental)") | LightDM, `autologin-session=cinnamon-wayland` | Wayland | `org.cinnamon.Muffin.DisplayConfig.GetCurrentState` over `gdbus` | `ubuntu` | push |
+| `resolute-gnome` | Ubuntu 26.04 LTS | GNOME Shell 50 / mutter 50 (`ubuntu-desktop`) | GDM | Wayland | mutter's `GetCurrentState` | `ubuntu` | push |
+| **`resolute-gnome-iso`** | Ubuntu 26.04 LTS | **GNOME Shell 50.1 / mutter 50.1 — installed from `ubuntu-26.04.1-desktop-amd64.iso` by the Ubuntu installer, default source `ubuntu-desktop-minimal`** | GDM | Wayland | the same | `ubuntu` | push |
+| `resolute-hypr` | Ubuntu 26.04 LTS | Hyprland 0.53.3 (aquamarine 0.10.0), Xwayland, `foot`, `wl-mirror` | greetd (`[initial_session]`, `command = "Hyprland"`) | Wayland | `hyprctl -j monitors`; `wlr-randr` 0.4.1 as a second READER only | `ubuntu` | push |
+| `resolute-i3` | Ubuntu 26.04 LTS | i3 4.25.1 (`i3 i3status xterm lightdm dbus-x11`; i3 depends on no display manager) | LightDM + `lightdm-gtk-greeter`, `autologin-session=i3` | **X11** | `xrandr` (i3 has no `output` command at all) | `ubuntu` | push |
+| `resolute-kde` | Ubuntu 26.04 LTS | Plasma 6.6 / KWin 6.6 (`kubuntu-desktop`) | SDDM | Wayland | `kscreen-doctor -o` | `ubuntu` | push |
+| `resolute-kde-x11` | Ubuntu 26.04 LTS | Plasma 6.6 / KWin 6.6 on **X11** (`kubuntu-desktop` **plus `plasma-session-x11`, `kwin-x11`** — 26.04 installs no X11 session by itself) | SDDM | **X11** | the same | `ubuntu` | push |
+| `resolute-labwc` | Ubuntu 26.04 LTS | labwc 0.9.3 (wlroots 0.19.2), Xwayland, `foot`, `swaybg`, `wl-mirror` | greetd (`[initial_session]`, `command = "labwc"`) | Wayland | `wlr-randr` 0.4.1 — a deliberately weak oracle, the same protocol `wxrandr`'s wlr backend writes through | `ubuntu` | push |
+| `resolute-lxqt` | Ubuntu 26.04 LTS | LXQt 2.3 on **Openbox** (`lubuntu-desktop`, never `lxqt-core`) | SDDM (`Session=lxqt.desktop`) | **X11** | `xrandr` | `ubuntu` | push |
+| `resolute-lxqt-wayland` | Ubuntu 26.04 LTS | Lubuntu's LXQt 2.3 **on labwc** (`lxqt-wayland-session` 0.3.1) | SDDM (`Session=lxqt-wayland.desktop`) | Wayland | `wlr-randr` | `ubuntu` | push |
+| `resolute-mate` | Ubuntu 26.04 LTS | MATE 1.26 on marco 1.26.2 (`ubuntu-mate-desktop`, `mate.desktop`) | LightDM, `autologin-session=mate` | **X11** | `xrandr` | `ubuntu` | push |
+| `resolute-sway` | Ubuntu 26.04 LTS | sway 1.11 / wlroots, Xwayland, `foot`, `grim` | greetd | Wayland | `swaymsg -t get_outputs` | `ubuntu` | push |
+| `resolute-wayfire` | Ubuntu 26.04 LTS | Wayfire 0.10.0 (wlroots 0.19.1) with `plugins = ... ipc ipc-rules stipc` | greetd | Wayland | Wayfire's own `window-rules/list-outputs` over its JSON IPC, `wlr-randr` as the fallback | `ubuntu` | push |
+| `resolute-xfce` | Ubuntu 26.04 LTS | Xfce 4.20 (`xubuntu-desktop`) | LightDM | **X11** | `xrandr` | `ubuntu` | push |
+| `resolute-xfce-wayland` | Ubuntu 26.04 LTS | Xfce 4.20 as `startxfce4 --wayland`, i.e. **on labwc** (`xubuntu-desktop` plus `labwc`) | LightDM (`autologin-session=xfce-wayland`) | Wayland | `wlr-randr` | `ubuntu` | push |
+| `stonking-gnome` | Ubuntu 26.10 | GNOME Shell 51 / mutter 51 (`ubuntu-desktop-minimal`) | GDM | Wayland | mutter's `GetCurrentState` | `ubuntu` | push |
+| `stonking-kde` | Ubuntu 26.10 | Plasma 6.7 / KWin 6.7 (`kde-plasma-desktop`) | SDDM | Wayland | `kscreen-doctor -o` | `ubuntu` | push |
+| `fedora43-gnome` | Fedora 43 | GNOME Shell 49 / mutter 49 (`workstation-product-environment`) | GDM (`/etc/gdm`) | Wayland | mutter's `GetCurrentState` | `fedora` | on demand |
+| `fedora44-cosmic` | Fedora 44 | COSMIC, cosmic-comp 1.6.0-3.fc44 (Smithay), Xwayland, `foot` (`cosmic-desktop-environment`) | greetd (`command = "start-cosmic"`) | Wayland | `cosmic-randr list --kdl` | `fedora` | on demand |
+| `fedora44-gnome` | Fedora 44 | GNOME Shell 50.4 / mutter 50.4 (`workstation-product-environment`) | GDM (`/etc/gdm`) | Wayland | mutter's `GetCurrentState` | `fedora` | push |
+| `fedora44-kde` | Fedora 44 | Plasma 6.7 / KWin 6.7 (`kde-desktop-environment`) | **plasma-login-manager** — the one flavor not seated by SDDM or GDM | Wayland | `kscreen-doctor -o` | `fedora` | on demand |
+| `fedora44-sway` | Fedora 44 | sway 1.11 / wlroots, Xwayland, `foot`, `grim` (`sway-desktop-environment`) | greetd (+ `greetd-selinux`) | Wayland | `swaymsg -t get_outputs` | `fedora` | push |
+| `arch-cosmic` | Arch, rolling (20260901) | COSMIC 1:1.7.0-1 | greetd | Wayland | `cosmic-randr list --kdl` | `arch` | on demand |
+| `arch-gnome` | Arch, rolling (20260901) | GNOME Shell 50.4 / mutter 50.4 | GDM (`/etc/gdm`) | Wayland | mutter's `GetCurrentState` | `arch` | on demand |
+| `arch-hypr` | Arch, rolling (20260901) | Hyprland 0.56.2, `xorg-xwayland`, `foot` | greetd | Wayland | `hyprctl -j monitors`; `wlr-randr` 0.5.0 second | `arch` | push |
+| `arch-kde` | Arch, rolling (20260901) | Plasma 6.7 / KWin 6.7 | SDDM | Wayland | `kscreen-doctor -o` | `arch` | on demand |
+| `arch-river` | Arch, rolling (20260901) | river 0.4.8 + **tinyrwm built from source** (commit `5c01698c`) | greetd (`command = "river -c /usr/local/bin/vmctl-river-init"`) | Wayland | `wlr-randr` 0.5.0 (river has no output query at all) | `arch` | on demand |
+| `arch-sway` | Arch, rolling (20260901) | sway 1:1.12 / wlroots, `xorg-xwayland`, `foot` | greetd | Wayland | `swaymsg -t get_outputs`, `wlr-randr` second | `arch` | push |
+| `nixos-gnome` | NixOS 26.05 | GNOME 50.4 | `display-manager` (GDM) | Wayland | `gdbus` on `org.gnome.Mutter.DisplayConfig` | `nixos` | on demand |
+| `nixos-sway` | NixOS 26.05 | sway 1.12 | greetd | Wayland | `swaymsg -t get_outputs` (and `wlr-randr`) | `nixos` | push |
+
+**Four of these images are the same compositor.** labwc is the Wayland session of Xfce 4.20,
+Ubuntu Budgie 10.10 and LXQt 2.x alike, so `resolute-labwc`, `resolute-xfce-wayland`,
+`resolute-budgie` and `resolute-lxqt-wayland` are one compositor under four desktops:
+`vm/live-smoke.d/{xfce-wayland,budgie,lxqt-wayland}.sh` each source `labwc.sh` whole for that
+reason, and the registry of labwc under Xfce is byte-identical to a bare labwc's (the recon
+diffed the two dumps) [recon2/xfce-wayland §1].
+
+**A NixOS flavor is not a base image plus a metapackage.** NixOS publishes no cloud image and
+runs no cloud-init, so the yaml carries headers and reasons only and the image is built from
+`vm/nixos/<flavor>.nix` by `vm/build-nixos-golden.sh`. That build runs its own QEMU inside the
+nix sandbox (nixpkgs' `make-disk-image`), so it counts against the one-VM rule and the script
+refuses to start beside a running rig instance; it needs `kvm` in `nix config show
+system-features` and refuses without it. The root ssh key is baked in rather than seeded, read
+from `$VMDATA/keys/id_ed25519.pub` through `builtins.getEnv` under `--impure`. The image was
+4.9 GiB and ~10 min on 4 vCPU from a cold store [recon2/nixos §7.4].
+`$VMDATA/golden/nixos-*-packages.txt` — written beside the golden by the builder, not committed
+under `vm/reference/` — is the store closure of `/run/current-system` with the hashes stripped,
+not a dpkg list, and the file says so in its first line. Two specialisations are in every NixOS
+image: the default and `without-fuckwayland`; `switch-to-configuration test` between them is the
+offline analogue of `apt-get remove` and re-install.
+
+**`vm/build-image.sh` is one file in three layers**, still embedded whole into the flavor's
+cloud-init user-data by `render_flavor`:
+
+* `pkg_*` — one implementation per package manager (apt, dnf, pacman), chosen from
+  `/etc/os-release`. The five-attempt retry, the name lookup before every attempt and the "no
+  automatic updates" step are per manager: `apt-daily`/snap on Ubuntu, `dnf5-makecache.timer` on
+  Fedora, nothing on Arch. `dnf` treats a `DESKTOP_PKG` word ending in `-environment` as a comps
+  environment (`workstation-product-environment`), which is how Fedora names a desktop.
+* `dm_*` — one per display manager: `dm_gdm` (`gdm3/` or `gdm/`, whichever directory the package
+  created; `WaylandEnable=false` only for an Xorg session; the session NAME resolved off the image
+  — `ubuntu.desktop` on Ubuntu, `gnome.desktop` on Fedora and Arch — never from the flavor's
+  distro header, which the guest does not read), `dm_sddm`, `dm_plasmalogin` (Fedora 44 replaced
+  SDDM with plasma-login-manager in every KDE variant), `dm_plasma` (picks between those two by
+  what is installed), `dm_greetd` (the command in both stanzas plus the `Conflicts=getty@tty1`
+  drop-in) and `dm_lightdm`. `dm_enable` disables whatever already owns
+  `/etc/systemd/system/display-manager.service` by READING the link rather than guessing from a
+  list: cosmic-greeter is greetd, is in the `cosmic-desktop-environment` group and self-enables
+  mid-transaction, and Fedora's `greetd.service` has no `WantedBy=`, so `fedora44-cosmic` died at
+  `systemctl enable greetd.service` until it did.
+* `desktop_*` — the quiet-desktop settings, first-run suppression and the head layout of one
+  desktop.
+* `select_desktop` — the dispatch table, one line per `DESKTOPS` key and nothing else.
+
+Every file the last two layers write is recorded, and on Fedora `relabel` runs `restorecon -R`
+over the list: SELinux is Enforcing there and a file written by cloud-init's `runcmd` carries
+whatever label that process had.
+
+**Head 0 = `Virtual-1` at (0,0) is the rig's contract**, and wlroots adds the initial outputs in
+*reverse* enumeration order. sway is fixed by `/usr/local/bin/vmctl-sway-layout` (swaymsg);
+labwc, river and the desktops on labwc by `/usr/local/bin/vmctl-wlr-layout`, the same script
+written against `wlr-randr` (it steps by each head's own `(current)` mode width, so
+`vmctl start --head-size` is free). Where that helper is HOOKED differs: the bare `labwc` flavor
+puts it in `~/.config/labwc/autostart`, while Budgie, `startxfce4 --wayland` and
+`startlxqtwayland` — three desktops that merely run ON labwc — put it in
+`~/.config/autostart/vmctl-wlr-layout.desktop`, because their labwc is started with a
+`--config-dir` of the desktop's own and because labwc's `environment` file overrides variables
+that are already set, `XDG_CURRENT_DESKTOP` included. Wayfire needs neither
+(`[output:Virtual-N] position = X,0` in `wayfire.ini` places them); Hyprland needs neither
+(`monitor = Virtual-N,preferred,<x>x0,1`, with scale pinned to 1 because a runtime headless
+output defaulted to 2.0); i3 arranges its heads with `xrandr` from its config and paints them
+with `xsetroot -mod 8 8`, because a black root window is one flat colour and fails the rig's
+first-paint check.
+
+Three more per-desktop settings the build writes, each for one measured reason:
+`desktop_wayfire` gives `wayfire.ini` `[input] xkb_layout = us,de`, which is what makes
+`wdotool/xkbmap.py`'s `WayfireLayouts` reachable at all; `desktop_mate` sets
+`org.mate.SettingsDaemon.plugins.xrandr turn-on-external-monitors-at-startup=true`, whose own
+default is false and MATE is the only flavor where it is; and `desktop_lxqt_wayland` calls
+`lxqt_wayland_desktops`, which patches `/usr/share/lxqt/wayland/labwc/rc.xml` from one desktop to
+three. That last one is the system copy on purpose: measured 2026-09-09, `startlxqtwayland` copies
+that directory into `$XDG_CONFIG_HOME/labwc` the first time it is missing and then runs
+`labwc -C $XDG_CONFIG_HOME/labwc -S lxqt-session`, so patching the system copy is what reaches the
+session, while pre-creating `~/.config/labwc` would stop LXQt's own `menu.xml`, `themerc` and
+`environment` from ever being installed.
+
+The cloud-image flavors (the two ISO flavors keep their installer's defaults instead, and the
+two NixOS ones are a configuration rather than an install — see below for what that changes):
 
 * user `test` (uid 1000, password `test`, groups `adm,sudo`, bash, `NOPASSWD` sudo); root ssh by key
   (`~/vm-data/keys/id_ed25519`); hostname = flavor name (instances re-set it to the instance name).
@@ -199,7 +332,7 @@ see below for what that changes):
   every boot. `resolute-sway` has no NetworkManager; there networkd stays in charge.
 * the finished image's package list is dumped over the serial console and stored in
   `golden/<flavor>-packages.txt`, and committed as `vm/reference/<flavor>-packages.txt`
-  for the eleven flavors built on a released Ubuntu. The two 26.10 images are a
+  for the flavors built on a released Ubuntu. The two 26.10 images are a
   development release whose package set moves under the flavor, so theirs stay in
   `golden/` only.
 
@@ -251,8 +384,8 @@ plus a pin against the snap wrapper packages is GDM, `gnome-shell` and
   (`plasma.desktop` is the Wayland one, `plasmax11.desktop` the X11 one), but
   `kubuntu-desktop` installs no X11 session at all there — `plasma-session-x11` and
   `kwin-x11` are in the archive, in universe, and nothing pulls them in — so
-  `resolute-kde-x11` lists them explicitly and is, alone among the ten, **not** a
-  default install of its Ubuntu flavor. It is what a 26.04 user gets after
+  `resolute-kde-x11` lists them explicitly and is, with `resolute-xfce-wayland`, one of the two
+  Ubuntu flavors that is **not** a default install of its Ubuntu flavour. It is what a 26.04 user gets after
   `apt install plasma-session-x11`.
 * `kwriteconfig5`/`kwriteconfig6` (whichever the release ships) turn off the screen locker
   (`kscreenlockerrc`) and display power management (`powerdevilrc`) for `test`.
@@ -332,7 +465,7 @@ nine are what the desktop-support matrix is measured on.
 
 **The default install** (`resolute-gnome-iso`)
 
-The eleven cloud-image flavors answer "does this work on GNOME 50 / Plasma 6 / Xfce /
+The cloud-image flavors answer "does this work on GNOME 50 / Plasma 6 / Xfce /
 sway?", and `noble-gnome-iso` asks this one's question again for 24.04 (below). This one
 answers a different question — "does this work on **a default Ubuntu 26.04 desktop**, freshly
 installed and updated?" — and it can only answer it by being one. Same ISO a person downloads,
@@ -351,7 +484,7 @@ an image that has been tidied up cannot answer a question about an untidy one.
    5 its `select_autoinstall()` looks at — and installs; the installer powers the VM off.
 2. **Configure** (1.5 min). The installed disk is booted once and `vm/build-iso-image.sh`
    runs in it over ssh: update, GDM autologin, cloud-init re-enabled. Then power off, and the
-   disk *is* the golden image — a plain qcow2 with no backing file, unlike the eleven
+   disk *is* the golden image — a plain qcow2 with no backing file, unlike the
    cloud-image ones.
 
 **Why the kernel argument.** The config alone is not enough on the *desktop* installer. With
@@ -851,7 +984,8 @@ This is the measured state, honest gaps included: the
 branch's own checkout copied into each guest and run as `python3 -m <tool>` **inside the
 session** (`vmctl user`), plus a second round as root over plain `vmctl ssh` with an empty
 environment (`env -i`). Every message below is verbatim. None of it is a rig defect —
-`selftest.sh` passes on all nine. On the **X11 flavors** what is measured is the
+`selftest.sh` passes on every flavor whose golden has been built. On the **X11 flavors** what is
+measured is the
 passthrough: on a plain X11 session the tools hand over to the real `xdotool`/`wmctrl`/`xprop`/
 `xrandr` (repo README, *X11*), all four of which the goldens carry, so there they behave as the
 originals do.
@@ -860,6 +994,55 @@ originals do.
 is grouped by desktop and is what a user reads; this one is grouped by flavor and names the
 image. Neither may claim what the other denies: change them together.
 
+**What the last whole-rig run printed**, per flavor: CI run **34340513060** (commit `a544dec`,
+the guest installing `release/fuckwayland_0.4.0_all.deb` built from that tree, three heads).
+Every tally is the run's own `done:` line, and the XFAIL column is the `xwant` lines that
+stayed expected-failures:
+
+| flavor | checks | XFAIL lines | wall |
+|---|---|---|---|
+| `noble-gnome`, `noble-gnome-iso`, `resolute-gnome`, `resolute-gnome-iso`, `stonking-gnome` | 90 pass, 0 fail | 1 | 396–587 s |
+| `resolute-hypr` | 77 pass, 0 fail | 3 | 327 s |
+| `resolute-budgie`, `resolute-xfce-wayland` | 74 pass, 0 fail | 1 | 159–195 s |
+| `resolute-labwc`, `resolute-lxqt-wayland` | 70 pass, 0 fail | 1 | 175–176 s |
+| `resolute-wayfire` | 67 pass, 0 fail | 0 | 158 s |
+| `resolute-cinnamon-wayland` | 65 pass, 0 fail | 7 | 459 s |
+| `resolute-kde`, `stonking-kde` | 60 pass, 0 fail | 0 | 190–198 s |
+| `noble-kde` | 59 pass, 0 fail | 0 | 274 s |
+| `noble-gnome-x11` | 51 pass, 0 fail | 2 | 242 s |
+| `resolute-sway` | 38 pass, 0 fail | 0 | 137 s |
+| `resolute-i3` | 37 pass, 0 fail | 1 | 96 s |
+| `resolute-mate` | 33 pass, 0 fail | 1 | 164 s |
+| `resolute-cinnamon` | 32 pass, 0 fail | 1 | 106 s |
+| `resolute-lxqt` | 24 pass, 0 fail | 1 | 98 s |
+| `noble-kde-x11`, `noble-xfce`, `resolute-kde-x11`, `resolute-xfce` | 19 pass, 0 fail | 1 | 69–116 s |
+| `arch-hypr`, `arch-sway`, `fedora44-gnome`, `fedora44-sway`, `nixos-sway` | no smoke ran | — | — |
+
+The five that ran nothing are the five non-Ubuntu push flavors: `scripts/ci-golden.sh` has no
+fetch rule for a Fedora, Arch or NixOS golden yet, so every one of those jobs ended before the
+smoke started. That is the one thing this table is waiting on.
+
+**Three flavors were also measured by hand on this host on 2026-09-09**, over the working tree
+rather than the released package, and those numbers are here because two of the fixes they
+prove landed after the CI run above. Each flavor gets two rows — the whole run, then the
+`--reuse` rerun of the phases whose fix landed in between — because a run that stops failing
+goes on to ask the checks behind the failure, and a `--reuse` run skips `install` and every
+phase it is not given, so the two tallies are not summable and neither is a sum:
+
+| flavor | run | CI run 34308982263 | 2026-09-09, this tree |
+|---|---|---|---|
+| `resolute-labwc` | whole run, all phases | 61 pass, 9 fail | 59 pass, 3 fail, 1 XFAIL |
+| `resolute-labwc` | `--reuse --phases windows,wm,input` after the root-menu Escape | — | 31 pass, 0 fail, 1 XFAIL |
+| `resolute-budgie` | whole run, all phases | 35 pass, 10 fail | 33 pass, 4 fail |
+| `resolute-budgie` | `--reuse` of every phase after the detection fix | — | 56 pass, 0 fail |
+| `resolute-lxqt-wayland` | whole run, all phases | 61 pass, 7 fail | 59 pass, 1 fail, 1 XFAIL |
+| `resolute-lxqt-wayland` | `--reuse` of every phase after the workspace patch | — | 57 pass, 0 fail, 1 XFAIL |
+
+The three FAILs left in the labwc whole run are the root-menu grab, fixed in the step file
+afterwards and proved by the rerun under it; the four in the Budgie whole run are the detection
+arm plus the layout-restore XPASS, likewise. Neither whole run was repeated after its fix — one
+VM at a time on this host — so no row claims a whole-run tally nobody printed.
+
 | flavor | `wxrandr` | `wwmctl -m` | `wwmctl -l` | `wdotool` | `wxprop -root` | `warandr` |
 |---|---|---|---|---|---|---|
 | `noble-gnome`, `resolute-gnome` | works | works | needs the bridge extension | `getdisplaygeometry` works; window/input commands need the bridge extension | works | works |
@@ -867,12 +1050,25 @@ image. Neither may claim what the other denies: change them together.
 | `noble-kde-x11`, `resolute-kde-x11` | works (hands over to `xrandr`) | works (`wmctrl`) | works (`wmctrl`) | works (`xdotool`) | works (`xprop`) | works (runs the real `xrandr`) |
 | `noble-xfce`, `resolute-xfce` | works (hands over to `xrandr`) | works (`wmctrl`) | works (`wmctrl`) | works (`xdotool` — but see the version note below) | works (`xprop`) | works (runs the real `xrandr`) |
 | `resolute-sway` | works | works | works | works, bar `windowstate MAXIMIZED_*` and moving, resizing, raising or lowering a *tiled* window | works in the session; **synthesized** from a root shell | works, once the image has the GTK 3 bindings |
+| `resolute-hypr`, `arch-hypr` | works (`hypr`, not `wlr`) | works | works, X and native windows under their real ids | works, bar `windowminimize` and `windowlower` | works | works |
+| `resolute-wayfire` | works (`wlr`) | works (`wlroots wm`) | works | works, and nothing here is skipped for tiling | works | works, once the image has the GTK 3 bindings |
+| `resolute-labwc`, `resolute-xfce-wayland`, `resolute-budgie`, `resolute-lxqt-wayland` | works (`wlr`) | works (`wlroots wm`) | works, X and native windows | the wlr floor: no move, resize, raise or lower; desktops over `ext_workspace_manager_v1` | works | works |
+| `arch-river` | works (`wlr`) | works (`wlroots wm`) | works | every mutating window command is accepted by river 0.4 and changes nothing, and the tool says so | works | works |
+| `fedora44-cosmic`, `arch-cosmic` | works (`wlr`, named `COSMIC (wlr-output-management)`) | works (`Smithay X WM`) | works, two workspaces | activate, close and the state pair; no move, resize, raise, lower or pid | works | works |
+| `resolute-cinnamon-wayland` | works (`cinnamon`) | works (`Mutter (Muffin)`) | works | works, bar the states muffin has no setter for; input is `/dev/uinput` only | works | works |
+| `noble-gnome-x11`, `resolute-cinnamon`, `resolute-mate`, `resolute-i3`, `resolute-lxqt` | works (hands over to `xrandr`) | works (`wmctrl`) | works (`wmctrl`) | works (`xdotool` — but see the version note below) | works (`xprop`) | works (runs the real `xrandr`) |
 
 Install the bridge extension on the GNOME flavors (`gnome/install-bridge.sh`, then log the
 session out and in) and both of them pass every cell of this table, on 46 and on 50 —
 `wwmctl -l/-d/-m`, every `wdotool` window command and `wxprop -id` on native windows, as
 `test` and as root. `sudo gnome/install-bridge.sh --udev` is what lets the desktop user
-open `/dev/uinput`; without it every injection command has to run as root, on all nine.
+open `/dev/uinput`; without it every injection command has to run as root, on GNOME, Plasma and
+Cinnamon alike. On the GNOME flavors the logout is only for a shell that has never scanned the
+extension directory: measured on `noble-gnome-x11` (GNOME Shell 46.0, 2026-09-09),
+`gnome-extensions disable` releases `org.fuckwayland.Bridge` about 3 s later and `enable` takes
+it back about 4 s later with the shell's pid unchanged, which is what the install autostart uses.
+A bridge whose `extension.js` has CHANGED still needs one, and that is **not yet**: see the
+Reload note in [docs/WDOTOOL.md](../docs/WDOTOOL.md).
 
 **GNOME** — `wxrandr` prints the real listing through mutter's DisplayConfig
 (`Screen 0: minimum 16 x 16, current 5760 x 1080, maximum 32767 x 32767`,
@@ -1019,6 +1215,317 @@ rc 0. `windowmove` and `windowsize` on a *tiled* window warn and exit 0 without 
 `windowlower` on any window warn and do nothing. `/dev/uinput` on this golden is root-only —
 the udev rule that hands the seat user an ACL lives under `gnome/` but is not GNOME-specific
 (`sudo sh gnome/install-bridge.sh --udev` installs it on any of the nine).
+
+**Hyprland** (`resolute-hypr`, `arch-hypr`) — the first compositor in this tree with a
+first-class backend on **both** sides (`wdotool/backend_hypr.py`, `wxrandr/hypr.py`) after
+having been measured on the generic wlroots floor, so the row worth writing is the difference,
+measured on 0.53.3 in the recon's VM [recon2/hyprland §3] and re-measured on 0.56.2
+[recon2/arch §3.4]. Windows: real geometry and pid (`hyprctl -j clients` publishes `at`, `size`,
+`pid`, `class`, `workspace`, `floating`, `fullscreen`), desktops through the workspaces, ids
+minted from the compositor's `address` so they no longer move when another window closes, and
+XWayland windows listed under their real X id — where the floor printed the whole output as
+every rectangle, pid 0, desktop `-1`, and failed `wwmctl -d` outright. Display:
+`wxrandr --print-backend` says `hypr`, not `wlr`, and that is not a preference (the wlr path is
+in *Hyprland's two output routes*, below). Input: no privilege at all — both
+`zwp_virtual_keyboard_manager_v1` and `zwlr_virtual_pointer_manager_v1` are advertised,
+`wdotool --vkbd on type` needs neither root nor a udev rule, and `mousemove` landed with 0 px of
+error twice. Mirror: Hyprland is, with sway, one of the two compositors measured where `wmirror`
+works (`zwlr_screencopy_manager_v1` v3 on both versions; 0.56.2 adds
+`ext_image_copy_capture_manager_v1`).
+
+`arch-hypr` exists to bracket one of those, and half of that sentence is measured and half is
+not. Measured: on 0.56.2 the `zwlr_output_management` apply is dead from the FIRST request of a
+fresh single-head session, where 0.53.3's first one worked [recon2/arch §3.4]. NOT measured:
+whether a fresh 0.56.2 session takes `hyprctl keyword monitor`, the route our backend uses. It
+answered `ok` and changed nothing there, but only after five timed-out wlr applies had been
+through that session. So `vm/live-smoke.d/hypr.sh` carries the applies as `xwant` on Arch and as
+plain checks on Ubuntu, `arch-hypr`'s first run is what settles it, and nothing here may call
+the 0.56.2 `keyword monitor` measured until that run exists.
+
+**Hyprland's two output routes, measured both ways.** Three readings on `resolute-hypr`
+(Hyprland 0.53.3, three heads, 2026-09-09), which correct one paragraph of [recon2/hyprland §4]:
+on a VIRGIN session both wlr applies time out (10.16 s, 10.26 s) with the head unchanged, each
+naming wxrandr's Hyprland clause; a timed-out wlr apply does **not** stop the session taking
+`hyprctl keyword monitor` — the two applies right after it landed in 0.28 s and 0.36 s, where
+the recon paragraph reads the other way; and AFTER a `keyword monitor` apply the same wlr
+request stops timing out and answers rc 0 in 0.64 s having changed nothing, no stderr, the head
+still where it was. That last one is a defect of ours with no rung of the ladder under it:
+wxrandr's Hyprland backend re-reads what it applied and the wlr backend does not. **Not yet**;
+the fix is one re-read in our own code. `vm/live-smoke.d/hypr.sh` carries the first as a `want`
+at the top of `phase_display` and the third as an `xwant` at the end of it.
+
+**Wayfire** (`resolute-wayfire`) — the second privilege-free family in the rig, and the only
+flavor whose oracle is independent of the protocol under test: `vm/live-smoke.d/oracle.py
+wayfire` reads Wayfire's own JSON IPC (`window-rules/list-outputs`), where `wlr-randr` and
+`wxrandr`'s wlr backend are two clients of one `zwlr_output_manager_v1`. The IPC plugins ship
+inside the base `wayfire` package and none of them is in the default plugin list, so the
+`wayfire.ini` `vm/build-image.sh` writes — `plugins = ... ipc ipc-rules stipc` — is what turns
+the window backend on; a stock Wayfire is a wlr-floor compositor. Wayfire floats by default, so
+every window command is exercised here and none is skipped for tiling.
+
+Measured on the first live run (instance `wf1`, two heads, 2026-09-08, and the 2026-09-09
+re-run): the golden builds in **8.4 min** on 2 vCPU / 3G (876 packages); greetd's autologin
+lands a real seat session (`XDG_SESSION_TYPE=wayland`,
+`WAYFIRE_SOCKET=/run/user/1000/wayfire-wayland-1-.socket`, first frame 2 s after the session
+went active), so libseat does flip logind's `Type` the way sway's does; `wf-panel` paints, and a
+maximized window came back `0,52 1920x1028`, so the panel owns the top 52 px of the work area
+and the grid plugin honours it; `wdotool type` through `/dev/uinput` and `wdotool --vkbd on
+type` both landed byte-exact in the same session; the `[output:Virtual-N] position` stanzas in
+`wayfire.ini` are enough on their own, so this flavor needs one layout helper fewer than sway;
+`wwmctl -l -x` and the ORIGINAL `wmctrl -l -x` print the xterm's row byte for byte the same,
+id column included (`0x0040000c  0 xterm.XTerm           wf1 smokex` from both); `wdotool
+getmouselocation` answers `x:960 y:540` BEFORE anything has warped the pointer, which is
+`window-rules/get_cursor_position`'s `960.0, 540.0` to the pixel, at scale 1, the only scale the
+rig has measured; and with `wmirror Virtual-1 --to Virtual-2 --region 400x300+100+100` running,
+the target head's screendump has standard deviation **0.0707** against the 0.02 flatness line,
+so on this flavor a flat target is a FAIL and not a note.
+
+**The labwc family** (`resolute-labwc`, `resolute-xfce-wayland`, `resolute-budgie`,
+`resolute-lxqt-wayland`) — this is the **generic wlroots floor**, and until these flavors
+existed nothing in the rig ran it: `resolute-sway` has an IPC socket, so `wdotool`, `wwmctl` and
+`wxprop` take the sway backend there and never the generic one. labwc has no IPC socket at all —
+the package is `labwc`, `labnag` and `lab-sensible-terminal` [recon2/labwc §1]. What the floor
+printed before the family landed, on one headless labwc with an xterm and a foot:
+
+```console
+$ wwmctl -lGpx
+0x000f4240 -1 0      0    0    1280 720  xterm.xterm    fuckwayland xtermwin
+$ wwmctl -d
+get_desktop is not supported by the wlr backend                              (rc 1)
+```
+
+with that xterm's real X id `0x40000c` and the X server's own `WM_CLASS` `"xterm", "XTerm"`. A
+same-compositor control settled that this is the backend and not labwc: on one headless sway
+1.11 the same foot window read `0x00000005 0 85920` natively and `0x000f4240 -1 0` under
+`WDOTOOL_BACKEND=wlr` [recon2/labwc §3]. Three of those columns are what these flavors measure:
+desktops over `ext_workspace_manager_v1` (labwc advertises it v1 where sway 1.11 advertises no
+workspace protocol at all), XWayland rows under their real X id and X `WM_CLASS`, and the
+move/resize refusal naming the protocol instead of borrowing sway's tiling excuse — labwc
+*stacks*. Native-window geometry stays the floor's `0,0` plus the output rectangle, and that is
+**not yet**: the lowest route on the AGENTS.md ladder that would give it is 5, `ConfigureWindow`
+over the X plane for XWayland windows only, and that would leave a listing where half the
+windows can be moved — a decision before it is code [recon2/labwc §6c]. Everything else already
+worked unmodified on the first try: wxrandr's whole apply set (pos + primary + relative chains,
+rotate, fractional scale, `--same-as`, off/on, custom modelines), `warandr --command`, `wmirror`
+over **both** capture protocols, and typing byte-exact through `zwp_virtual_keyboard_v1` on a
+box with no `/dev/uinput` at all [recon2/labwc §3].
+
+Budgie is worth one sentence of its own: **magpie is gone.** Budgie 10.10 dropped its Mutter
+fork, `budgie-core 10.10.2-1ubuntu4.1` ships no `/usr/share/xsessions` entry and no `budgie-wm`,
+and `budgie-desktop` **Depends on `xdotool`, `wlr-randr` and `wdisplays`** — the shipped default
+already carries the X11 tool this project replaces [recon2/budgie §0]. Two step-file facts from
+the 2026-09-09 runs belong here too: `vm/live-smoke.d/labwc.sh`'s `phase_windows` sends one
+Escape after its `mousemove 300 300 click 1`, because that click lands on labwc's Root context,
+whose default binding is `ShowMenu root-menu`, and the menu takes the keyboard grab — which is
+why the three `input` checks read an empty file on bare labwc and only on bare labwc (Budgie,
+Xfce and LXQt put a desktop window under that pixel); and `vm/live-smoke.d/budgie.sh` reads
+`org.buddiesofbudgie.*` off the SESSION bus as the seated user, not the system bus as root, with
+its layout-restore check a `want` now — `--output Virtual-3 --below Virtual-2` left Virtual-3 at
+1920,1080 immediately and at 1920,1080 ten seconds later, with the service running.
+
+**`resolute-xfce-wayland` is not a pure default install of its Ubuntu flavour**, and it is the
+second such flavor after `resolute-kde-x11`. `xubuntu-desktop 2.272` lists neither `labwc` nor
+`wayfire` in Depends or Recommends, while LightDM 1.32.0's default sessions-directory already
+includes `/usr/share/wayland-sessions` — so a stock Xubuntu 26.04 *offers* "Xfce Session
+(Wayland)" and picking it dies with `/usr/bin/startxfce4: Please either install labwc or specify
+another compositor as argument`, rc 1. `sudo apt install labwc` is the whole fix, and a reader
+is owed that sentence [recon2/xfce-wayland §1].
+
+**COSMIC** (`fedora44-cosmic`, `arch-cosmic`) — cosmic-comp publishes **no
+`zwlr_foreign_toplevel_manager_v1` at all**, which is why every window command answered `no
+Wayland session found: … the compositor does not offer wlr-foreign-toplevel` on a live COSMIC
+session while `wxrandr`, `warandr`, `wmirror --check` and `wdotool type` all already worked
+[recon2/cosmic §3, recon2/arch §3.5]. `wdotool/backend_cosmic.py` is a middle capability tier:
+real geometry (when the `geometry` event arrives — cosmic-comp sends it only alongside
+`output_enter` or on a change, and in the nested rig it never arrived at all), real workspaces
+over `ext_workspace_manager_v1`, activate/close/maximize/minimize/fullscreen gated on the
+manager's capability array, ids minted from the 32-character `identifier`, and no move, no
+resize, no pid.
+
+**The virtio question is answered.** Whether cosmic-comp's KMS backend paints on virtio-vga with
+no 3D was open in the plan and in pop-os/cosmic-comp#136. Measured 2026-09-09 on cosmic-comp
+1.6.0-3.fc44, booted off the `fedora44-cosmic` build's own disk on
+`-device virtio-vga,max_outputs=4,edid=on` with no host GPU and no virgl:
+`/sys/kernel/debug/dri/0/state` says `allocated by = cosmic-comp`, `cosmic-comp` and
+`cosmic-panel` are up, the seated session is `test seat0 tty1 Service=greetd Active=yes`, and a
+QMP screendump of head 0 measures **standard deviation 0.131454** (1280x800) against the rig's
+0.02 flat-colour line and the 0.06–0.10 of live GNOME heads. It paints, and there is no nested
+`COSMIC_BACKEND=winit` fallback anywhere in the tree. Two more firsts from that boot: logind
+reports the seated COSMIC session as `Type=tty` and not `wayland` (greetd registers a tty and
+libseat did not flip it, so vmctl's `logind=("wayland","tty")` is right and would have been
+wrong with `wayland` alone), and `cosmic-randr list --kdl` off a real KMS head reads
+`transform "normal"` where the recon's nested winit document reads `flipped180`, with a 26-line
+`modes` block in which only the current mode carries any flag. One build-cost correction while
+we are here: `dnf group install cosmic-desktop-environment` resolves to **1,147 packages** and
+the install alone was still running after **40 minutes** on 2 vCPU / 3 GiB, so the plan's
+"~8 min" for this flavor is wrong by a lot and the CI job needs a timeout to match.
+
+**river** (`arch-river`) — **river 0.4's wlr-foreign-toplevel is read-only, and this flavor
+exists to say so.** `Window.zig` creates the handle and only ever pushes title, app_id and
+activated at it; it registers no listener for any handle request. Measured on a live 0.4.8 +
+tinyrwm: `windowclose` (twice, five seconds apart), `windowactivate` with another window focused,
+`windowminimize` and `windowstate --add FULLSCREEN` each returned rc 0 and changed nothing, while
+river-classic 0.3.17 really closed and really set fullscreen [recon2/river §2a].
+`backend_wlr.py`'s verify-after-act is the answer and `vm/live-smoke.d/river.sh` asserts both
+halves: the tool warned, and the window did not change. Real window control on river 0.4 is
+**not yet**, and the lowest route is 1, `river_window_manager_v1` — closed by the protocol's own
+exclusivity rather than by anything a client could send: binding it while a window manager holds
+it answers `unavailable` as the first and only event, and a session with no window manager maps
+no windows at all. Route 6, a patched river that wires `request_close` and `request_activate`
+into the handle it already creates, is next and is a package nobody has costed [recon2/river
+§2b, §4]. Two rig facts: river is in no Ubuntu or Debian at all (measured with `apt-cache
+madison` and sources.debian.org's exact search), and **the window manager is part of the image**
+— none is packaged anywhere, so `arch-river` builds upstream's own reference WM, tinyrwm (C,
+meson), pinned to commit `5c01698c`, sha256
+`a5ca88ee27e6e6423669e9e726b03fc32dbf0deb314b8f4ebc5ce56c0d2f9940`, in a `runcmd` step ahead of
+`vmctl-build`. Every "windows on river" number in this tree is river **plus that WM**, and the
+wiki lists 23 others.
+
+**Cinnamon** (`resolute-cinnamon`, `resolute-cinnamon-wayland`) — the two flavors install the
+**same package set** (`ubuntucinnamon-desktop xwayland wl-mirror` plus the four parity originals
+and `xterm`) and differ in LightDM's `autologin-session` and in nothing else, so the pair is a
+controlled comparison of one desktop's two session types. LightDM 1.32's built-in
+`sessions-directory` covers `/usr/share/xsessions` **and** `/usr/share/wayland-sessions` (read
+out of the shipped binary), which is why one autologin stanza selects either. The metapackage is
+`ubuntucinnamon-desktop` 26.04.4 (universe): **`ubuntu-cinnamon-desktop` is not a package name in
+this archive**, measured with `apt-cache policy` on the dev box. `xwayland` is named explicitly
+because nothing in the Cinnamon stack depends on it — neither `muffin` nor `cinnamon` carries it
+in Depends, and `apt-cache rdepends xwayland` names mutter, kwin-wayland, gnome-session, labwc
+and hyprland but not muffin — so without it the Wayland session has no X plane at all.
+`wl-mirror` is installed on both so that `wmirror --check`'s refusal is about the **compositor**
+and never about a missing helper; `wlr-randr` is deliberately absent, because there is no
+`zwlr_output_manager_v1` here for it to read.
+
+On `resolute-cinnamon` (X11) everything is by handover, with no code of ours in the path:
+`wwmctl -lGpx` byte-identical to `wmctrl -lGpx`, `wwmctl -m` printing `Name: Mutter (Muffin)`,
+`wxrandr --print-backend` and `warandr --print-backend` answering `x11`. Two things are
+Cinnamon's own and the smoke's `muffin` phase checks them: `-b add,shaded` sticks, because muffin
+kept `_NET_WM_STATE_SHADED` where mutter dropped it and KWin 6 refuses it, and
+`org.cinnamon.Muffin.DisplayConfig` is on the session bus **of this X11 session** answering
+`GetCurrentState` with `'renderer': <'xrandr'>` — the GNOME-on-Xorg trap wearing Cinnamon's
+names, which the tools survive because `passthrough.session_kind()` is asked before any bus name.
+
+On `resolute-cinnamon-wayland` (golden built 2026-09-09, 53.1 min, 1783 packages; the final live
+run is 57 pass, 0 fail, 7 XFAIL in 666 s) the window plane works: `wwmctl -m` is
+`Name: Mutter (Muffin)`, `wwmctl -l -x` is
+`0x00000001  0 org.gnome.Terminal.org.gnome.Terminal`, ids are small stable sequences, pid comes
+from `get_client_pid` (5726) where `get_pid()` is -1, `windowmove`+`windowsize` land
+`100,100 798x591` (exact position, VTE cell rounding on the size), the maximize pair restores
+byte-exactly, there are four workspaces, and `getmouselocation` agrees with Cinnamon's own
+`global.get_pointer()` to the pixel. Displays go through `wxrandr`'s `cinnamon` backend:
+`--print-backend --verbose` says `compositor: Muffin` / `protocol:
+org.cinnamon.Muffin.DisplayConfig (D-Bus)`, muffin raises Mutter's own `not adjacent` refusal on
+three heads (the first time any muffin has been made to print it), and Cinnamon's Keep-changes
+dialog can be answered over Eval — `global.window_manager.complete_display_change(true)` answers
+`(true, '"undefined"')` and `~/.config/cinnamon-monitors.xml`, absent before the apply, is
+written. Input is `/dev/uinput` only and works. `wmirror` refuses in the compositor's own words
+(`advertises neither zwlr_screencopy_manager_v1 nor ext_image_copy_capture_manager_v1`), rc 1,
+with `wl-mirror` installed. And across the whole smoke, 958 lines of session bus were recorded
+with zero portal calls and zero PolicyKit calls: Cinnamon's Eval route asks nobody for
+permission.
+
+**The X plane of `resolute-cinnamon-wayland` is not yet.** Cinnamon starts fully (`Cinnamon took
+2888 ms to start`, both 1920x1080 heads seen, `wayland-0` listening); Xwayland 24.1.10 then dies
+with `Fatal server error: Caught signal 11` after `Xwayland glamor: GBM Wayland interfaces not
+available`, muffin calls that fatal (`Connection to xwayland lost`) and cinnamon-session gives up
+(`respawning too quickly`). Forcing software GL does not help and muffin 6.4 has no glamor
+switch; with `/usr/bin/Xwayland` moved aside the session is stable. The lowest-numbered route is
+the rig's own — a GL-capable `virtio-vga-gl`/virgl in `vm/vmctl` — and after it AGENTS.md route
+5, patching Xwayland. **That rig route is measured and closed on this host**: `-device
+virtio-vga-gl` with the dbus display is refused by QEMU 10.2 (`The display backend does not have
+OpenGL support enabled`), and with `-display dbus,...,gl=on` it dies `egl: no drm render node
+available` / `egl: render node init failed`, because this dsb guest has no `/dev/dri` at all. It
+is the first thing to try on a host with a render node.
+
+**MATE, i3, LXQt/Openbox and GNOME on Xorg** (`resolute-mate`, `resolute-i3`, `resolute-lxqt`,
+`noble-gnome-x11`) — four more X11 flavors, all handover. **There is no 26.04 GNOME-on-Xorg flavor, and
+there cannot be one**: that session is gone from 26.04, measured from the archive's own debs —
+`ubuntu-session` 46.0-1ubuntu4 ships `/usr/share/xsessions/ubuntu-xorg.desktop` and 50.1-0ubuntu0.1
+ships no xsessions file at all; `libmutter-14` carries `MetaBackendX11Cm` and
+`meta-monitor-manager-xrandr.c` and `libmutter-18` carries neither; `daemon/WaylandEnable` is a
+string in gdm3 46.2's binary and not in 50.1's [recon2/gnome-xorg §1]. 24.04 is where that session
+lives, so that is where the flavor is. There is no MATE or i3 **Wayland** flavor either, because
+neither exists in Ubuntu: upstream's `mate-wayland-session` runs Wayfire and wants
+`mate-settings-daemon >= 1.29.1` against this archive's 1.26.1, and sway *is* i3's Wayland answer.
+And `resolute-lxqt` installs `lubuntu-desktop`, **never `lxqt-core`**: on a clean 26.04
+`apt-get install lxqt-core` dies with `trying to overwrite '/etc/xdg/lxqt/panel.conf', which is
+also in package lxqt-branding-debian (0.14.0.7)`, and lxqt-panel 2.3.2-0ubuntu1 declares no
+Breaks/Replaces against it. Lubuntu's own settings package is also where `window_manager=openbox`
+comes from; without that key lxqt-session comes up with no WM and no panel at all.
+
+On `resolute-mate`, three things are marco's own and the smoke's `marco` phase checks them:
+`wwmctl -m` prints `Name: Metacity (Marco)` with `Class: N/A`, `PID: N/A` and the
+showing-the-desktop mode `N/A` (marco's check window carries no `_NET_WM_PID` and no `WM_CLASS`,
+and `_NET_SHOWING_DESKTOP` is absent right after start — three N/A columns are the answer, not a
+defect); `-b add,shaded` sticks; and `wdotool windowstate` is Ubuntu's xdotool 3.20160805.1's own
+`Unknown command`, which is the repo README's footnote (b) happening. MATE is also the one X11
+desktop where `warandr`'s GTK 3 dependency is satisfied out of the box and `arandr` is absent, so
+`warandr` is a real addition there.
+
+`resolute-i3` was built and run: the golden took **21.4 min** on 2 vCPU/3G and carries 936
+packages, the cheapest desktop in the rig. Under `FUCKWAYLAND_PASSTHROUGH=never` the sway
+backend's **i3 dialect** answers, and the `i3ipc` phase pins its four measured divergences: the
+socket at `/run/user/1000/i3/ipc-socket.1434` found with `$I3SOCK` unset; the X id `10485774`
+where i3's con id is a 47-bit pointer (`wxprop -id` used to truncate it to `0x5168c680` and
+answer `BadWindow`); `getwindowpid` -> `3603` where i3's tree carries no pid field at all; a
+floating view under i3's `floating_con` wrapper moving `2640,398` -> `125,159` instead of
+refusing as tiled; and `getdisplaygeometry` answering `3840 1080` across two heads instead of
+"no Wayland session found". `wxrandr` names the compositor `i3 4.25.1 (2026-02-06)` and refuses an
+apply in one line, because i3 has **no `output` command at all**. `gir1.2-gtk-3.0` is not on that
+image (python3-gi is), so `warandr`'s GUI carries the same footnote sway's row does.
+
+`noble-gnome-x11` is the handover under the hardest condition the tree has: `org.gnome.Shell`,
+`org.gnome.Mutter.DisplayConfig` **and** `org.fuckwayland.Bridge` are all on this session's bus,
+every one of them a route this toolbox knows, and the answer is still the X server's, because
+`passthrough.session_kind()` is asked before any backend is detected. The final live run against
+the working tree is **44 pass, 0 fail, 2 XFAIL, 2 XPASS in 296 s**. Four things only this flavor
+can measure, all 2026-09-09 on GNOME Shell 46.0 / mutter 46.2: the bridge hands out the X
+server's own ids, and `wwmctl -l -x` forced onto our own code is byte-identical to `wmctrl -l -x`
+four windows deep; `/dev/uinput` typing reaches an X server, unprivileged, under the package's
+udev rule (`xinput list` shows `wdotool virtual keyboard` beside the XTEST one); GDM keeps an
+X11 session's cookie at `/run/user/1000/gdm/Xauthority`, `-rwx------ 1 test test 130`, which is
+the seated session's own `$XAUTHORITY`, so root with `env -i` lists the same windows where
+`/usr/bin/wmctrl` run the same way cannot open a display; and `WM_CLASS` is not the same on the
+two halves of the `noble-gnome` / `noble-gnome-x11` pair — under Wayland gnome-text-editor
+carries its desktop-file id (`org.gnome.TextEditor`), the same binary on the Xorg session is a
+plain X client with `gnome-text-editor.gnome-text-editor`, and it owns TWO windows of that class
+with only one mapped, so `search --class` needs `--onlyvisible` there.
+
+**`gnome-shell --replace` is not a reload on a systemd-managed GNOME; it is a way to lose your
+extensions.** `/usr/lib/systemd/user/org.gnome.Shell@x11.service` is `Restart=always`,
+`RestartSec=0ms`, `RefuseManualStart=on`, `RefuseManualStop=on`,
+`OnFailure=org.gnome.Shell-disable-extensions.service gnome-session-failed.target`. A hand-run
+`--replace` makes the unit's shell exit, systemd restarts it instantly, the hand-started one
+still holds the WM selection, and after four rounds the unit goes `failed (Result: protocol)` —
+`Start request repeated too quickly`. That OnFailure unit is `ExecStart=gsettings set
+org.gnome.shell disable-user-extensions true`, a PERSISTENT dconf key, so afterwards the bridge
+reads `Enabled: No / State: INITIALIZED` in **every later session of that user** and
+`org.fuckwayland.Bridge` is unowned. It does not come back on a reboot, on `gnome-extensions
+enable`, or on deleting `/run/user/1000/gnome-shell-disable-extensions` — all three tried. One
+thing recovers it, live and with no logout: `gsettings set org.gnome.shell
+disable-user-extensions false`, after which the shell loads the extension and takes the name
+within four seconds.
+
+**Mutter's DisplayConfig does not refuse an overlapping layout on Xorg.** `wxrandr --backend
+mutter --output Virtual-3 --pos 1920x0` answered rc 0 with empty output and `xrandr --query` then
+showed Virtual-2 and Virtual-3 both at `1920x1080+1920+0`. It really is the D-Bus route that
+places it: `wxrandr --print-backend --backend mutter --verbose` says `chosen by: flag (--backend
+mutter)` / `compositor: Mutter` / `protocol: org.gnome.Mutter.DisplayConfig (D-Bus)` on that
+session. The `Logical monitors not adjacent` string that IS in `libmutter-14` belongs to the path
+a Wayland Mutter takes.
+
+**Two rig limits of the virtio-vga display, both measured on `resolute-hypr` 2026-09-09.**
+`vm/vmctl` passes `max_hostmem=1G` to `virtio-vga` (QEMU's default is 256 MiB): with the default,
+after a handful of mode changes across three 1920x1080 heads every further modeset failed with
+`drmModeSetCrtc failed: No space left on device` and the guest's dmesg filled with
+`virtio_gpu_dequeue_ctrl_func: response 0x1203` (OUT_OF_MEMORY) for commands 0x103/0x104/0x105.
+It is a cap and not an allocation. And a head's mode can be made SMALLER within a session and
+never larger again: 1920x1080 -> 1680x1050 -> 1280x1024 all land; 1280x1024 -> 1920x1080 does
+not, on either the atomic path (`atomic drm request: failed to commit: Invalid argument, flags:
+ATOMIC_ALLOW_MODESET ATOMIC_TEST_ONLY`) or the legacy one (`AQ_NO_ATOMIC=1`, `drmModeSetCrtc
+failed`). The compositor is not what refuses it — `hyprctl keyword monitor` answers `ok` — and
+wxrandr's own re-read is what catches it, which is why `vm/live-smoke.d/hypr.sh`'s two applies
+are both shrinks.
 
 ## The QEMU / D-Bus facts this rig relies on
 

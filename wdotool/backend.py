@@ -223,11 +223,71 @@ class Workspace:
 class WindowBackend:
     name = "none"
 
-    def _unsupported(self, op: str):
+    # The four sentences below belong to this class and not to any compositor: a backend reaches one by not
+    # having overridden the method, so what is missing is our work.  Measured on 2026-09-09 against the eight
+    # backend modules: `set_num_desktops` falls through here on sway, wlr, cosmic, hypr, cinnamon and wayfire,
+    # `select_window` and `events` on wlr and cosmic, `set_window_desktop` on wlr, and every other default
+    # below is overridden everywhere -- gnome and kwin reach none of them.  The bare form is what a fake or a
+    # half-written backend prints, which is why the nine unreachable defaults were left as they were.
+
+    #: `wmctrl -n 4` writes _NET_NUMBER_OF_DESKTOPS and the X window manager makes four, so this is owed on
+    #: every compositor.  Every backend that lands here already drives a workspace surface for `set_desktop`,
+    #: and on wlr and cosmic that surface can already do it: `ext_workspace_manager_v1` carries
+    #: `create_workspace` on the group and `remove` on the handle (wdotool/ext_workspace.py's `_WS_REMOVE`
+    #: and `CAP_REMOVE`), the first gated on the GROUP's capabilities and the second on the workspace's,
+    #: both read for nothing else today.
+    #: sway, hypr, cinnamon and wayfire have their own IPC or bus instead, which is a rung lower.
+    NOT_YET_NUM_DESKTOPS = (
+        "counting workspaces into existence is not yet done here, and the route is the surface this "
+        "backend's set_desktop already drives -- ext_workspace_manager_v1, whose group creates a workspace "
+        "and whose handle removes one, on wlr and cosmic (AGENTS.md route 1), the compositor's own IPC or "
+        "bus on sway, hypr, cinnamon and wayfire (route 2) -- at the cost of honouring the group's "
+        "capability that gates create and the workspace's that gates remove, and of a count that does "
+        "not read back where a compositor drops a workspace as soon as it empties")
+
+    #: xdotool grabs the pointer and answers with the window under the next button press.  Neither protocol
+    #: backend that lands here publishes a pointer position, and the geometry to put a click in is missing
+    #: on one and unreliable on the other: zwlr_foreign_toplevel carries none (backend_wlr.NO_GEOMETRY), and
+    #: cosmic's `geometry` event, which this tree does parse (backend_cosmic._on_cosmic), is sent only
+    #: alongside an output_enter or a change and never arrived at all in the nested rig (backend_cosmic's
+    #: module header).  So the click has to be caught AND placed.
+    NOT_YET_SELECT_WINDOW = (
+        "a picker is not yet built here: this backend's protocols carry no pointer position, and no window "
+        "geometry on wlr and only a sometimes-sent one on cosmic, to put a click in; the route is a "
+        "wlr-layer-shell overlay that takes the press (AGENTS.md route 1) over a geometry source that names "
+        "what is under it, at the cost of a surface that eats the click it reads and has to be unmapped "
+        "again")
+
+    #: sway's IPC vocabulary is the one every caller of `events()` speaks (see the signature above).  The
+    #: toplevel protocols on wlr and cosmic deliver the same changes as events on the handle -- title, app_id,
+    #: state, closed -- which is how those backends keep their own listings up to date.
+    NOT_YET_EVENTS = (
+        "an event stream is not yet built here: the toplevel protocol this backend already listens to "
+        "delivers the changes (title, app_id, state, closed) and nothing turns them into the (window, "
+        "change) pairs callers read, so the route is that same protocol (AGENTS.md route 1), at the cost "
+        "of a connection held open for the whole wait and its vocabulary mapped onto sway's, which is the "
+        "one every caller of events() speaks")
+
+    #: wlr is the only backend that lands here.  `zwlr_foreign_toplevel_handle_v1` has no workspace request
+    #: and `ext_workspace_manager_v1` names workspaces without taking windows; cosmic-comp is where the pair
+    #: exists, and backend_cosmic.set_window_desktop already sends its `move_to_ext_workspace`.
+    NOT_YET_SET_WINDOW_DESKTOP = (
+        "binding a toplevel to a workspace is not yet done here: the handle has no such request and "
+        "ext_workspace_manager_v1 names workspaces without taking windows.  The route is a protocol that "
+        "does both, which cosmic-comp already ships as move_to_ext_workspace and the cosmic backend here "
+        "already sends (AGENTS.md route 1), else a patched compositor (route 6)")
+
+    def _unsupported(self, op: str, why: "str | None" = None):
         # `unsupported` marks a capability gap (as opposed to a failed operation) so callers can downgrade it to
         # a warning -- see set_num_desktops, which must not fail a chain on a compositor with a fixed workspace
         # count.
-        err = CmdError(f"{op} is not supported by the {self.name} backend")
+        #
+        # `why` is the half AGENTS.md asks for: what is not done yet, the lowest rung of the ladder that would
+        # close it and what that rung costs. A backend that owns its gap appends its own (backend_wlr._not_yet,
+        # backend_cosmic._not_yet, backend_hypr._no); this argument is for the DEFAULTS below, which a backend
+        # reaches by not having overridden them -- so the gap there is ours and not a compositor's.
+        err = CmdError(f"{op} is not supported by the {self.name} backend"
+                       + (f": {why}" if why else ""))
         err.unsupported = True
         raise err
 
@@ -319,7 +379,7 @@ class WindowBackend:
     def set_num_desktops(self, n: int):
         """Ask the compositor for exactly n workspaces (set_num_desktops). Raises a CmdError with .unsupported
         set where the count is not the caller's to choose (dynamic workspaces)."""
-        self._unsupported("set_num_desktops")
+        self._unsupported("set_num_desktops", self.NOT_YET_NUM_DESKTOPS)
 
     def window_desktop(self, wid: int) -> int:
         return self.find(wid).desktop
@@ -337,7 +397,7 @@ class WindowBackend:
         self._unsupported("display_size")
 
     def set_window_desktop(self, wid: int, n: int):
-        self._unsupported("set_desktop_for_window")
+        self._unsupported("set_desktop_for_window", self.NOT_YET_SET_WINDOW_DESKTOP)
 
     # What to tell the user while an interactive selection is pending. The backends that implement
     # select_window() properly want a click (GNOME's bridge grab, KWin's own picker); the sway backend, which
@@ -352,7 +412,7 @@ class WindowBackend:
         grab) and KDE (KWin's own picker) do exactly that; sway/i3 have no picker and no pointer query in their
         IPC, so that backend still waits for the next focus change and says so. Cancelling (Escape, or the
         picker's own timeout) raises CmdError -- rc 1, never a made-up window."""
-        self._unsupported("selectwindow")
+        self._unsupported("selectwindow", self.NOT_YET_SELECT_WINDOW)
 
     # optional richer views (additive, see the module docstring)
     def views(self) -> "list[View] | None":
@@ -386,4 +446,4 @@ class WindowBackend:
     def events(self, timeout: float | None = None):
         """Iterator of (window_id, change) with sway's vocabulary (new, close, focus, title, fullscreen_mode,
         move, urgent, workspace); stops after `timeout` seconds of silence (None = never)."""
-        self._unsupported("window events")
+        self._unsupported("window events", self.NOT_YET_EVENTS)

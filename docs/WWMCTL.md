@@ -8,9 +8,16 @@ the installed original.
 
 ## The dual-plane trick
 
-On wlroots compositors the *compositor itself* is the X window manager for XWayland,
-and `swaymsg -t get_tree` exposes XWayland clients with their **real X11 window id**
-(node `"window"` field) plus `window_properties`. So:
+On wlroots compositors the *compositor itself* is the X window manager for XWayland, so
+an XWayland client's real X11 window id can be recovered — and there are two ways to
+recover it, one per backend. On sway and i3, `swaymsg -t get_tree` publishes it outright
+(the node's `"window"` field, plus `window_properties`), and the same is true of
+Hyprland's `j/clients`, Wayfire's `window-rules/list-views` and Cinnamon's
+`get_xwindow()`. On the generic wlr floor and on COSMIC nothing publishes it, so the id
+is *matched* instead, through `wdotool/xid_match.py` against the X server's own
+`_NET_CLIENT_LIST` — with title and a lowercased `app_id` against `WM_CLASS` as the only
+separators there, no pid and no geometry, so a pair that nothing separates keeps id 0
+rather than being handed one of two ids. Either way:
 
 - The **unified window list** comes from the compositor backend (reuse
   `wdotool.backend_detect/backend_sway` — do not fork them).
@@ -394,3 +401,42 @@ nothing installed. wwmctl consumes the same typed hooks as on GNOME
 * **`-n`.** KWin caps virtual desktops (20 on 5.27, 25 on 6) and keeps at
   least one; past that the count is capped at the limit and a warning names
   it — the command succeeds (rc 0), it does not fail.
+
+## Hyprland, Wayfire, the wlroots floor and COSMIC
+
+Four more window backends answer here, and what differs is what their compositor
+publishes rather than anything wmctrl asks for.
+
+* **`-m`** on a session with no X plane prints the compositor's own window-manager name
+  rather than the backend token. `wlroots wm` on the wlr floor — that is the string every
+  wlroots xwm publishes on its check window, byte-identical on labwc, Wayfire, river and
+  sway — and `Smithay X WM` on COSMIC. It used to print `wlr`.
+* **`-l`** lists X and native windows together everywhere, and on the floor and on COSMIC
+  the X rows now carry their real X id and the X server's own `WM_CLASS`: measured on
+  `resolute-wayfire`, `wwmctl -l -x` and the original `wmctrl -l -x` print the xterm's row
+  byte for byte the same, id column included
+  (`0x0040000c  0 xterm.XTerm           wf1 smokex` from both). The join is
+  `wdotool/xid_match.py`, and the floor and COSMIC feed it title and a lowercased
+  `app_id` against `WM_CLASS` and nothing else — no pid, no geometry — so a pair that
+  nothing separates keeps id 0.
+* **`-d`** works on the wlr floor wherever the compositor publishes
+  `ext_workspace_manager_v1` (labwc, Budgie 10.10, Xfce 4.20 on Wayland) and on COSMIC,
+  which has two workspaces. Where it does not (sway 1.11, Wayfire 0.10) the refusal names
+  the protocol and the routes: version 1 where the compositor grows it, else route 2, the
+  compositor's own IPC. On Hyprland `-d`, `-s` and `-r -t` all work — workspace N+1 is
+  desktop N — and on Wayfire the desktop list is the 3x3 viewport grid flattened, so
+  there are nine of them.
+* **`-p`** prints 0 for every window on COSMIC: no pid exists in either COSMIC toplevel
+  protocol. Hyprland and Wayfire both publish one.
+* **`-e`** is refused on the wlr floor with the protocol named and the routes after it —
+  `zwlr_foreign_toplevel_management_v1 carries no geometry and no stacking; not yet here,
+  and the routes are the X plane for an XWayland window (AGENTS.md route 5, a real
+  ConfigureWindow) or a patched compositor for a native one (route 6)`. COSMIC's is its
+  own sentence with its own rung, because the protocol and the fix both differ: `the
+  COSMIC toplevel protocol has no move, resize, raise or lower; not yet here, and the
+  route is a patched cosmic-comp (AGENTS.md route 6)`. It works on Hyprland (a tiled window has to be floated first) and on Wayfire (which
+  floats by default), where the size is exact only to the client's own quantisation —
+  `wwmctl -e 0,10,20,300,200` on a foot read back `300x195`, one whole character cell.
+* **On river 0.4** every mutating command is accepted by the compositor and changes
+  nothing. `wwmctl` is told so by the backend and falls back to its EWMH route; see
+  README footnote **(n)**.

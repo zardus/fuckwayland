@@ -246,27 +246,39 @@ it verifies every pid rather than trusting the file.
 
 ## Where it does not exist
 
-**GNOME and KDE, and it is not close.** wl-mirror's own README: it "does not
-work on KDE and Gnome", needing wlroots or `ext-image-copy-capture-v1`.
-Neither KWin nor Mutter implements the wlroots interfaces; on KWin
-`ext_image_copy_capture_v1` is an open feature request. The only route there
-is the desktop portal's ScreenCast, which prompts the user once per session
-— useless from the hotkey a layout script exists for. This is the same split
+**GNOME, KDE and Cinnamon, and it is not close.** wl-mirror's own README: it
+"does not work on KDE and Gnome", needing wlroots' `zwlr_screencopy_manager_v1`
+or the standard `ext-image-copy-capture-v1`. Those are two first-class routes
+rather than one and an alternative: sway 1.11, Hyprland and Wayfire publish the
+first, COSMIC publishes only the second, and labwc and sway 1.12 publish both.
+Neither KWin nor Mutter implements either; on KWin `ext_image_copy_capture_v1`
+is an open feature request; and muffin advertises 23 globals with neither of
+them among them, which puts Cinnamon in the same paragraph. The route there is
+the desktop portal's ScreenCast (AGENTS.md route 4), which asks the user once
+per session and is not wired up here yet — useless from the hotkey a layout
+script exists for, and it would cost a second capture path in `wmirror/core.py`
+beside `wl-mirror`. This is the same split
 `wxrandr/kwin.py` already records: KWin's `allowInterface` blacklists
 `screencast` for unauthenticated clients while never blacklisting
 `kde_output_*`, which is exactly why the output half needs no permission and
 the capture half does. *(Upstream documentation, not re-measured on the rig.)*
 
 **X11**: `xrandr --output B --same-as A` mirrors whole outputs, and a region
-has no route in this toolbox. wmirror says so and exits 1; it never hands
-over to anything, like `warandr`.
+mirror is not written yet: it wants an X capture client of our own, XShm off
+the root window, which is a tool this toolbox has not written. wmirror says so
+and exits 1; it never hands over to anything, like `warandr`.
 
 ## Detection
 
 Never assumed, always named:
 
 * **no `wl-mirror` on PATH** → `wmirror: wl-mirror is not installed (no
-  wl-mirror on PATH)` + `on Ubuntu/Debian: sudo apt install wl-mirror`. It
+  wl-mirror on PATH)` + `on Ubuntu/Debian: sudo apt install wl-mirror`. That
+  second line is table-driven off `/etc/os-release`
+  (`wmirror.core.install_hint()`): `on Fedora: sudo dnf install wl-mirror`,
+  `on Arch: sudo pacman -S wl-mirror`, `on NixOS: sudo nix-env -iA
+  nixpkgs.wl-mirror`, and a family the table does not know keeps the Debian
+  bytes. It
   is in Ubuntu **universe** — 24.04 has 0.16.1, 26.04 has 0.18.5, 46 kB,
   no exotic dependencies — so a user's step is one apt line. Both spell the
   three options we use the same way (`--fullscreen-output`, `--scaling`,
@@ -276,11 +288,17 @@ Never assumed, always named:
   newer — the failure is then wl-mirror's own words, on our first line.
 * **no capture protocol** (neither `zwlr_screencopy_manager_v1` nor
   `ext_image_copy_capture_manager_v1` in the registry) → say so, name both,
-  and name the portal for GNOME and KDE. `zwlr_export_dmabuf_manager_v1`
+  and name the portal for GNOME, KDE and Cinnamon. The line names who has
+  which: `wl-mirror needs a compositor with zwlr_screencopy_manager_v1 (sway,
+  Hyprland, labwc, Wayfire, ...) or ext_image_copy_capture_manager_v1 (COSMIC,
+  labwc, sway 1.12)`. `zwlr_export_dmabuf_manager_v1`
   does not count: it is what wl-mirror's `auto` picks for a whole output,
   and a **region cannot use it** (measured: a region falls back to shm).
 * **no `zwlr_output_manager_v1`** → we cannot read the layout, so we cannot
-  check the policy; say that rather than guess.
+  check the policy; say that rather than guess. Reading it another way is
+  **not yet**: the route is the compositor's own display bus or IPC, which
+  `wxrandr` already speaks four of (route 2), at the cost of one layout reader
+  per compositor.
 * `wmirror --check` prints all of it, plus the outputs and what is running,
   and exits 1 if anything is missing.
 

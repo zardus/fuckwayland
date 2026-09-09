@@ -441,9 +441,11 @@ class Persistent(CinnamonCase):
 class NoOverlapRoute(CinnamonCase):
     """`--unsafe-gnome-overlap` on Cinnamon. The flag exists because Mutter refuses overlapping layouts, and
     Muffin refuses them in the very same words -- so this is a user who really has the problem. The answer is
-    still no, and for a reason that will not change with a measurement: the route picks a struct description
-    by Meta typelib version, and muffin's GIR namespace is `Meta-0` and its library `libmuffin.so.0` for
-    every release there has ever been [M cinnamon.md §2.3]."""
+    not yet, with the rung that would close it: the GNOME route picks a struct description by Meta typelib
+    version and muffin's GIR namespace is `Meta-0` and its library `libmuffin.so.0` for every release there
+    has ever been [M cinnamon.md §2.3], so what a Cinnamon table would be keyed on is the Cinnamon release.
+    `org.Cinnamon.Eval` reaches muffin with nothing installed, which is AGENTS.md rung 2 -- one below the
+    extension GNOME needs -- and that is what the sentence names (reworded 2026-09-09)."""
 
     def test_the_refusal_names_cinnamon_and_the_typelib(self):
         mo = self.outputs()
@@ -451,7 +453,10 @@ class NoOverlapRoute(CinnamonCase):
             mo._overlap_client([])
         self.assertEqual(str(cm.exception.args[0]),
                          "--unsafe-gnome-overlap only means anything on GNOME; this is Cinnamon, "
-                         "whose Meta-0 typelib has no generation to check\n")
+                         "whose Meta-0 typelib has no generation to check; not yet here, and the route "
+                         "is org.Cinnamon.Eval reaching MetaMonitorsConfig inside muffin with nothing "
+                         "installed (AGENTS.md route 2), at the cost of an offset record measured per "
+                         "Cinnamon release instead of per Meta generation\n")
 
     def test_overlap_available_answers_the_typelib_reason(self):
         """The backend method behind `--gnome-overlap-status`. It is not yet what the flag prints: today

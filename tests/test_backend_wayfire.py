@@ -72,9 +72,13 @@ class WatchingWayfire(FakeWayfire):
 #: The gate's refusal, byte for byte. A Wayfire whose `plugins` line has `ipc` and not `ipc-rules` answers
 #: `{"methods": ["list-methods"]}` and `No such method found!` to everything else (measured here against
 #: wayfire 0.10.0 started with `plugins = ipc`), which is a sentence about a config line and has to read like
-#: one rather than surfacing one command at a time.
-GATE_REFUSAL = ("wayfire backend: this Wayfire's IPC has no window-rules/list-views: "
-                "Wayfire 0.9 or newer with `plugins = ipc ipc-rules` is required")
+#: one rather than surfacing one command at a time.  The rung came in on 2026-09-09: the sentence had the
+#: route in it all along (edit wayfire.ini) and now names which rung of AGENTS.md's ladder that is, so a
+#: reader who meets this one and the wlr floor's does not get two shapes of answer for two gaps.
+GATE_REFUSAL = ("wayfire backend: this Wayfire's IPC has no window-rules/list-views: the window half is "
+                "Wayfire's own IPC (AGENTS.md route 2) and it is one config line away -- `plugins = ipc "
+                "ipc-rules` in wayfire.ini on Wayfire 0.9 or newer -- at the cost of restarting Wayfire "
+                "to load it")
 
 #: Every method this backend can *write* through. FakeWayfire replays recordings, and the recordings are all
 #: reads, so the writes need an `{"result": "ok"}` of their own -- which is what the live socket answers to

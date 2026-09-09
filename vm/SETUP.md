@@ -74,6 +74,7 @@ What the scripts ask for, per virtual machine (all of it changeable with `--cpus
 |---|---|---|---|---|
 | a golden build (`vmctl build`) | 4 | 6 GB | 30 GB overlay, grows to the image's size | `vmctl build` defaults |
 | the ISO install (`build-iso-golden.sh`) | 2 | 4 GB | 30 GB, no backing file | its defaults |
+| the NixOS build (`build-nixos-golden.sh`) | the sandbox's own | the sandbox's own | 12 GB `virtualisation.diskSize`, ~9.2 GiB peak in the build directory, plus the golden | `vm/nixos/common.nix` |
 | a desktop instance (`vmctl start`) | 3 | 4 GB | overlay on the golden | `vmctl start` defaults |
 
 A guest's QEMU process grows towards its `--mem` as the guest touches memory, not
@@ -120,7 +121,18 @@ runs barely touches it, tens of MB over days of builds and instances — but a s
 the size of one guest turns a memory shortfall into a slowdown rather than a killed
 QEMU.
 
+**The NixOS build counts as one of those virtual machines.** `vm/build-nixos-golden.sh`
+does not drive QEMU itself; `nix build` does, inside the nix sandbox, through nixpkgs'
+`make-disk-image`. So it is a VM by any measure that matters to this host and the script
+refuses to start beside a running rig instance — one VM at a time means one, the NixOS
+build included. It also needs `kvm` in `nix config show system-features` and refuses
+without it. Measured: 4.9 GiB of image and about ten minutes on 4 vCPU from a cold store.
+
 ## Packages
+
+`nix` on the host is no longer optional for the whole rig: the two NixOS flavors are built
+with `nix build` (2.34.8 here), which wants `experimental-features = nix-command flakes`
+and the `kvm` system feature above. Everything else on the host is apt, as follows.
 
 On Ubuntu 24.04 or 26.04 — `vm/setup-host.sh` runs exactly this, after saying so:
 

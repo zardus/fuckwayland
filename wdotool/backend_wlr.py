@@ -71,6 +71,27 @@ def read_only_reason(name: str) -> str:
         return NO_MINIMIZE_REASON % name
     return READ_ONLY_REASON % name
 
+#: The constructor's own precondition: no manager, no backend.  Batch 19 gave the COSMIC twin of this
+#: sentence its rung (backend_cosmic's two preconditions) and left this one stopping at the lack, because
+#: tests/test_backend_gnome.py pins it byte for byte and was another batch's file; both moved together on
+#: 2026-09-09.  The head is kept contiguous because tests/test_wire_hardening.py greps the substring `does
+#: not offer` out of it.  (vm/live-smoke.d/cosmic.sh:14's recorded transcript quotes a similar shape, but
+#: that is backend_detect's `no Wayland session found` sentence and not this one.)
+NO_MANAGER = ("wlr backend: compositor does not offer zwlr_foreign_toplevel_management_unstable_v1; not "
+              "yet here, and the route is that protocol where the compositor grows it (AGENTS.md route "
+              "1), else a backend over the compositor's own IPC (route 2), which is what the sway, hypr "
+              "and cinnamon backends already are")
+
+#: `activate` takes a wl_seat and this backend will not send a null one (tests/test_backend_wlr.py's
+#: `test_activate_without_a_seat_refuses_rather_than_sending_null`).  Nobody has produced a wlr session
+#: carrying the toplevel manager and no seat either; the branch exists because the request takes one.  The
+#: rungs are written for the session that turns up anyway: wl_seat is core, so a registry that carries it
+#: is the first thing to reach for, and sway, hypr and cinnamon focus a window by id over their own IPC
+#: and never name a seat at all.
+NO_SEAT = ("compositor offers no wl_seat; cannot activate windows; not yet here, and the route is a "
+           "registry that carries one (AGENTS.md route 1), else the compositor's own IPC where it has "
+           "one, which focuses a window by id and needs no seat at all (route 2)")
+
 #: The refusal for the four commands the protocol has no request for. labwc is a *stacking* compositor and
 #: still cannot move a window, so the reason names the protocol, not a tiling policy [M labwc.md §6c].
 NO_GEOMETRY = ("zwlr_foreign_toplevel_management_v1 carries no geometry and no stacking; not yet "
@@ -251,10 +272,7 @@ class WlrBackend(XPlaneViews, WindowBackend):
             raise CmdError("wlr backend: %s" % e) from None
         if not g:
             self._close_own()
-            raise CmdError(
-                "wlr backend: compositor does not offer "
-                "zwlr_foreign_toplevel_management_unstable_v1"
-            )
+            raise CmdError(NO_MANAGER)
         self.tops: dict[int, _Toplevel] = {}  # handle oid -> record
         self.order: list[int] = []            # handle oids, arrival order
         self.mgr_ver = min(g[1], 3)
@@ -403,7 +421,7 @@ class WlrBackend(XPlaneViews, WindowBackend):
     def activate(self, wid: int):
         t = self._by_wid(wid)
         if self.seat is None:
-            raise CmdError("wlr backend: compositor offers no wl_seat; cannot activate windows")
+            raise CmdError("wlr backend: %s" % NO_SEAT)
         self._act(t, _REQ_ACTIVATE, "activate", [("u", self.seat)],
                   check=self._has(_ST_ACTIVATED, True))
 
