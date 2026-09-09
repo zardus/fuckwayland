@@ -1,0 +1,90 @@
+#cloud-config
+# vmctl flavor noble-gnome-x11: Ubuntu 24.04 LTS (noble) + ubuntu-desktop, GNOME Shell 46 on XORG --
+# `ubuntu-xorg.desktop`, the session Ubuntu's gear menu offers -- GDM autologin (WaylandEnable=false)
+# of user test (uid 1000, password test, NOPASSWD sudo).
+#
+# A controlled pair with noble-gnome, the way noble-kde-x11 is one with noble-kde: the SAME
+# DESKTOP_PKG and the same EXTRA_PKGS, differing in GDM's two lines and in nothing else.  The existing
+# noble-gnome golden already carries xorg, xserver-xorg-core, xserver-xorg-video-qxl,
+# xserver-xorg-input-libinput, xinit and ubuntu-session (vm/reference/noble-gnome-packages.txt, read),
+# so the Xorg session needs no package this flavor's twin does not already have.
+#
+# It is 24.04 and not 26.04 because GNOME-on-Xorg no longer exists on 26.04, measured from the archive's
+# own debs: ubuntu-session 46.0-1ubuntu4 ships /usr/share/xsessions/ubuntu-xorg.desktop, ubuntu-session
+# 50.1-0ubuntu0.1 ships no xsessions file at all; libmutter-14 carries MetaBackendX11Cm and
+# meta-monitor-manager-xrandr.c, libmutter-18 carries neither; and `daemon/WaylandEnable` is a string in
+# gdm3 46.2's binary and not in 50.1's [recon2/gnome-xorg 1].  So there is no resolute-gnome-x11 to
+# build, and dm_gdm's x11 arm writes WaylandEnable=false for the one release that reads it.
+#
+# The session name must be `ubuntu-xorg` and never `ubuntu`: `ubuntu.desktop` exists in BOTH
+# /usr/share/xsessions and /usr/share/wayland-sessions on noble, which is the same trap noble-kde-x11
+# has, and build-image.sh's no_session_ambiguity() refuses the ambiguous name at build time
+# [recon2/gnome-xorg 1, 5].
+#
+# What only this flavor can measure:
+#
+#   * `root`: GDM keeps an X11 session's cookie at <runtime dir>/gdm/Xauthority -- one directory below
+#     where find_xauthority() used to look.  With the session leader gone, `find_xauthority(1000)`
+#     answered None although the file was there; the glob added in wave 1 is what this phase proves on
+#     a real GDM, in the place it matters: where `/usr/bin/wmctrl`, run the same way, cannot open a
+#     display [recon2/gnome-xorg 3].
+#   * `bridge`: GNOME-on-Xorg is the GNOME where the bridge needs no logout -- `gnome-shell --replace`
+#     hands the WM role to a second shell over the same X server and the extension comes back with it.
+#     On Wayland the shell is the display server, so --replace ends the session and a no-logout reload
+#     is NOT YET done there: the route is code installed into the compositor (AGENTS.md route 3) or a
+#     patched gnome-shell (route 6).
+#   * `display`: two oracles that have to agree.  The X server is authoritative here, and
+#     org.gnome.Mutter.DisplayConfig ALSO answers on this session (mutter 46 serves it from
+#     MetaMonitorManagerXrandr, `strings` [recon2/gnome-xorg 2]) -- the same shape as Cinnamon's Muffin
+#     bus name on an X11 session.  A backend picked by bus name would take the D-Bus route on a session
+#     where xrandr is the truth; session_kind() is asked first, and the phase checks that it was.
+#
+# The editor is gnome-text-editor (WM_CLASS org.gnome.TextEditor, exactly as under Wayland), which
+# ubuntu-desktop puts on the image -- so the package set stays byte-identical to noble-gnome's and this
+# flavor needs no xterm of its own.
+#
+# vmctl fills in the two @@...@@ placeholders at build time (root ssh public
+# key; the contents of vm/build-image.sh). The base image lives in $VMIMAGES:
+# vmctl-base: noble-server-cloudimg-amd64.img
+# vmctl-desktop: gnome-x11
+# vmctl-distro: ubuntu
+# vmctl-ci: push
+hostname: noble-gnome-x11
+manage_etc_hosts: true
+disable_root: false
+ssh_pwauth: false
+ssh_authorized_keys:
+  - @@ROOT_PUBKEY@@
+users:
+  - name: test
+    uid: 1000
+    gecos: Test User
+    groups: [adm, sudo]
+    shell: /bin/bash
+    lock_passwd: false
+    plain_text_passwd: test
+    sudo: ALL=(ALL) NOPASSWD:ALL
+write_files:
+  # No `owner:` on any entry: write_files runs BEFORE the users module, so
+  # `owner: test:test` aborts the whole module and cloud-init ends in status:
+  # error [recon2/hyprland 6].  build-image.sh chowns under /home/test instead.
+  - path: /etc/ssh/sshd_config.d/60-vmctl.conf
+    content: "PermitRootLogin prohibit-password\n"
+  - path: /etc/modules-load.d/uinput.conf
+    content: "uinput\n"
+  - path: /etc/vmctl-build.env
+    content: |
+      FLAVOR=noble-gnome-x11
+      DESKTOP=gnome-x11
+      DESKTOP_PKG=ubuntu-desktop
+      EXTRA_PKGS="xdotool wmctrl x11-utils x11-xserver-utils"
+  - path: /usr/local/sbin/vmctl-build
+    permissions: '0755'
+    content: |
+      @@BUILD_SCRIPT@@
+runcmd:
+  - [/usr/local/sbin/vmctl-build]
+power_state:
+  mode: poweroff
+  message: vmctl golden build finished
+  timeout: 120

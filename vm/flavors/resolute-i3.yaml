@@ -1,0 +1,85 @@
+#cloud-config
+# vmctl flavor resolute-i3: Ubuntu 26.04 LTS (resolute) + i3 4.25.1-1 on Xorg (X11), LightDM autologin
+# (autologin-session=i3, /usr/share/xsessions/i3.desktop) of user test (uid 1000, password test,
+# NOPASSWD sudo).  The X11-path oracle here is real xrandr, as on resolute-xfce: i3 has no display
+# daemon and no `output` command of its own [recon2/i3 1].
+#
+# README §X11 has named i3 among the desktops the tools hand over on since before anything was measured
+# on one.  This flavor is that measurement.  It is also the cheapest desktop in the rig: i3 is not a
+# metapackage, so `apt-get -s install` plans 54 packages here (measured on this dev box, 2026-09-09)
+# against ubuntu-mate-desktop's 1197 [recon2/mate 6] -- the whole image is the cloud base, an X server,
+# LightDM's GTK greeter and i3 itself.
+#
+# What this flavor exists to keep honest, all of it measured against a real i3 4.25.1 under Xvfb
+# [recon2/i3 2b, 2c]:
+#
+#   * The handover: the four tools ARE xdotool/wmctrl/xprop/xrandr here, argv byte for byte, with
+#     $I3SOCK set and an i3 IPC socket sitting right there.  The policy is settled by session type
+#     before any backend is detected, so an X11 session with an IPC socket is still an X11 session.
+#   * The dialect underneath it, which only `FUCKWAYLAND_PASSTHROUGH=never` reaches: i3's tree carries
+#     47-bit pointer con ids (`97479943571072`), no `pid`, no `visible`, and wraps a floating view in a
+#     `floating_con`.  Every one of those was a wrong answer until wave 1 (U01-U06); the smoke's `i3ipc`
+#     phase is where they are re-measured on a real session instead of an Xvfb.
+#   * The socket: i3 writes `$XDG_RUNTIME_DIR/i3/ipc-socket.<pid>` -- one directory DOWN, which
+#     find_sway_socket() could not see -- and exports $I3SOCK only into the processes it spawns, never
+#     into its own environ [recon2/i3 1].  The phase runs with `env -u I3SOCK` for exactly that reason.
+#
+# Built and run on this host on 2026-09-09: the golden took 21.4 min on 2 vCPU/3G and carries 936
+# packages (vm/reference/resolute-i3-packages.txt), the session comes up on LightDM autologin and paints
+# both heads at once, and `vm/live-smoke.sh resolute-i3` is 12 green checks over install and passthrough
+# plus 18 more in `i3ipc`, with no red.  gir1.2-gtk-3.0 is NOT on the image (python3-gi is), so warandr's
+# GUI carries the same footnote sway's row does; the rest of the six work.
+#
+# DESKTOP_PKG names the display manager itself because i3 depends on none: lightdm pulls
+# lightdm-gtk-greeter, xserver-xorg and xserver-xorg-video-qxl (measured in the same plan).  `xsetroot`
+# is NOT a package -- it is /usr/bin/xsetroot out of x11-xserver-utils, which EXTRA_PKGS already carries
+# on every flavor (`dpkg -S`, this box) -- and build-image.sh's desktop_i3 needs it for the checkerboard
+# that keeps vmctl's flat-head check from failing i3's solid black root [recon2/i3 4].  xterm is the
+# session's only terminal and the window every check acts on: the byte-identical `wwmctl -lGpx` against
+# `wmctrl -lGpx` wants a client whose geometry and WM_CLASS nobody argues about.
+#
+# vmctl fills in the two @@...@@ placeholders at build time (root ssh public
+# key; the contents of vm/build-image.sh). The base image lives in $VMIMAGES:
+# vmctl-base: ubuntu-26.04-server-cloudimg-amd64.img
+# vmctl-desktop: i3
+# vmctl-distro: ubuntu
+# vmctl-ci: push
+hostname: resolute-i3
+manage_etc_hosts: true
+disable_root: false
+ssh_pwauth: false
+ssh_authorized_keys:
+  - @@ROOT_PUBKEY@@
+users:
+  - name: test
+    uid: 1000
+    gecos: Test User
+    groups: [adm, sudo]
+    shell: /bin/bash
+    lock_passwd: false
+    plain_text_passwd: test
+    sudo: ALL=(ALL) NOPASSWD:ALL
+write_files:
+  # No `owner:` on any entry: write_files runs BEFORE the users module, so
+  # `owner: test:test` aborts the whole module and cloud-init ends in status:
+  # error [recon2/hyprland 6].  build-image.sh chowns under /home/test instead.
+  - path: /etc/ssh/sshd_config.d/60-vmctl.conf
+    content: "PermitRootLogin prohibit-password\n"
+  - path: /etc/modules-load.d/uinput.conf
+    content: "uinput\n"
+  - path: /etc/vmctl-build.env
+    content: |
+      FLAVOR=resolute-i3
+      DESKTOP=i3
+      DESKTOP_PKG="i3 i3status xterm lightdm dbus-x11"
+      EXTRA_PKGS="xdotool wmctrl x11-utils x11-xserver-utils"
+  - path: /usr/local/sbin/vmctl-build
+    permissions: '0755'
+    content: |
+      @@BUILD_SCRIPT@@
+runcmd:
+  - [/usr/local/sbin/vmctl-build]
+power_state:
+  mode: poweroff
+  message: vmctl golden build finished
+  timeout: 120

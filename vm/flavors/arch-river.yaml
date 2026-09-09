@@ -1,0 +1,149 @@
+#cloud-config
+# vmctl flavor arch-river: Arch Linux (the 20260901 cloud image) + river 0.4.8-1 (extra) with
+# xorg-xwayland, foot and wlr-randr, and the window manager BUILT FROM SOURCE; greetd
+# autologin ([initial_session], `river -c /usr/local/bin/vmctl-river-init`) of user test
+# (uid 1000, password test, NOPASSWD sudo) on vt 1.  Native display tool: `wlr-randr` 0.5.0.
+#
+# Two things make this flavor different from every other one in the tree.
+#
+# 1. It is the rig's first FROM-SOURCE step, and it is not optional.  river 0.4 is a
+#    compositor and nothing else: window management is a separate client over
+#    river_window_manager_v1, no window manager is packaged in any distribution, and with no
+#    WM client running the compositor maps no windows at all -- measured, a foot client
+#    connects and lives while zwlr_foreign_toplevel_manager_v1 and ext_foreign_toplevel_list_v1
+#    both report ZERO handles and `wwmctl -l` prints nothing with rc 0 [recon2/river 2b].  So
+#    every "windows on river" number in this tree is river PLUS a window manager, and the one
+#    chosen is upstream's own reference, tinyrwm (C variant, meson, seconds to build) -- the
+#    same one every measurement in the recon was taken against, out of the 23 third-party WMs
+#    the river wiki lists, none of them in any archive [recon2/river 3, 5, 7].
+#    The build runs in its own runcmd step BEFORE /usr/local/sbin/vmctl-build, because
+#    vm/build-image.sh's desktop_river asserts /usr/local/bin/tinyrwm is already executable
+#    and fails the build if it is not.  The source is pinned to a COMMIT, not to `main`:
+#    5c01698c ("2026-08-11"), whose archive was fetched here on 2026-09-09 at
+#    246,009 bytes, sha256 a5ca88ee27e6e6423669e9e726b03fc32dbf0deb314b8f4ebc5ce56c0d2f9940 --
+#    byte-identical to what the branch tarball served the same day.  A branch tarball would
+#    make this golden unreproducible for exactly the reason the base image is pinned to a
+#    dated build.
+#
+# 2. It is the flavor that measures a NEGATIVE result, and that is why it exists at all.
+#    river 0.4's wlr-foreign-toplevel is READ-ONLY: Window.zig creates the handle and only
+#    ever pushes title, app_id and activated at it, registering no listener for any request
+#    (`grep request_close|request_activate|request_maximize|request_minimize|request_fullscreen`
+#    over river/*.zig finds none).  Measured against a live 0.4.8 + tinyrwm: `windowclose`
+#    twice five seconds apart, `windowactivate` with another window focused, `windowminimize`,
+#    and `windowstate --add FULLSCREEN` all returned rc 0 and changed NOTHING, while
+#    river-classic 0.3.17 really closed the window and really set FULLSCREEN [recon2/river 2a].
+#    Accepted-and-ignored is worse than refused, and backend_wlr.py's verify-after-act is the
+#    answer: vm/live-smoke.d/river.sh asserts the WARNING and asserts the window did not move.
+#
+# Not an Ubuntu flavor, and that is measured rather than assumed: `apt-cache madison river`
+# and `apt-cache pkgnames | grep -ixE 'river|riverctl'` are both empty on 26.04 with universe
+# and multiverse enabled, and sources.debian.org's exact search returns null.  Building river
+# on Ubuntu would need a zig 0.16 tarball off ziglang.org (26.04 caps at zig 0.15.2) AND a
+# source build of wlroots 0.20 (26.04 caps at 0.19.2) -- three from-source packages instead of
+# one [recon2/river 1, 5].  Arch's `extra` has river 0.4.8-1 ready, so the flavor costs one
+# meson build and no more.
+#
+# Everything else on river already worked unmodified, all of it measured: detection lands on
+# WlrBackend with no change; wxrandr reads and applies (pos, off/auto, right-of, scale) and
+# warandr answers `wlr`; typing landed byte-exact through zwp_virtual_keyboard_v1 with no
+# /dev/uinput on the box; `wmirror --check` found both capture managers.  `wwmctl -m` prints
+# `Name: wlroots wm`, which is Xwayland's own _NET_SUPPORTING_WM_CHECK string and not
+# river's -- river sets no name of its own [recon2/river 3].
+#
+# `shell=()` in vmctl's DESKTOPS row is not an oversight: a river session has no bar, and
+# tinyrwm draws borders only, so the paint gate here is the DRM scanout owner (`river`) plus
+# the per-head screendump [recon2/river 5].
+#
+# vmctl fills in the two @@...@@ placeholders at build time (root ssh public key; the
+# contents of vm/build-image.sh). The base image lives in $VMIMAGES:
+# vmctl-base: Arch-Linux-x86_64-cloudimg-20260901.583572.qcow2
+# vmctl-desktop: river
+# vmctl-distro: arch
+# vmctl-ci: on-demand
+hostname: arch-river
+manage_etc_hosts: true
+disable_root: false
+ssh_pwauth: false
+ssh_authorized_keys:
+  - @@ROOT_PUBKEY@@
+users:
+  - name: test
+    uid: 1000
+    gecos: Test User
+    groups: [wheel]
+    shell: /bin/bash
+    lock_passwd: false
+    plain_text_passwd: test
+    sudo: ALL=(ALL) NOPASSWD:ALL
+write_files:
+  # No `owner:` on any entry here.  write_files runs BEFORE the users module, so
+  # `owner: test:test` aborts the whole module with `OSError: Unknown user or
+  # group ... 'test'` and cloud-init ends in status: error [recon2/hyprland 6].
+  # Everything under /home/test is chowned by the build script instead.
+  - path: /etc/ssh/sshd_config.d/60-vmctl.conf
+    content: "PermitRootLogin prohibit-password\n"
+  - path: /etc/modules-load.d/uinput.conf
+    content: "uinput\n"
+  - path: /etc/vmctl-build.env
+    content: |
+      FLAVOR=arch-river
+      DESKTOP=river
+      DESKTOP_PKG="river greetd foot xorg-xwayland"
+      EXTRA_PKGS="xdotool wmctrl xorg-xprop xorg-xrandr wl-mirror python-gobject gtk3 acl xterm wlr-randr wayland-utils"
+  # The from-source step.  It runs BEFORE vmctl-build (see runcmd) because
+  # vm/build-image.sh's desktop_river refuses a session with no window manager,
+  # and it installs its own build dependencies because vmctl-build's package
+  # phase has not run yet at that point.  Kept out of build-image.sh on purpose:
+  # that file is the one script vmctl embeds and ci-golden.sh hashes, and a
+  # per-flavor source build with a pinned URL belongs to the flavor that needs it.
+  - path: /usr/local/sbin/vmctl-river-tinyrwm
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      # Build upstream's reference river window manager, pinned to one commit.
+      set -eux -o pipefail
+      exec >>/var/log/vmctl-tinyrwm.log 2>&1
+      con() { printf '%s\n' "$*" > /dev/ttyS0 2>/dev/null || true; }
+      con "vmctl-build: tinyrwm: building river's window manager from source"
+      # cloud-init runs runcmd after the network target, but the mirror is a
+      # different question from the link: the same five-attempt shape
+      # vm/build-image.sh's wait_net uses, against the host it will pull from.
+      for i in 1 2 3 4 5 6 7 8 9 10; do
+        getent hosts geo.mirror.pkgbuild.com >/dev/null 2>&1 && break
+        sleep 5
+      done
+      pacman -Sy --noconfirm --needed archlinux-keyring
+      # pkgconf, meson >= 1.8 (the meson `wayland` module scan_xml the build uses),
+      # ninja, wayland (which is where wayland-scanner lives on Arch) and
+      # libxkbcommon -- upstream's own .builds/archlinux.yml list, minus the
+      # language runtimes for the five variants this flavor does not build.
+      pacman -S --noconfirm --needed base-devel meson ninja pkgconf wayland \
+                                     wayland-protocols libxkbcommon curl
+      cd /tmp
+      rm -rf tinyrwm tinyrwm.tar.gz
+      # Pinned to the commit, not to main: `main.tar.gz` would make this golden
+      # a different image every week.  Fetched and hashed on the dev host
+      # 2026-09-09; the two URLs served identical bytes that day.
+      curl -fsSL -o tinyrwm.tar.gz \
+        https://codeberg.org/river/tinyrwm/archive/5c01698cf605305fcb2a26a932fbc0e0b3d813f4.tar.gz
+      echo "a5ca88ee27e6e6423669e9e726b03fc32dbf0deb314b8f4ebc5ce56c0d2f9940  tinyrwm.tar.gz" \
+        | sha256sum -c -
+      tar xzf tinyrwm.tar.gz
+      cd tinyrwm/c
+      meson setup build
+      ninja -C build
+      install -m 0755 build/tinyrwm /usr/local/bin/tinyrwm
+      /usr/local/bin/tinyrwm --help >/dev/null 2>&1 || true
+      con "vmctl-build: tinyrwm: /usr/local/bin/tinyrwm built and installed"
+  - path: /usr/local/sbin/vmctl-build
+    permissions: '0755'
+    content: |
+      @@BUILD_SCRIPT@@
+runcmd:
+  - [/usr/local/sbin/vmctl-river-tinyrwm]
+  - [/usr/local/sbin/vmctl-build]
+power_state:
+  mode: poweroff
+  message: vmctl golden build finished
+  timeout: 120

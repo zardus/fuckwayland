@@ -1,0 +1,145 @@
+#cloud-config
+# vmctl flavor fedora44-cosmic: Fedora 44 Cloud + COSMIC (cosmic-comp 1.6.0-3.fc44, Smithay)
+# with Xwayland, foot and cosmic-randr; greetd autologin ([initial_session], `start-cosmic`)
+# of user test (uid 1000, password test, NOPASSWD sudo) on vt 1.  Native display tool:
+# `cosmic-randr list --kdl`, which is what vm/live-smoke.d/oracle.py reads here.
+#
+# This is the flavor wdotool/backend_cosmic.py exists for.  cosmic-comp publishes NO
+# zwlr_foreign_toplevel_manager_v1 at all, so before that backend every window command --
+# all of wwmctl, wxprop's native plane, every `wdotool window*` -- answered
+# `no Wayland session found: ... the compositor does not offer wlr-foreign-toplevel` with rc 1
+# or 2, on a live COSMIC session where the display half, typing and `wmirror --check` all
+# already worked [recon2/cosmic 3, recon2/arch 3.5].  What it publishes instead, measured off
+# the wire on 1.7.0: ext_foreign_toplevel_list_v1 v1, zcosmic_toplevel_info_v1 v3,
+# zcosmic_toplevel_manager_v1 v4, ext_workspace_manager_v1 v1, zcosmic_workspace_manager_v2 v2,
+# zwlr_output_manager_v1 v4 + zcosmic_output_manager_v1 v3, zcosmic_keyboard_layout_manager_v1
+# v1, ext_image_copy_capture_manager_v1 v1 + ext_output_image_capture_source_manager_v1 v1.
+#
+# Three absences on that list are checks in the smoke rather than footnotes:
+# no zwlr_virtual_pointer_manager_v1 (so `type` needs no privilege and `mousemove` needs
+# /dev/uinput -- measured both ways, unprivileged type landed and unprivileged mousemove said
+# so and stopped), no zwlr_screencopy_manager_v1 (wmirror qualifies on
+# ext_image_copy_capture alone), and no zwlr_gamma_control_manager_v1 (--brightness/--gamma
+# have no route here) [recon2/arch 3.5].
+#
+# THE VIRTIO QUESTION IS ANSWERED, and this flavor is what answered it.  cosmic-comp's KMS
+# backend was unmeasured on a virtio-vga head with no 3D (pop-os/cosmic-comp#136 reports a
+# blank screen; the recon's cosmic-comp only ever ran nested on llvmpipe [recon2/cosmic 6, 8]).
+# Measured here on 2026-09-09, on cosmic-comp 1.6.0-3.fc44 booted off this flavor's own disk on
+# `-device virtio-vga,max_outputs=4,edid=on` with no host GPU and no virgl:
+#
+#   /sys/kernel/debug/dri/0/state    allocated by = cosmic-comp     (the scanout owner)
+#   pgrep -x cosmic-comp / cosmic-panel   both up, session Service=greetd Seat=seat0 Active=yes
+#   QMP screendump of head 0         1280x800, standard deviation 0.131454
+#
+# The rig's "a head that is one flat colour has not painted" line is 0.02 and the live GNOME
+# heads measure 0.06-0.10 (vm/live-smoke.d/common.sh head_dark), so 0.131 is painted by a wide
+# margin.  The nested COSMIC_BACKEND=winit fallback the plan wrote down as the escape hatch is
+# NOT needed, and nothing in the tree implements it.
+#
+# Two more things that run fell out with, both worth having before the first smoke:
+#
+#   * logind says `Type=tty` for the seated session, NOT `wayland`.  greetd registers a tty
+#     session and libseat did not flip it here, so vmctl's DESKTOPS row for `cosmic` --
+#     logind=("wayland", "tty") -- is right to accept both, and would have been wrong with
+#     "wayland" alone.
+#   * `cosmic-randr list --kdl` off a REAL KMS head, which nobody had (the fixture under
+#     tests/fixtures/vm is a winit document): `output "Virtual-1" enabled=#true`, `position 0 0`,
+#     `scale 1.00`, `transform "normal"` (not the winit rig's `flipped180`), `xwayland_primary
+#     #true`, and a 26-line `modes` block in which ONLY the current mode carries any flag at all
+#     (`mode 1280 800 74994 current=#true preferred=#true`; every other line is bare).
+#     vm/live-smoke.d/oracle.py's cosmic branch reads that document correctly.
+#
+# WHAT STILL BLOCKS THIS FLAVOR, and it is not COSMIC.  `vmctl build fedora44-cosmic` fails in
+# vm/build-image.sh's dm_greetd, on its `systemctl enable greetd.service`, with
+#
+#   Failed to enable unit: File '/etc/systemd/system/display-manager.service' already exists
+#   and is a symlink to /usr/lib/systemd/system/cosmic-greeter.service
+#
+# because `cosmic-desktop-environment` installs cosmic-greeter, whose unit self-enables as
+# display-manager.service during the group transaction -- and Fedora's greetd.service carries
+# `[Install] Alias=display-manager.service` and NO `WantedBy=`, so enabling it is exactly and
+# only that one symlink.  Measured fix, run by hand in the built guest and verified:
+# `systemctl disable cosmic-greeter.service` first, then `systemctl enable greetd.service`
+# creates the link and greetd comes up as the display manager (that is the boot the paint
+# numbers above were taken on).  The one-line change belongs in vm/build-image.sh's dm_greetd
+# (batch 2's file, requested there); it is the same class of bug as Debian's gdm3 having no
+# [Install] section, which dm_enable already handles.  That, and not the compositor, is why
+# this flavor stays `# vmctl-ci: on-demand` until the fix lands.
+#
+# greetd is COSMIC's own shape, not a rig convenience: `dnf repoquery --requires cosmic-greeter`
+# names greetd, greetd-selinux and cosmic-comp >= 1.6.0, so greetd-selinux is installed beside
+# greetd exactly as fedora44-sway does it [recon2/fedora 5, and its table row]. The session
+# file the desktop installs is /usr/share/wayland-sessions/cosmic.desktop
+# (`Exec=start-cosmic`, `DesktopNames=COSMIC`), which is where DM_ARGS comes from.
+#
+# `cosmic-desktop-environment` is a comps ENVIRONMENT id read out of Fedora 44's own
+# comps-Everything.x86_64.xml, and vm/build-image.sh's pkg_desktop turns a word ending in
+# -environment into `dnf -y group install` [recon2/fedora 4, recon2/pkg-rpm].  Measured on
+# this host on 2026-09-09, on the first build anyone has run of this flavor: dnf accepted the
+# id and resolved a transaction of 1,147 packages, and it is SLOW -- the group install alone
+# was still running after 40 minutes on 2 vCPU and 3 GiB with another VM on the same box, so
+# the plan's ~8 min estimate is wrong by a lot and `vmctl build fedora44-cosmic` wants
+# `--timeout 5400`, not the default.  That is the environment, not COSMIC: the largest single
+# chunk of it is fonts and ibus tables.  `cosmic-randr`
+# ships with every COSMIC install and is named anyway, because it is the oracle and an oracle
+# that arrives by Recommends is not an oracle.  Fedora's originals are xdotool 3.20211022.1
+# and xrandr 1.5.3 while the clones print 4.20260303.1 and 1.5.4, so the parity oracle does
+# not run here; arch-sway is the flavor for that [recon2/fedora 7].
+#
+# Two things the first build must record rather than assume, both left alone by
+# vm/build-image.sh's desktop_cosmic on purpose: whether cosmic-initial-setup shows a window
+# (it is in the cosmic-desktop group [recon2/fedora]), and cosmic-idle's config path, key and
+# value -- the recon recorded none, and a guess in the rig would be a setting no measurement
+# stands behind.
+#
+# vmctl fills in the two @@...@@ placeholders at build time (root ssh public key; the
+# contents of vm/build-image.sh). The base image lives in $VMIMAGES:
+# vmctl-base: Fedora-Cloud-Base-Generic-44-1.7.x86_64.qcow2
+# vmctl-base-sha256: 28680fe5b371a5a82ebf43a31926e086a168e59949d03969c5093e7071f90b7f
+# vmctl-desktop: cosmic
+# vmctl-distro: fedora
+# vmctl-ci: on-demand
+hostname: fedora44-cosmic
+manage_etc_hosts: true
+disable_root: false
+ssh_pwauth: false
+ssh_authorized_keys:
+  - @@ROOT_PUBKEY@@
+users:
+  - name: test
+    uid: 1000
+    gecos: Test User
+    groups: [wheel]
+    shell: /bin/bash
+    lock_passwd: false
+    plain_text_passwd: test
+    sudo: ALL=(ALL) NOPASSWD:ALL
+write_files:
+  # No `owner:` on any entry here.  write_files runs BEFORE the users module, so
+  # `owner: test:test` aborts the whole module with `OSError: Unknown user or
+  # group ... 'test'` and cloud-init ends in status: error [recon2/hyprland 6].
+  # Everything under /home/test is chowned by the build script instead -- which on
+  # COSMIC is load-bearing and not hygiene: cosmic-comp panics with
+  # Io(Os { code: 13 }) at src/config/mod.rs:173 when ~/.config is not the user's
+  # before the first login [recon2/arch].
+  - path: /etc/ssh/sshd_config.d/60-vmctl.conf
+    content: "PermitRootLogin prohibit-password\n"
+  - path: /etc/modules-load.d/uinput.conf
+    content: "uinput\n"
+  - path: /etc/vmctl-build.env
+    content: |
+      FLAVOR=fedora44-cosmic
+      DESKTOP=cosmic
+      DESKTOP_PKG="cosmic-desktop-environment cosmic-randr greetd greetd-selinux foot xorg-x11-server-Xwayland"
+      EXTRA_PKGS="xdotool wmctrl xprop xrandr wl-mirror python3-gobject gtk3 acl xterm"
+  - path: /usr/local/sbin/vmctl-build
+    permissions: '0755'
+    content: |
+      @@BUILD_SCRIPT@@
+runcmd:
+  - [/usr/local/sbin/vmctl-build]
+power_state:
+  mode: poweroff
+  message: vmctl golden build finished
+  timeout: 120

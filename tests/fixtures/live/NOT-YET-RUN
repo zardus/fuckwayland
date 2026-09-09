@@ -8,11 +8,20 @@
 # vm/live-smoke.d/guest-capture.sh in it; on this host that is one VM at a time,
 # which is why the list is not empty.  The batch that first runs a flavor
 # deletes its own line here in the same commit that adds the recording.
+budgie
 cinnamon
 cinnamon-wayland
+cosmic
+gnome-x11
 hypr
 kde
 kde-x11
+labwc
+lxqt
+lxqt-wayland
+mate
+river
 sway
 wayfire
 xfce
+xfce-wayland

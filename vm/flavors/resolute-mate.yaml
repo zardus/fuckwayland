@@ -1,0 +1,88 @@
+#cloud-config
+# vmctl flavor resolute-mate: Ubuntu 26.04 LTS (resolute) + ubuntu-mate-desktop 1.308, MATE 1.26 on
+# marco 1.26.2-4.1build1 over Xorg (X11); LightDM autologin (autologin-session=mate) of user test
+# (uid 1000, password test, NOPASSWD sudo).  The X11-path oracle here is real xrandr, as on
+# resolute-xfce.
+#
+# MATE is the best-behaved X11 target the recon measured: marco is a full EWMH window manager -- 68
+# atoms in _NET_SUPPORTED, `_NET_WM_STATE_SHADED` among them, which mutter dropped and KWin 6 refuses --
+# so every action the four tools hand over lands [recon2/mate 1, 3].  There is no MATE Wayland session
+# in Ubuntu at all: upstream's mate-wayland-session runs Wayfire and needs mate-settings-daemon >= 1.29.1
+# against this archive's 1.26.1, so this flavor has no twin the way resolute-cinnamon has one
+# [recon2/mate 1].
+#
+# What is measured here and nowhere else:
+#
+#   * `wwmctl -m` printing `Name: Metacity (Marco)` with `Class: N/A`, `PID: N/A` and the showing-the-
+#     desktop mode `N/A` -- marco's check window carries no _NET_WM_PID and no WM_CLASS, and
+#     _NET_SHOWING_DESKTOP is absent right after start.  Three N/A columns are what a wmctrl user of a
+#     MATE box actually sees, so they are asserted as such and not as a defect [recon2/mate 1].
+#   * `-b add,shaded` sticking: shading is a live state on this desktop.
+#   * `x11root`: root over `vmctl ssh` with `env -i` answering, through `mate-session` in
+#     fwcommon/session.py's _SESSION_LEADERS (comm is 12 bytes, inside the 15 the kernel keeps).  The
+#     mechanism gap was measured on this desktop -- stock tuple `_shell_environ(1000)` -> {}, with the
+#     name added -> DISPLAY=:91 -- and whether LightDM's ~/.Xauthority masks it on a real box was left
+#     to a VM [recon2/mate 4].  This flavor is that VM.
+#   * `heads`: mate-settings-daemon's xrandr plugin with `turn-on-external-monitors-at-startup=true`,
+#     the one MATE-specific rig risk (heads 2..N coming up disabled on a three-head boot).  The key is
+#     false by default and desktop_mate does not write it, so the phase measures what actually happens
+#     before anyone claims it [recon2/mate 5].
+#
+# ubuntu-mate-desktop plans 1197 further packages here [recon2/mate 6], the heaviest metapackage in the
+# rig after Lubuntu's; the build is one golden of the resolute-xfce shape.  It carries x11-utils,
+# x11-xserver-utils, python3-gi and gir1.2-gtk-3.0 -- so warandr's GTK 3 dependency is satisfied on a
+# default install and arandr is not there, which makes warandr a real addition on this desktop -- and
+# it carries neither xdotool nor wmctrl, which is exactly what the README's X11 sentence tells a MATE
+# user to apt install.  EXTRA_PKGS puts them on the image because the parity oracle needs them; xterm
+# is EXTRA for the reason resolute-cinnamon's is: the byte-identical `wwmctl -lGpx` against
+# `wmctrl -lGpx` was measured on an xterm [recon2/mate 3].
+#
+# There is no Ubuntu MATE 26.04 ISO on cdimage (releases/26.04/ and releases/resolute/ are both 404,
+# measured with curl [recon2/mate 1]), so this is a cloud-image flavor and there is no ISO twin to
+# compare it against.
+#
+# vmctl fills in the two @@...@@ placeholders at build time (root ssh public
+# key; the contents of vm/build-image.sh). The base image lives in $VMIMAGES:
+# vmctl-base: ubuntu-26.04-server-cloudimg-amd64.img
+# vmctl-desktop: mate
+# vmctl-distro: ubuntu
+# vmctl-ci: push
+hostname: resolute-mate
+manage_etc_hosts: true
+disable_root: false
+ssh_pwauth: false
+ssh_authorized_keys:
+  - @@ROOT_PUBKEY@@
+users:
+  - name: test
+    uid: 1000
+    gecos: Test User
+    groups: [adm, sudo]
+    shell: /bin/bash
+    lock_passwd: false
+    plain_text_passwd: test
+    sudo: ALL=(ALL) NOPASSWD:ALL
+write_files:
+  # No `owner:` on any entry: write_files runs BEFORE the users module, so
+  # `owner: test:test` aborts the whole module and cloud-init ends in status:
+  # error [recon2/hyprland 6].  build-image.sh chowns under /home/test instead.
+  - path: /etc/ssh/sshd_config.d/60-vmctl.conf
+    content: "PermitRootLogin prohibit-password\n"
+  - path: /etc/modules-load.d/uinput.conf
+    content: "uinput\n"
+  - path: /etc/vmctl-build.env
+    content: |
+      FLAVOR=resolute-mate
+      DESKTOP=mate
+      DESKTOP_PKG="ubuntu-mate-desktop"
+      EXTRA_PKGS="xdotool wmctrl x11-utils x11-xserver-utils xterm"
+  - path: /usr/local/sbin/vmctl-build
+    permissions: '0755'
+    content: |
+      @@BUILD_SCRIPT@@
+runcmd:
+  - [/usr/local/sbin/vmctl-build]
+power_state:
+  mode: poweroff
+  message: vmctl golden build finished
+  timeout: 120

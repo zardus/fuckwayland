@@ -1,0 +1,97 @@
+#cloud-config
+# vmctl flavor resolute-budgie: Ubuntu 26.04 LTS (resolute) + Ubuntu Budgie 10.10.2, which on
+# this release is a WAYLAND desktop running on labwc.  SDDM autologin of user test (uid 1000,
+# password test, NOPASSWD sudo) into budgie-desktop.desktop.  Native display tool:
+# `wlr-randr`, with `busctl --system` on org.buddiesofbudgie.Services as a second opinion.
+#
+# Magpie is gone.  Budgie 10.10 dropped its Mutter fork and became protocol-first over
+# wlroots, and Ubuntu's package proves it from the file list alone: budgie-core 10.10.2-1ubuntu4.1
+# ships /usr/share/wayland-sessions/budgie-desktop.desktop and NOTHING under
+# /usr/share/xsessions, no budgie-wm, no magpie (24.04's budgie-core 10.9.1 was the opposite:
+# Depends libmagpie-0-0, an xsessions entry, no wayland-sessions entry) [recon2/budgie 0].
+# The session entry is `Exec=/usr/bin/startbudgielabwc`, `DesktopNames=Budgie`, and
+# startbudgielabwc exports XDG_SESSION_TYPE=wayland and then
+# `exec labwc --config-dir ~/.config/budgie-desktop/labwc -S budgie-desktop`.
+#
+# Why this flavor and not just resolute-labwc: it is a SHIPPED DISTRO DESKTOP on labwc, and
+# its own default install already carries the X11 tool this project replaces.  Measured from
+# apt: budgie-desktop 10.10.2 Depends on `xdotool`, `wlr-randr` and `wdisplays`; budgie-core
+# Depends grim/slurp/swaybg/swayidle/wlopm and Recommends labwc; ubuntu-budgie-desktop
+# Recommends sddm, sddm-conf and the Budgie SDDM theme, and no lightdm appears anywhere in it
+# [recon2/budgie 0, recon2/labwc 1].  Upstream names the five protocols Budgie requires --
+# ext-workspace-v1, wlr-foreign-toplevel-management, wlr-layer-shell, wlr-output-management,
+# xdg-output -- and four of the five are the ones this repo's wlr paths already speak.
+#
+# So this image measures the same floor resolute-labwc does, with a panel on top of it and
+# under a different display manager, and it is where two rows of that floor are read against
+# a desktop that SHOWS the answer: labwc's own rc.xml here carries <desktops number="4"/>, so
+# the panel's workspace switcher shows four while `wwmctl -d` refused before backend_wlr.py
+# grew its ext_workspace half; and the XWayland id join has budgie-panel and xfdesktop-shaped
+# layer-shell surfaces to NOT list beside the real windows [recon2/budgie 3, 4].
+#
+# `foot` is in EXTRA on purpose: budgie-desktop Depends on no terminal emulator at all, and
+# every window phase in vm/live-smoke.d/budgie.sh needs the same `foot -- sh -c 'cat >>'`
+# editor labwc.sh uses, so that the two flavors differ in the desktop and not in the client.
+# xterm is there for the X plane, as on resolute-labwc.
+#
+# The debconf pre-seed of SDDM is not optional: ubuntu-budgie-desktop Recommends `xorg` and
+# can drag another display manager in mid-install, and vm/build-image.sh's pkg_seed_dm answers
+# the shared/default-x-display-manager question before the desktop transaction starts.
+# `budgie-desktop.desktop` exists only under /usr/share/wayland-sessions, so dm_sddm's
+# same-name-in-both-directories guard is satisfied trivially -- and it is kept, because the
+# day Budgie ships an X11 session again is the day it should fire.
+#
+# The one part of the recipe the recon could NOT verify, and the first build is where it gets
+# settled: which idle/lock keys to turn off.  Budgie's are not gsettings-shaped like GNOME's
+# -- budgie-core pulls swayidle, swaylock and wlopm and budgie-daemon owns power -- so
+# desktop_budgie hides the swayidle/budgie-screensaver autostarts and no more than that
+# [recon2/budgie 5].  If a lock appears in the smoke's screenshots, that hook is where the fix
+# goes, and org.buddiesofbudgie.labwc-bridge must NOT be hidden: it is what writes labwc's
+# config for this session.
+#
+# vmctl fills in the two @@...@@ placeholders at build time (root ssh public
+# key; the contents of vm/build-image.sh). The base image lives in $VMIMAGES:
+# vmctl-base: ubuntu-26.04-server-cloudimg-amd64.img
+# vmctl-desktop: budgie
+# vmctl-distro: ubuntu
+# vmctl-ci: push
+hostname: resolute-budgie
+manage_etc_hosts: true
+disable_root: false
+ssh_pwauth: false
+ssh_authorized_keys:
+  - @@ROOT_PUBKEY@@
+users:
+  - name: test
+    uid: 1000
+    gecos: Test User
+    groups: [adm, sudo]
+    shell: /bin/bash
+    lock_passwd: false
+    plain_text_passwd: test
+    sudo: ALL=(ALL) NOPASSWD:ALL
+write_files:
+  # No `owner:` on any entry here.  write_files runs BEFORE the users module, so
+  # `owner: test:test` aborts the whole module with `OSError: Unknown user or
+  # group ... 'test'` and cloud-init ends in status: error [recon2/hyprland 6].
+  # Everything under /home/test is chowned by the build script instead.
+  - path: /etc/ssh/sshd_config.d/60-vmctl.conf
+    content: "PermitRootLogin prohibit-password\n"
+  - path: /etc/modules-load.d/uinput.conf
+    content: "uinput\n"
+  - path: /etc/vmctl-build.env
+    content: |
+      FLAVOR=resolute-budgie
+      DESKTOP=budgie
+      DESKTOP_PKG="ubuntu-budgie-desktop wl-mirror"
+      EXTRA_PKGS="xdotool wmctrl x11-utils x11-xserver-utils foot xterm"
+  - path: /usr/local/sbin/vmctl-build
+    permissions: '0755'
+    content: |
+      @@BUILD_SCRIPT@@
+runcmd:
+  - [/usr/local/sbin/vmctl-build]
+power_state:
+  mode: poweroff
+  message: vmctl golden build finished
+  timeout: 120

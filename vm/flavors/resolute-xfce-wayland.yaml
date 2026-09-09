@@ -1,0 +1,98 @@
+#cloud-config
+# vmctl flavor resolute-xfce-wayland: Ubuntu 26.04 LTS (resolute) + Xubuntu's Xfce 4.20, run
+# as its WAYLAND session -- `startxfce4 --wayland`, whose compositor is labwc.  LightDM
+# autologin of user test (uid 1000, password test, NOPASSWD sudo) with
+# autologin-session=xfce-wayland.  Native display tool: `wlr-randr`.
+#
+# Half of Xfce is a Wayland session and the matrix calls the whole desktop X11.  This flavor
+# is the other half: resolute-xfce and this one install the same xubuntu-desktop and differ in
+# ONE LightDM key, so anything that differs between the two runs is the session type and
+# nothing else.
+#
+# Read verbatim out of /usr/bin/startxfce4 4.20.4-1 and measured as the process tree
+# [recon2/xfce-wayland 1]: xfce4-session 4.20.4-1 ships
+# /usr/share/wayland-sessions/xfce-wayland.desktop (`Exec=startxfce4 --wayland`,
+# `DesktopNames=XFCE`), `default_compositor="labwc"`, and the session comes up as
+#
+#   dbus-run-session -- labwc --config-dir ~/.config/xfce4/labwc --config .../rc.xml \
+#                             --session xfce4-session
+#    +- xfce4-session -+- xfsettingsd +- xfce4-panel +- xfdesktop
+#   Xwayland :2 -rootless -core -terminate 10 ... (started by labwc at session start, NO -auth)
+#
+# xfwm4 does not run at all: labwc is the window manager.  The leader's environment carries
+# XDG_SESSION_TYPE=wayland, XDG_CURRENT_DESKTOP=XFCE, DESKTOP_SESSION=xfce, WAYLAND_DISPLAY
+# and a DISPLAY with no XAUTHORITY, and the session bus owns no org.gnome.Shell, no
+# org.kde.KWin and no org.freedesktop.portal.Desktop -- so detection lands on the generic
+# wlroots paths and the nodialog claim is trivially true here [recon2/xfce-wayland 1].
+#
+# The packaging landmine this flavor exists to document, measured: `xubuntu-desktop 2.272`
+# lists NEITHER labwc NOR wayfire in Depends or Recommends, while LightDM 1.32.0's default
+# sessions-directory already includes /usr/share/wayland-sessions -- so a stock Xubuntu 26.04
+# OFFERS "Xfce Session (Wayland)" and picking it dies with
+# `/usr/bin/startxfce4: Please either install labwc or specify another compositor as argument`
+# (rc 1).  `labwc` is therefore named beside xubuntu-desktop below, which makes this and
+# resolute-kde-x11 the two flavors that are not a pure default install of their Ubuntu
+# flavour [recon2/xfce-wayland 1].
+#
+# xfce-wayland.desktop exists in neither /usr/share/xsessions nor /usr/share/lightdm/sessions,
+# so the same-name-in-two-directories ambiguity the KDE flavors guard against cannot bite
+# here; vm/build-image.sh's desktop_xfce_wayland asserts the file and the labwc binary anyway,
+# and reuses the X11 flavor's xfconf blocks verbatim -- screensaver, power manager, session
+# lock and the hidden autostarts all apply unchanged to the Wayland session.
+#
+# The head-layout helper goes on XDG autostart and NOT into ~/.config/labwc: this session's
+# labwc reads ~/.config/xfce4/labwc, and xfce4-session is what runs XDG autostart
+# [vm/build-image.sh autostart_wlr_layout, recon2/xfce-wayland 1].  wlroots adds the initial
+# outputs in reverse enumeration order here as on bare labwc, which is what the helper fixes.
+#
+# `wlr-randr` is added because Xfce's own display tool is the xfce4-display-settings GUI and
+# `xfconf-query -c displays` reads what xfsettingsd SAVED, not what is on screen.  xterm is in
+# EXTRA for the X plane: xfce4-terminal is a Wayland client here, and the XWayland id join
+# needs a real X client.
+#
+# vmctl fills in the two @@...@@ placeholders at build time (root ssh public
+# key; the contents of vm/build-image.sh). The base image lives in $VMIMAGES:
+# vmctl-base: ubuntu-26.04-server-cloudimg-amd64.img
+# vmctl-desktop: xfce-wayland
+# vmctl-distro: ubuntu
+# vmctl-ci: push
+hostname: resolute-xfce-wayland
+manage_etc_hosts: true
+disable_root: false
+ssh_pwauth: false
+ssh_authorized_keys:
+  - @@ROOT_PUBKEY@@
+users:
+  - name: test
+    uid: 1000
+    gecos: Test User
+    groups: [adm, sudo]
+    shell: /bin/bash
+    lock_passwd: false
+    plain_text_passwd: test
+    sudo: ALL=(ALL) NOPASSWD:ALL
+write_files:
+  # No `owner:` on any entry here.  write_files runs BEFORE the users module, so
+  # `owner: test:test` aborts the whole module with `OSError: Unknown user or
+  # group ... 'test'` and cloud-init ends in status: error [recon2/hyprland 6].
+  # Everything under /home/test is chowned by the build script instead.
+  - path: /etc/ssh/sshd_config.d/60-vmctl.conf
+    content: "PermitRootLogin prohibit-password\n"
+  - path: /etc/modules-load.d/uinput.conf
+    content: "uinput\n"
+  - path: /etc/vmctl-build.env
+    content: |
+      FLAVOR=resolute-xfce-wayland
+      DESKTOP=xfce-wayland
+      DESKTOP_PKG="xubuntu-desktop labwc wlr-randr wl-mirror"
+      EXTRA_PKGS="xdotool wmctrl x11-utils x11-xserver-utils xterm"
+  - path: /usr/local/sbin/vmctl-build
+    permissions: '0755'
+    content: |
+      @@BUILD_SCRIPT@@
+runcmd:
+  - [/usr/local/sbin/vmctl-build]
+power_state:
+  mode: poweroff
+  message: vmctl golden build finished
+  timeout: 120

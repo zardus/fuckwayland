@@ -1,0 +1,94 @@
+#cloud-config
+# vmctl flavor resolute-labwc: Ubuntu 26.04 LTS (resolute) + labwc 0.9.3-1 (universe, built on
+# wlroots 0.19.2) with Xwayland, foot, grim and wl-mirror; greetd autologin ([initial_session])
+# of user test (uid 1000, password test, NOPASSWD sudo) into `labwc` on vt 1.  Native display
+# tool: `wlr-randr` 0.4.1, which is also what vm/live-smoke.d/oracle.py reads here.
+#
+# This is the image the GENERIC wlroots paths are measured on.  Every other wlroots claim in
+# the tree rests on resolute-sway, whose IPC socket makes wdotool/wwmctl/wxprop take the sway
+# backend and never the generic one; labwc has no IPC socket at all -- the package is labwc,
+# labnag and lab-sensible-terminal and nothing else -- so detection lands on `WlrBackend` and
+# `wxrandr`'s `wlr` backend, and what runs here is the floor [recon2/labwc 1, 4].
+#
+# Three things are measured nowhere else, all of them on labwc 0.9.3 in the recon:
+#
+#   * ext_workspace_manager_v1.  labwc advertises it v1 (and zcosmic_workspace_manager_v1 v1)
+#     where sway 1.11 advertises no workspace protocol at all; configured with three named
+#     desktops it published `one`/`two`/`three` with the active bit on the first, and the
+#     default with no <desktops> block is one workspace named `Workspace 1`
+#     [recon2/labwc 2, 6a].  `wwmctl -d` and get_desktop refused outright on the floor, and
+#     backend_wlr.py's workspace half is what this flavor exists to prove.
+#   * XWayland windows under their REAL X id.  The xterm whose X id is 0x40000c was listed as
+#     0x000f4240 with a synthesized WM_CLASS "xterm","xterm" for the X server's own
+#     "xterm","XTerm", pid 0 and the whole output as its rectangle.  A same-compositor control
+#     on one headless sway settled that it is the backend and not labwc: native
+#     `0x00000005 0 85920` became `0x000f4240 -1 0` under WDOTOOL_BACKEND=wlr [recon2/labwc 3].
+#   * the move/resize refusal's REASON.  labwc is a stacking compositor, so README note (c)'s
+#     "sway tiles" explanation is wrong here; the protocol has no request, which is what the
+#     refusal has to say [recon2/labwc 6c].
+#
+# Everything else already worked, unmodified, on the first try: wxrandr's whole apply set
+# (pos + primary + relative chains, rotate, fractional scale, --same-as, off/on, custom
+# modelines), warandr --command, wmirror over zwlr_screencopy_manager_v1 v3 AND
+# ext_image_copy_capture_manager_v1 v1, and typing byte-exact through zwp_virtual_keyboard_v1
+# on a box with no /dev/uinput at all [recon2/labwc 3].
+#
+# `swaybg` and `sway-backgrounds` are not cosmetic.  labwc paints NOTHING -- no bar, no
+# wallpaper -- so vmctl's "head 0 is not one flat colour" check would fail on a perfectly
+# correct boot; swaybg is both the wallpaper and the DESKTOPS row's `shell` process
+# [recon2/labwc 7].  `wlr-randr` must be named explicitly: labwc only Suggests its helpers.
+# `xterm` is in EXTRA for the X-id join above -- it is the exact client the 0x40000c
+# measurement was taken on.
+#
+# The session config (~/.config/labwc/{rc.xml,environment,autostart}, three desktops, the
+# swaybg line and the head-layout helper) is written by vm/build-image.sh's desktop_labwc and
+# labwc_config, not here: wlroots adds the initial outputs in REVERSE enumeration order on
+# labwc too (HEADLESS-1 landed at +1280+0), and the rig's contract is head 0 = Virtual-1 at
+# (0,0) [recon2/labwc 3, 7].
+#
+# vmctl fills in the two @@...@@ placeholders at build time (root ssh public
+# key; the contents of vm/build-image.sh). The base image lives in $VMIMAGES:
+# vmctl-base: ubuntu-26.04-server-cloudimg-amd64.img
+# vmctl-desktop: labwc
+# vmctl-distro: ubuntu
+# vmctl-ci: push
+hostname: resolute-labwc
+manage_etc_hosts: true
+disable_root: false
+ssh_pwauth: false
+ssh_authorized_keys:
+  - @@ROOT_PUBKEY@@
+users:
+  - name: test
+    uid: 1000
+    gecos: Test User
+    groups: [adm, sudo]
+    shell: /bin/bash
+    lock_passwd: false
+    plain_text_passwd: test
+    sudo: ALL=(ALL) NOPASSWD:ALL
+write_files:
+  # No `owner:` on any entry here.  write_files runs BEFORE the users module, so
+  # `owner: test:test` aborts the whole module with `OSError: Unknown user or
+  # group ... 'test'` and cloud-init ends in status: error [recon2/hyprland 6].
+  # Everything under /home/test is chowned by the build script instead.
+  - path: /etc/ssh/sshd_config.d/60-vmctl.conf
+    content: "PermitRootLogin prohibit-password\n"
+  - path: /etc/modules-load.d/uinput.conf
+    content: "uinput\n"
+  - path: /etc/vmctl-build.env
+    content: |
+      FLAVOR=resolute-labwc
+      DESKTOP=labwc
+      DESKTOP_PKG="labwc xwayland foot grim swaybg sway-backgrounds greetd dbus-user-session wlr-randr wl-mirror"
+      EXTRA_PKGS="xdotool wmctrl x11-utils x11-xserver-utils xterm"
+  - path: /usr/local/sbin/vmctl-build
+    permissions: '0755'
+    content: |
+      @@BUILD_SCRIPT@@
+runcmd:
+  - [/usr/local/sbin/vmctl-build]
+power_state:
+  mode: poweroff
+  message: vmctl golden build finished
+  timeout: 120

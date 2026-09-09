@@ -1,0 +1,99 @@
+#cloud-config
+# vmctl flavor arch-cosmic: Arch Linux (the 20260901 cloud image) + COSMIC 1:1.7.0-1
+# (cosmic-comp, Smithay) with xorg-xwayland, foot and cosmic-randr; greetd autologin
+# ([initial_session], `start-cosmic`) of user test (uid 1000, password test, NOPASSWD sudo) on
+# vt 1.  Native display tool: `cosmic-randr list --kdl`.
+#
+# The bracket for fedora44-cosmic, the way arch-hypr is the bracket for resolute-hypr: same
+# desktop, newest release.  Arch `extra` carries cosmic-comp and cosmic-session at 1:1.7.0-1
+# where Fedora 44 carries 1.6.0-3.fc44, and the whole COSMIC measurement in the recon --
+# `wwmctl -l` refusing with the wlr-foreign-toplevel sentence, `wdotool type` landing
+# unprivileged, `wdotool mousemove` failing without /dev/uinput and working as root,
+# `wmirror --check` accepting ext_image_copy_capture_manager_v1 alone, `wxrandr --query`
+# reading Virtual-1 1920x1080+0+0, and `cosmic-randr list --kdl` tracking a
+# `--rotate left --scale 1.5x1.5` apply exactly -- was taken on 1.7.0, not on Fedora's
+# [recon2/arch 3.5, recon2/cosmic 3, 6].  The install itself was 76 s of pacman there.
+#
+# THE VIRTIO QUESTION IS ANSWERED, and the sibling flavor answered it: cosmic-comp's KMS
+# backend does paint on a virtio-vga head with no 3D and no virgl (pop-os/cosmic-comp#136
+# reports a blank screen; the recon only ever ran it nested on llvmpipe [recon2/cosmic 6, 8]).
+# Measured 2026-09-09 on cosmic-comp 1.6.0-3.fc44 booted off fedora44-cosmic's own disk:
+# `/sys/kernel/debug/dri/0/state` says `allocated by = cosmic-comp`, and a QMP screendump of
+# head 0 measures standard deviation 0.131454 against the rig's 0.02 flat-colour line -- the
+# whole reading is in that flavor's header.  What THIS flavor still adds is the same
+# measurement on 1.7.0: until a second distro repeats it, the answer is about Fedora's build
+# of cosmic-comp rather than about cosmic-comp.
+#
+# Why it is on demand anyway, and it is not the paint.  (1) $VMIMAGES on this host carries
+# only the undated Arch-Linux-x86_64-cloudimg.qcow2, not the dated build pinned below, so this
+# flavor has never been built at all.  (2) fedora44-cosmic's build dies in vm/build-image.sh's
+# dm_greetd, on a cosmic-greeter that has already taken display-manager.service (batch 2's
+# file, requested there with the verified one-line fix).  Whether (2) bites here too is
+# unmeasured: DESKTOP_PKG below names no greeter package, and whether anything in it pulls
+# Arch's cosmic-greeter in as a dependency has not been checked here -- the first Arch build
+# is what settles that too.
+#
+# The chown of ~/.config below is load-bearing on this desktop and measured on THIS distro:
+# cosmic-comp panics with `Io(Os { code: 13 })` at src/config/mod.rs:173 when ~/.config is not
+# the user's before the first login [recon2/arch].  vm/build-image.sh's desktop_cosmic does it
+# again after the desktop install, which is the copy that matters if a package creates a file
+# there as root.
+#
+# What is NOT here, and why: `wl-mirror`, `python-gobject` and `gtk3` are in EXTRA as on
+# arch-sway, but nothing on this image runs the parity oracle even though Arch is the one
+# archive that carries xdotool 4.20260303.1 and wmctrl 1.07 -- COSMIC has no X11 session to
+# compare against, and the oracle job runs on arch-sway [recon2/arch 2].  They are installed
+# so that the six tools are measured with the same neighbours on every Arch flavor.
+#
+# The base image is pinned to the DATED build rather than the `latest` symlink name: a rolling
+# golden rots weekly, and the undated copy of exactly these bytes measured sha256
+# e3e688f97a71b265ce202905a504253f60f3680cf57d011a45411c43bedfa930 on 2026-09-08
+# [recon2/arch 1].  The dated file publishes its own .SHA256 beside it, which ci-golden.sh
+# checks; `# vmctl-base-sha256:` stays out until somebody has verified that file's bytes.
+#
+# vmctl fills in the two @@...@@ placeholders at build time (root ssh public key; the
+# contents of vm/build-image.sh). The base image lives in $VMIMAGES:
+# vmctl-base: Arch-Linux-x86_64-cloudimg-20260901.583572.qcow2
+# vmctl-desktop: cosmic
+# vmctl-distro: arch
+# vmctl-ci: on-demand
+hostname: arch-cosmic
+manage_etc_hosts: true
+disable_root: false
+ssh_pwauth: false
+ssh_authorized_keys:
+  - @@ROOT_PUBKEY@@
+users:
+  - name: test
+    uid: 1000
+    gecos: Test User
+    groups: [wheel]
+    shell: /bin/bash
+    lock_passwd: false
+    plain_text_passwd: test
+    sudo: ALL=(ALL) NOPASSWD:ALL
+write_files:
+  # No `owner:` on any entry here.  write_files runs BEFORE the users module, so
+  # `owner: test:test` aborts the whole module with `OSError: Unknown user or
+  # group ... 'test'` and cloud-init ends in status: error [recon2/hyprland 6].
+  # Everything under /home/test is chowned by the build script instead.
+  - path: /etc/ssh/sshd_config.d/60-vmctl.conf
+    content: "PermitRootLogin prohibit-password\n"
+  - path: /etc/modules-load.d/uinput.conf
+    content: "uinput\n"
+  - path: /etc/vmctl-build.env
+    content: |
+      FLAVOR=arch-cosmic
+      DESKTOP=cosmic
+      DESKTOP_PKG="cosmic-comp cosmic-session cosmic-panel cosmic-randr greetd foot xorg-xwayland"
+      EXTRA_PKGS="xdotool wmctrl xorg-xprop xorg-xrandr wl-mirror python-gobject gtk3 acl xterm wlr-randr wayland-utils"
+  - path: /usr/local/sbin/vmctl-build
+    permissions: '0755'
+    content: |
+      @@BUILD_SCRIPT@@
+runcmd:
+  - [/usr/local/sbin/vmctl-build]
+power_state:
+  mode: poweroff
+  message: vmctl golden build finished
+  timeout: 120

@@ -1,0 +1,79 @@
+#cloud-config
+# vmctl flavor resolute-lxqt: Ubuntu 26.04 LTS (resolute) + lubuntu-desktop 26.04.3 -- LXQt 2.3 with
+# OPENBOX as the window manager on Xorg (X11) -- SDDM autologin (Session=lxqt.desktop) of user test
+# (uid 1000, password test, NOPASSWD sudo).  Lubuntu is the fourth Ubuntu flavour and the rig has never
+# built it.  The X11-path oracle is real xrandr; measured in a live session:
+# ` 0: +*Virtual-1 1920/487x1080/274+0+0  Virtual-1` [recon2/openbox].
+#
+# This is the flavor the X11 root story was written for.  On a real SDDM+LXQt session all four tools
+# work in-session and ALL FOUR FAIL from `ssh root@box` with an empty environment --
+# `Authorization required, but no authorization protocol specified` -- because SDDM writes the cookie to
+# /tmp/xauth_<random>, which is neither ~/.Xauthority nor anything in a runtime directory, and
+# fwcommon/session.py's _SESSION_LEADERS named no LXQt or Openbox process to read it from.  Four names
+# added to that tuple (`lxqt-session`, `lxsession`, `openbox`, `labwc`) turned all four from broken to
+# working in the same session, measured both ways [recon2/openbox A].  vm/live-smoke.d/lxqt.sh's
+# `x11root` phase is that measurement, kept.
+#
+# DESKTOP_PKG is `lubuntu-desktop` and NOT `lxqt-core`: on a clean 26.04 `apt-get install lxqt-core`
+# dies with `trying to overwrite '/etc/xdg/lxqt/panel.conf', which is also in package
+# lxqt-branding-debian (0.14.0.7)` -- lxqt-panel 2.3.2-0ubuntu1 declares no Breaks/Replaces against it.
+# lubuntu-desktop pulls lubuntu-default-settings and lubuntu-artwork instead, whose files live under
+# /etc/xdg/xdg-Lubuntu/, so the conflict does not arise [recon2/openbox, measured in a VM].  That same
+# lubuntu-default-settings is where `window_manager=openbox` comes from; without the key lxqt-session
+# comes up with no WM and no panel at all (`ps -u test` showed lxqt-session alone), which is why
+# build-image.sh's desktop_lxqt writes the key a second time under /etc/xdg/lxqt.
+#
+# Cost: the recon's lxqt-core install took ~40 min on a loaded host for ~700 packages; lubuntu-desktop
+# is bigger, of kubuntu-desktop's order.  qterminal is Lubuntu's terminal and arrives with the
+# metapackage; xterm is EXTRA all the same, because the checks act on the client the byte-parity
+# measurement used (`0x02400014  0 1967 719 396 484 316 xterm.XTerm ... fwsmoke` against real wmctrl's
+# own bytes [recon2/openbox A]).
+#
+# The Wayland twin is resolute-lxqt-wayland (batch 14): the same desktop over labwc, from
+# `lxqt-wayland-session`, which is an opt-in apt install and did not make the Lubuntu ISO.
+#
+# vmctl fills in the two @@...@@ placeholders at build time (root ssh public
+# key; the contents of vm/build-image.sh). The base image lives in $VMIMAGES:
+# vmctl-base: ubuntu-26.04-server-cloudimg-amd64.img
+# vmctl-desktop: lxqt
+# vmctl-distro: ubuntu
+# vmctl-ci: push
+hostname: resolute-lxqt
+manage_etc_hosts: true
+disable_root: false
+ssh_pwauth: false
+ssh_authorized_keys:
+  - @@ROOT_PUBKEY@@
+users:
+  - name: test
+    uid: 1000
+    gecos: Test User
+    groups: [adm, sudo]
+    shell: /bin/bash
+    lock_passwd: false
+    plain_text_passwd: test
+    sudo: ALL=(ALL) NOPASSWD:ALL
+write_files:
+  # No `owner:` on any entry: write_files runs BEFORE the users module, so
+  # `owner: test:test` aborts the whole module and cloud-init ends in status:
+  # error [recon2/hyprland 6].  build-image.sh chowns under /home/test instead.
+  - path: /etc/ssh/sshd_config.d/60-vmctl.conf
+    content: "PermitRootLogin prohibit-password\n"
+  - path: /etc/modules-load.d/uinput.conf
+    content: "uinput\n"
+  - path: /etc/vmctl-build.env
+    content: |
+      FLAVOR=resolute-lxqt
+      DESKTOP=lxqt
+      DESKTOP_PKG="lubuntu-desktop"
+      EXTRA_PKGS="xdotool wmctrl x11-utils x11-xserver-utils xterm"
+  - path: /usr/local/sbin/vmctl-build
+    permissions: '0755'
+    content: |
+      @@BUILD_SCRIPT@@
+runcmd:
+  - [/usr/local/sbin/vmctl-build]
+power_state:
+  mode: poweroff
+  message: vmctl golden build finished
+  timeout: 120
