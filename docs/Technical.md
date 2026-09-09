@@ -2269,7 +2269,7 @@ claim rests on it.
 desktop metapackage, two — `resolute-gnome-iso` and `noble-gnome-iso` — are installed from
 `ubuntu-26.04.1-desktop-amd64.iso` and `ubuntu-24.04.4-desktop-amd64.iso` **by the Ubuntu
 installer itself**, unattended, with every question left alone, and two are NixOS
-configurations built with `nix build` out of `vm/nixos/`. CI builds 30 on every push and 8
+configurations built with `nix build` out of `vm/nixos/`. CI builds 29 on every push and 9
 on demand. The cloud-image ones exist because one script gets 19 desktops out of them.
 The two ISO ones exist because "it works out of the box on a default Ubuntu desktop" is a
 claim about an *installed* system, and a cloud image plus `ubuntu-desktop` measurably is

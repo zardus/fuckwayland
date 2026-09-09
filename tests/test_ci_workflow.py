@@ -55,7 +55,6 @@ ROLLING = {
     "unit": ("${{ matrix.distro == '26.10' }}", "the development Ubuntu"),
     "deb-install": ("${{ matrix.distro == '26.10' }}", "the development Ubuntu"),
     "unit-distro": ("${{ matrix.distro == 'arch' }}", "rolling Arch, the fedora row is not"),
-    "rpm-install": ("${{ matrix.tag == 'rawhide' }}", "Fedora's development branch"),
     "parity-arch": ("true", "wholly Arch, and its wmctrl help size is uncounted"),
     "pkgbuild": ("true", "wholly Arch"),
     "vm": ("${{ startsWith(matrix.flavor, 'stonking-') || "
@@ -270,10 +269,13 @@ class ThePackagingJobs(unittest.TestCase):
                 self.assertIn("name: %s\n          path:" % artifact, jobs()[builder])
                 self.assertIn("name: %s" % artifact, jobs()[installer])
 
-    def test_rpm_install_covers_the_three_fedora_tags(self):
-        """43 and 44 are released and 44 is what the spec was written on;
-        rawhide is the early warning and may fail."""
-        self.assertIn('tag: ["43", "44", "rawhide"]', jobs()["rpm-install"])
+    def test_rpm_install_covers_the_two_released_fedora_tags(self):
+        """43 and 44 are released and 44 is what the spec was written on.
+        rawhide is deliberately not here: a noarch rpm built on 44 requires
+        python(abi) = 3.14 and rawhide has moved on, so installing there means
+        building there (run 34390127394)."""
+        self.assertIn('tag: ["43", "44"]', jobs()["rpm-install"])
+        self.assertNotIn("rawhide", jobs()["rpm-install"].split("tag:")[1].split("\n")[0])
         self.assertIn("image: fedora:${{ matrix.tag }}", jobs()["rpm-install"])
 
     def test_every_installer_makes_all_six_tools_answer_and_then_removes(self):
@@ -468,15 +470,16 @@ class EveryPushFlavorGetsAJob(unittest.TestCase):
         self.assertEqual(len(self.push_flavors()) + len(on_demand), len(by_ci))
         self.assertTrue(on_demand, "nothing is on demand any more")
 
-    def test_the_foreign_flavors_of_the_push_set_are_the_five_that_were_red(self):
+    def test_the_foreign_flavors_of_the_push_set_are_the_four_that_were_red(self):
         """fedora44-gnome, fedora44-sway, arch-sway, arch-hypr and nixos-sway
-        are the five rig jobs that ended in `no download rule` on run
-        34340513060 -- they are in the push set, so they must build now."""
+        were the five rig jobs that ended in `no download rule` on run
+        34340513060; four are in the push set and must build now.  arch-hypr
+        went on demand on 2026-09-09 until Hyprland 0.56's windowmove lands
+        where it is asked (run 34390127394)."""
         foreign = [f for f in self.push_flavors()
                    if f.startswith(("fedora", "arch-", "nixos-"))]
         self.assertEqual(sorted(foreign),
-                         ["arch-hypr", "arch-sway", "fedora44-gnome",
-                          "fedora44-sway", "nixos-sway"])
+                         ["arch-sway", "fedora44-gnome", "fedora44-sway", "nixos-sway"])
 
 
 if __name__ == "__main__":

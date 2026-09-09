@@ -144,7 +144,7 @@ keys/id_ed25519[.pub]            guest root ssh key, generated once
 **38 flavors** across four distributions: 25 Ubuntu, 6 Arch, 5 Fedora and 2 NixOS. By builder,
 34 are a cloud image plus a desktop metapackage, 2 are an Ubuntu desktop ISO run through the
 real installer (`resolute-gnome-iso`, `noble-gnome-iso`) and 2 are NixOS configurations built
-with `nix build` (`nixos-sway`, `nixos-gnome`). CI builds 30 of them on every push and 8 on
+with `nix build` (`nixos-sway`, `nixos-gnome`). CI builds 29 of them on every push and 9 on
 demand. The cloud-image flavors exist because one script gets 19 desktops out of them; the
 two ISO ones exist because "it works out of the box on a default Ubuntu desktop" is a claim
 about an *installed* system — one per supported LTS, because the two releases install
@@ -225,7 +225,7 @@ bridge claims every shell the rig carries, so the header line is an anchor as we
 | `fedora44-sway` | Fedora 44 | sway 1.11 / wlroots, Xwayland, `foot`, `grim` (`sway-desktop-environment`) | greetd (+ `greetd-selinux`) | Wayland | `swaymsg -t get_outputs` | `fedora` | push |
 | `arch-cosmic` | Arch, rolling (20260901) | COSMIC 1:1.7.0-1 | greetd | Wayland | `cosmic-randr list --kdl` | `arch` | on demand |
 | `arch-gnome` | Arch, rolling (20260901) | GNOME Shell 50.4 / mutter 50.4 | GDM (`/etc/gdm`) | Wayland | mutter's `GetCurrentState` | `arch` | on demand |
-| `arch-hypr` | Arch, rolling (20260901) | Hyprland 0.56.2, `xorg-xwayland`, `foot` | greetd | Wayland | `hyprctl -j monitors`; `wlr-randr` 0.5.0 second | `arch` | push |
+| `arch-hypr` | Arch, rolling (20260901) | Hyprland 0.56.2, `xorg-xwayland`, `foot` | greetd | Wayland | `hyprctl -j monitors`; `wlr-randr` 0.5.0 second | `arch` | on demand |
 | `arch-kde` | Arch, rolling (20260901) | Plasma 6.7 / KWin 6.7 | SDDM | Wayland | `kscreen-doctor -o` | `arch` | on demand |
 | `arch-river` | Arch, rolling (20260901) | river 0.4.8 + **tinyrwm built from source** (commit `5c01698c`) | greetd (`command = "river -c /usr/local/bin/vmctl-river-init"`) | Wayland | `wlr-randr` 0.5.0 (river has no output query at all) | `arch` | on demand |
 | `arch-sway` | Arch, rolling (20260901) | sway 1:1.12 / wlroots, `xorg-xwayland`, `foot` | greetd | Wayland | `swaymsg -t get_outputs`, `wlr-randr` second | `arch` | push |

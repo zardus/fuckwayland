@@ -332,8 +332,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        tag: ["43", "44", "rawhide"]
-    continue-on-error: ${{ matrix.tag == 'rawhide' }}
+        # not rawhide: a noarch rpm built on 44 requires python(abi) = 3.14 and rawhide has
+        # moved on (run 34390127394: "nothing provides python(abi) = 3.14"); installing there
+        # means building there, which is a job of its own when someone wants it
+        tag: ["43", "44"]
     name: dnf install on fedora ${{ matrix.tag }}
     container:
       image: fedora:${{ matrix.tag }}
@@ -450,6 +452,7 @@ jobs:
     env:
       VMDATA: /mnt/vm-data
       VMIMAGES: /mnt/images
+      LIVE_SMOKE_BOOT_TIMEOUT: "480"   # an ISO-installed desktop took over 240 s to ssh on a loaded runner
     steps:
       - uses: actions/checkout@v4
       - id: flavor

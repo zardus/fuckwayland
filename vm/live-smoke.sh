@@ -38,6 +38,7 @@
 #                     two, the layout phases do not care)
 #     --cpus N        vCPUs (default 2)   } this host runs seven other agents
 #     --mem M         guest RAM (default 3G)
+#     --boot-timeout S  seconds to wait for the guest's ssh (default 240, or $LIVE_SMOKE_BOOT_TIMEOUT)
 #     --phases a,b,c  run only these, in this order (see --list-phases)
 #     --skip a,b      run the default list without these
 #     --list-phases   print the flavor's default phase list and exit
@@ -93,6 +94,9 @@ FLAVOR=${1:-}
 [ -n "$FLAVOR" ] || { usage; exit 2; }
 shift
 NAME=""; MODE=tree; REUSE=0; HEADS=2; CPUS=2; MEM=3G; KEEP=0; SCALE=0; REMOVE=0
+# seconds vmctl waits for the guest's ssh: an ISO-installed desktop on a loaded runner has
+# taken more than the 240 s default (CI run 34388409584); --boot-timeout or the env knob
+BOOT_TIMEOUT=${LIVE_SMOKE_BOOT_TIMEOUT:-240}
 ONLY=""; SKIP=""; LIST=0
 while [ $# -gt 0 ]; do
     case $1 in
@@ -106,6 +110,7 @@ while [ $# -gt 0 ]; do
         --heads)  HEADS=$2; shift 2 ;;
         --cpus)   CPUS=$2; shift 2 ;;
         --mem)    MEM=$2; shift 2 ;;
+        --boot-timeout) BOOT_TIMEOUT=$2; shift 2 ;;
         --phases) ONLY=$2; shift 2 ;;
         --skip)   SKIP=$2; shift 2 ;;
         --list-phases) LIST=1; shift ;;
@@ -354,10 +359,11 @@ wait_ssh() {
 }
 if [ "$REUSE" = 1 ]; then
     step "vmctl start $NAME (reuse: the overlay and whatever is installed in it)"
-    "$VM" start "$NAME" --cpus "$CPUS" --mem "$MEM" >/dev/null || true
+    "$VM" start "$NAME" --cpus "$CPUS" --mem "$MEM" --timeout "$BOOT_TIMEOUT" >/dev/null || true
 else
     step "vmctl start $NAME --flavor $FLAVOR --heads $HEADS --fresh"
-    "$VM" start "$NAME" --flavor "$FLAVOR" --heads "$HEADS" --cpus "$CPUS" --mem "$MEM" --fresh >/dev/null || true
+    "$VM" start "$NAME" --flavor "$FLAVOR" --heads "$HEADS" --cpus "$CPUS" --mem "$MEM" --fresh \
+        --timeout "$BOOT_TIMEOUT" >/dev/null || true
 fi
 wait_ssh || { echo "cannot reach $NAME over ssh"; exit 2; }
 step "vmctl session $NAME (autologin; GDM's fires once per boot)"
