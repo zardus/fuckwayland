@@ -340,11 +340,22 @@ phase_mirror() {
         note "(no host-side screendump of $second to read: an offline replay writes a placeholder and not a"
         note " framebuffer, and a host with no ImageMagick cannot measure one -- the pixel half of this"
         note " phase is a live-run claim, and the rest of the phase stands without it)"
-    elif head_dark "$second"; then
-        fail "the target head is flat while the mirror runs: nothing arrived" \
-             "(this flavor paints the source: wf-background and wf-panel are up on every boot)"
     else
-        pass "the target head is painting something while the mirror runs"
+        # wl-mirror paints the target when its first screencopy frame lands, which on a loaded runner is
+        # a few seconds after the started line (CI run 34329371964 measured the target painted; run
+        # 34336882062, same tree for this phase, took the one shot early and saw it flat): poll, and only
+        # a head still flat after ten seconds is a mirror that delivered nothing.
+        local painted=false i
+        for i in 1 2 3 4 5 6 7 8 9 10; do
+            if ! head_dark "$second"; then painted=true; break; fi
+            sleep 1
+        done
+        if $painted; then
+            pass "the target head is painting something while the mirror runs"
+        else
+            fail "the target head is flat ten seconds into the mirror: nothing arrived" \
+                 "(this flavor paints the source: wf-background and wf-panel are up on every boot)"
+        fi
     fi
     rm -f "$probe"
     st=0
