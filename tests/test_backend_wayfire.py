@@ -416,6 +416,8 @@ class States(Case):
         with self.assertRaises(CmdError) as cm:
             self.b.set_state(3, "ABOVE", 2)
         self.assertIn("does not report the always-on-top state back", str(cm.exception))
+        self.assertIn("AGENTS.md route 6", str(cm.exception))
+        self.assertIn("not done yet", str(cm.exception))
         self.assertEqual(self.calls("wm-actions/set-always-on-top"), [])
 
     def test_the_maximize_pair_is_one_grid_call(self):
@@ -440,7 +442,13 @@ class States(Case):
             with self.assertRaises(CmdError) as cm:
                 self.b.set_state(3, state, 1)
             self.assertIn("both axes at once", str(cm.exception))
+            # the gap half: a lone axis IS reachable over this same IPC, so the refusal names that route
+            # and its price rather than stopping at the grid plugin's shape
+            self.assertIn("window-rules/configure-view", str(cm.exception))
+            self.assertIn("AGENTS.md route 2", str(cm.exception))
         self.assertEqual(self.calls("grid/slot_c"), [])
+        self.assertEqual(self.calls("window-rules/configure-view"), [],
+                         "naming the route is not taking it")
 
     def test_maximizing_without_the_grid_plugin_names_it(self):
         b = self.backend(views=[view(3)], methods=[m for m in METHODS if not m.startswith("grid/")])
@@ -450,10 +458,15 @@ class States(Case):
                          "wayfire: maximizing needs Wayfire's `grid` plugin "
                          "(add it to the `plugins` line in wayfire.ini)")
 
-    def test_a_state_wayfire_has_no_word_for_is_unsupported(self):
+    def test_a_state_wayfire_has_no_word_for_says_what_would_close_it(self):
+        """SHADED is a state wmctrl takes, so the refusal is a gap and owes its rung: every state this
+        backend does set is a `wm-actions` method, which makes a plugin the place a sixth would go."""
         with self.assertRaises(CmdError) as cm:
             self.b.set_state(3, "SHADED", 1)
-        self.assertEqual(str(cm.exception), "windowstate SHADED is not supported by the wayfire backend")
+        self.assertEqual(str(cm.exception),
+                         "windowstate SHADED is not supported by the wayfire backend: no Wayfire plugin "
+                         "has a method for it; not yet here, and the route is a patched Wayfire plugin "
+                         "(AGENTS.md route 6), which is where `wm-actions` keeps the others")
 
 
 class Plugins(Case):

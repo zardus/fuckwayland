@@ -216,6 +216,20 @@ class SwayWire(_Wire):
         self.assertIn(support.FakeSway.ERROR, line)
         self.assertIn("output HEADLESS-2 position 0 720", line)
 
+    def test_an_anisotropic_scale_warns_with_a_route_and_still_applies_one_axis(self):
+        """`xrandr --scale 2x1` is a transform matrix the X server takes, and no output-management protocol
+        carries one -- so this is a gap of ours and the warning owes the rung that would close it.  What must
+        not change is the behaviour under it: the warning goes to stderr, the apply goes on with sx for both
+        axes, and the exit status stays 0 (the shape wxrandr/cli.py:343's comment already relies on)."""
+        srv = self.sway("ok")
+        code, out, err, _s = self.run_cli("--backend", "sway", "--output", "HEADLESS-2", "--scale", "2x1")
+        self.assertEqual((code, out), (0, ""))
+        self.assertIn("anisotropic scaling 2x1 is not done yet", err)
+        self.assertIn("AGENTS.md route 6", err)
+        self.assertNotIn("not supported on Wayland", err)
+        cmds = [p for mt, p in srv.requests if mt == support.RUN_COMMAND]
+        self.assertTrue(any("scale 2" in c for c in cmds), cmds)
+
     def test_outputs_with_no_rect_do_not_raise(self):
         """GET_OUTPUTS rows without `rect` at all.  A compositor that is not
         sway on the sway socket, or a sway too old or too new for the field:

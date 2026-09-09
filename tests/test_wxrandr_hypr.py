@@ -468,14 +468,17 @@ class Apply(Base):
         self.assertEqual((code, err), (1, "xrandr: hypr: Invalid keyword\n"))
 
     def test_persistent_is_said_once_and_the_layout_still_applies(self):
-        """Hyprland's layout lives in hyprland.conf, which is not ours to write."""
+        """Hyprland's layout lives in hyprland.conf. The note says so, and -- because `--persistent` is a
+        flag a user asked for and did not get -- what writing it would take and what that would cost."""
         srv = self.plant()
         code, _out, err = self.run_cli("--persistent", "--output", "Virtual-1", "--mode", "1280x1024")
         self.assertEqual(code, 0)
         # the literal sentence, not hypr.PERSIST_NOTE: reading the note back out of the module under test
         # would pass whatever it said, and this one is what the WXRANDR.md row promises
-        self.assertEqual(err, "xrandr: --persistent: Hyprland keeps its layout in hyprland.conf, which is "
-                              "not ours to write; this layout lasts as long as the session\n")
+        self.assertEqual(err, "xrandr: --persistent: Hyprland keeps its layout in hyprland.conf; saving "
+                              "there is not done yet -- the route is a `monitor=` line in a snippet that "
+                              "file sources (AGENTS.md route 2), at the cost of owning a file the user "
+                              "hand-edits; this layout lasts as long as the session\n")
         self.assertEqual(srv.keywords, ["Virtual-1,1280x1024@60.02,0x0,1"])
 
     def test_the_dryrun_backend_hook_sends_nothing_at_all(self):

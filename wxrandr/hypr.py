@@ -153,8 +153,10 @@ class HyprIPC:
 #: `mirrorOf` when an output mirrors nothing
 NO_MIRROR = "none"
 
-PERSIST_NOTE = ("--persistent: Hyprland keeps its layout in hyprland.conf, which is not ours to write; "
-                "this layout lasts as long as the session\n")
+PERSIST_NOTE = ("--persistent: Hyprland keeps its layout in hyprland.conf; saving there is not done yet "
+                "-- the route is a `monitor=` line in a snippet that file sources (AGENTS.md route 2), at "
+                "the cost of owning a file the user hand-edits; this layout lasts as long as the "
+                "session\n")
 
 
 def _mode_of(text: str) -> "Mode | None":
@@ -299,8 +301,12 @@ class HyprOutputs:
         return core.predicted_dims(t, state, wire="text")
 
     def verify(self, state: "core.State", targets: list):
-        """--dryrun: Hyprland's IPC has no validating call. `keyword` IS the apply, and running it would be
-        the thing a dryrun must not do."""
+        """--dryrun: Hyprland's IPC has no validating call yet. `keyword` IS the apply, and running it would
+        be the thing a dryrun must not do, so this hook sends nothing and the plan is printed unchecked.
+
+        The route is a validating call in that same IPC (AGENTS.md route 6, Hyprland's own code): its cost
+        is a patched compositor for a flag that reports rather than acts, which is why nothing here waits
+        for it."""
 
     # -- apply ---------------------------------------------------------------
 

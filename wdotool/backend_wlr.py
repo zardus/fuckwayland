@@ -3,7 +3,8 @@
 The floor every wlroots compositor without an IPC socket falls back to: labwc, river, Wayfire's sessions
 before the Wayfire backend, Budgie 10.10 and Xfce 4.20 on Wayland (both of which run labwc), LXQt on Wayland.
 The protocol carries a title, an app id and four state bits and nothing else -- no geometry, no pid, no
-stacking -- so the refusals here name that protocol rather than a compositor's layout policy.
+stacking -- so the refusals here name that protocol and, for each gap, the rung of AGENTS.md's ladder that
+would close it, rather than a compositor's layout policy.
 
 Three things this backend does on top of the bare protocol, each for a measured defect:
 
@@ -52,7 +53,10 @@ READ_ONLY_REASON = ("the compositor accepted %s and did not apply it "
 #: river-classic 0.3.17 does the same [M recon2/river.md §2a].
 NO_MINIMIZE_REASON = ("the compositor accepted %s and did not apply it "
                       "(sway and river-classic have no minimized state; river 0.4's "
-                      "wlr-foreign-toplevel is read-only)")
+                      "wlr-foreign-toplevel is read-only); not yet here, and the route is the "
+                      "compositor's own IPC where it has one -- sway's scratchpad, which the sway "
+                      "backend already uses (AGENTS.md route 2) -- and a minimized state in the "
+                      "compositor where it has no such IPC, which is river (route 6)")
 
 #: `close` has a third cause the other requests do not: the client itself. A window that answers close with
 #: an unsaved-changes dialog changes nothing on its handle, and blaming river or sway for that on labwc --
@@ -72,6 +76,25 @@ def read_only_reason(name: str) -> str:
 NO_GEOMETRY = ("zwlr_foreign_toplevel_management_v1 carries no geometry and no stacking; not yet "
                "here, and the routes are the X plane for an XWayland window (AGENTS.md route 5, a "
                "real ConfigureWindow) or a patched compositor for a native one (route 6)")
+
+#: The same sentence for the states. The handle's state array has four members [R the protocol XML's
+#: `state` enum]; every other `_NET_WM_STATE` name xdotool and wmctrl take -- SHADED, ABOVE, BELOW,
+#: SKIP_TASKBAR -- has nowhere to go on this wire yet.
+NO_SUCH_STATE = ("zwlr_foreign_toplevel_management_v1 carries maximized, minimized, activated and "
+                 "fullscreen and no other state; not yet here, and the route is a patched compositor "
+                 "(AGENTS.md route 6), one state bit and one request each")
+
+#: Fullscreen arrived with version 2 of the same protocol, so a v1 manager is a build away and not a
+#: rewrite -- the lowest rung there is.
+NO_V2 = ("this compositor's zwlr_foreign_toplevel_manager_v1 is version 1, whose handles have no "
+         "set_fullscreen; not yet here, and the route is version 2 of the protocol it already speaks "
+         "(AGENTS.md route 1), which costs a newer compositor build")
+
+#: sway 1.11 and Wayfire 0.10 publish no workspace global at all, which is why binding it changed nothing
+#: for them [M recon2/wayfire.md §1.1]; labwc, Budgie and Xfce-on-Wayland do and take the path above.
+NO_WORKSPACES = ("this compositor publishes no ext_workspace_manager_v1; not yet here, and the routes "
+                 "are that protocol where the compositor grows it (AGENTS.md route 1) or the "
+                 "compositor's own IPC where it has one (route 2), which is a backend per compositor")
 
 # zwlr_foreign_toplevel_handle_v1 state enum
 _ST_MAXIMIZED = 0
@@ -409,7 +432,7 @@ class WlrBackend(XPlaneViews, WindowBackend):
         t = self._by_wid(wid)
         if state == "FULLSCREEN":
             if self.mgr_ver < 2:
-                self._unsupported("windowstate FULLSCREEN")
+                self._not_yet("windowstate FULLSCREEN", NO_V2)
             on = action == 1 or (action == 2 and _ST_FULLSCREEN not in t.states)
             if on:
                 return self._request(t, _REQ_SET_FULLSCREEN, [("u", 0)], name="set_fullscreen",
@@ -427,17 +450,24 @@ class WlrBackend(XPlaneViews, WindowBackend):
             return self._request(t, _REQ_SET_MINIMIZED if on else _REQ_UNSET_MINIMIZED,
                                  name="set_minimized" if on else "unset_minimized",
                                  check=self._has(_ST_MINIMIZED, on))
-        self._unsupported("windowstate %s" % state)
+        self._not_yet("windowstate %s" % state, NO_SUCH_STATE)
 
-    def _no_geometry(self, op: str):
-        """`_unsupported` with the cause appended. The prefix is left exactly as it was -- callers print it
-        as `wwmctl: windowsize is not supported by the wlr backend; ignoring` -- and the sentence after the
-        colon replaces README note (c)'s tiling explanation, which is wrong on labwc: it is a stacking
-        compositor and still cannot move a window, because the protocol has no request for it
-        [M recon2/labwc.md §6c]."""
-        err = CmdError("%s is not supported by the %s backend: %s" % (op, self.name, NO_GEOMETRY))
+    def _not_yet(self, op: str, why: str):
+        """A capability gap, its cause and the route that would close it, as one CmdError.
+
+        The prefix is left exactly as it was -- callers print it as `wwmctl: windowsize is not supported by
+        the wlr backend; ignoring`, and vm/live-smoke.d/labwc.sh and river.sh grep for it -- and the
+        sentence after the colon is the part AGENTS.md asks for: what is missing, and the lowest rung that
+        would fetch it."""
+        err = CmdError("%s is not supported by the %s backend: %s" % (op, self.name, why))
         err.unsupported = True
         raise err
+
+    def _no_geometry(self, op: str):
+        """The four geometry commands. The sentence after the colon replaces README note (c)'s tiling
+        explanation, which is wrong on labwc: it is a stacking compositor and still cannot move a window,
+        because the protocol has no request for it [M recon2/labwc.md §6c]."""
+        self._not_yet(op, NO_GEOMETRY)
 
     def move_window(self, wid: int, x: int, y: int):
         self._no_geometry("windowmove")
@@ -455,13 +485,13 @@ class WlrBackend(XPlaneViews, WindowBackend):
 
     def get_desktop(self) -> int:
         if self.ws is None:
-            self._unsupported("get_desktop")
+            self._not_yet("get_desktop", NO_WORKSPACES)
         self._pump()
         return self.ws.active_index()
 
     def set_desktop(self, n: int):
         if self.ws is None:
-            self._unsupported("set_desktop")
+            self._not_yet("set_desktop", NO_WORKSPACES)
         self._pump()
         if not self.ws.activate(n):
             raise CmdError("wlr backend: cannot activate workspace %d" % n)
@@ -469,7 +499,7 @@ class WlrBackend(XPlaneViews, WindowBackend):
 
     def num_desktops(self) -> int:
         if self.ws is None:
-            self._unsupported("get_num_desktops")
+            self._not_yet("get_num_desktops", NO_WORKSPACES)
         self._pump()
         return self.ws.count()
 

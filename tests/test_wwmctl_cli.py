@@ -144,8 +144,13 @@ class FakeSwayBackend:
         self._spec(wid)
         if state not in ("FULLSCREEN", "STICKY", "DEMANDS_ATTENTION",
                          "HIDDEN"):
+            # the real backend's sentence cut to its first clause. Nothing in this file reads the route
+            # half, so carrying it here would only be a second copy to keep in step; the one byte pin for
+            # the whole sentence is tests/test_windows_i3.py's
+            # `test_a_state_neither_dialect_has_says_what_would_close_it`, over the real backend.
             raise CmdError(
-                "windowstate %s is not supported by the sway backend" % state)
+                "windowstate %s is not supported by the sway backend: sway has no such window "
+                "state" % state)
         self.calls.append(("set_state", wid, state, action))
         if state in self.ignores:
             return ("windowstate %s: the compositor did not apply it to "

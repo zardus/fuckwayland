@@ -461,7 +461,8 @@ class WayfireBackend(WindowBackend):
         return not self._view(wid).get("minimized")
 
     def raise_(self, wid: int):
-        """Wayfire has no plain raise, and `wm-actions/set-always-on-top` is a state and not a raise -- it
+        """Wayfire's IPC has no plain raise yet, and `wm-actions/set-always-on-top` is a state and not a
+        raise -- it
         would leave the window pinned above everything for the rest of the session. Focusing raises the view
         inside its layer, which is the sway backend's answer for a floating window and is honest here for
         every window, because a Wayfire with no tiler has nothing but floating ones."""
@@ -483,9 +484,14 @@ class WayfireBackend(WindowBackend):
             # maximize_pair_state() folds the two axes into MAXIMIZED for every caller that is handed both;
             # one axis on its own has no expression here, because the grid plugin's slots are halves of the
             # screen and not axes (`grid/slot_t` is the top half, tiled-edges 13, not "maximized vertically").
-            raise CmdError("wayfire: %s alone is not supported (Wayfire's grid maximizes both axes at once; "
-                           "ask for MAXIMIZED_VERT and MAXIMIZED_HORZ together)" % state)
-        raise CmdError("windowstate %s is not supported by the wayfire backend" % state)
+            raise CmdError("wayfire: %s alone is not done yet (Wayfire's grid maximizes both axes at once; "
+                           "ask for MAXIMIZED_VERT and MAXIMIZED_HORZ together); the route is "
+                           "`window-rules/configure-view` on this same IPC (AGENTS.md route 2), at the "
+                           "cost of a saved rectangle to restore, because a geometry is not a state and "
+                           "the view would not report itself maximized" % state)
+        raise CmdError("windowstate %s is not supported by the wayfire backend: no Wayfire plugin has a "
+                       "method for it; not yet here, and the route is a patched Wayfire plugin "
+                       "(AGENTS.md route 6), which is where `wm-actions` keeps the others" % state)
 
     _WM_ACTIONS = {"FULLSCREEN": ("wm-actions/set-fullscreen", "fullscreen"),
                    "STICKY": ("wm-actions/set-sticky", "sticky"),
@@ -500,8 +506,10 @@ class WayfireBackend(WindowBackend):
                 # Wayfire takes always-on-top and never reports it back: the view record's `layer` stayed
                 # `workspace` on both sides of a set-always-on-top (measured here), so a toggle would have to
                 # guess. Refuse rather than flip a state we cannot read.
-                raise CmdError("wayfire: cannot toggle ABOVE (Wayfire does not report the always-on-top "
-                               "state back; use --add or --remove)")
+                raise CmdError("wayfire: toggling ABOVE is not done yet (Wayfire does not report the "
+                               "always-on-top state back; use --add or --remove); the route is a "
+                               "patched Wayfire that puts the flag in the view record (AGENTS.md route "
+                               "6), which is the one place a toggle could read it from")
             action = 0 if view.get(field) else 1
         self.ipc.call(method, view_id=int(wid), state=bool(action))
         return None
@@ -645,9 +653,13 @@ class WayfireBackend(WindowBackend):
         """The next view to take focus.
 
         Not xdotool's semantics (the window under the pointer at the next button press) and knowingly so, the
-        same way the sway backend is not: Wayfire's IPC has a cursor position but no picker and no way to grab
-        a button press from outside the compositor, so there is nothing to click with. Clicking the window
-        that already has focus therefore does not end this wait."""
+        same way the sway backend is not: Wayfire's IPC has a cursor position but no picker and nothing that
+        grabs a button press from outside the compositor, so there is nothing to click with. Clicking the
+        window that already has focus therefore does not end this wait.
+
+        Not yet, rather than never: this IPC is the one that DOES publish the cursor (`wayfire/get-cursor`
+        via stipc), so the missing half is only the press, and evdev has it (AGENTS.md route 4, at the cost
+        of read access to /dev/input) -- the hit test against `list-views` geometry is then ours."""
         for wid, change in self.events():
             if change == "focus":
                 return wid

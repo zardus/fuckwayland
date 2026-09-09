@@ -1180,7 +1180,8 @@ def build_targets(outputs: list, stanzas: list, state: State, global_auto: bool 
         if s.scale is not None:
             sx, sy = s.scale
             if sx != sy and sx == sx and sy == sy:   # a nan differs from itself
-                warn("anisotropic scaling %gx%g not supported on Wayland; "
+                warn("anisotropic scaling %gx%g is not done yet (no output-management protocol "
+                     "carries a per-axis scale; the route is a patched compositor, AGENTS.md route 6); "
                      "using %g for both axes\n" % (sx, sy, sx))
             t.scale = sx
         if s.scale_from is not None:
@@ -1189,8 +1190,9 @@ def build_targets(outputs: list, stanzas: list, state: State, global_auto: bool 
             if base is not None and fw > 0 and fh > 0:
                 sx, sy = base.w / fw, base.h / fh
                 if abs(sx - sy) > 1e-6:
-                    warn("anisotropic scaling %gx%g not supported on "
-                         "Wayland; using %g for both axes\n" % (sx, sy, sx))
+                    warn("anisotropic scaling %gx%g is not done yet (no output-management protocol "
+                         "carries a per-axis scale; the route is a patched compositor, AGENTS.md "
+                         "route 6); using %g for both axes\n" % (sx, sy, sx))
                 t.scale = sx
     if global_auto:
         for t in targets.values():
@@ -1440,7 +1442,9 @@ class SwayBackend:
 
     def apply(self, state: State, targets: list, persistent: bool = False) -> list:
         """The two-phase RUN_COMMAND apply, and the fresh snapshot it re-reads. `persistent` is accepted for
-        contract parity and ignored: a sway layout lives in sway's own config, which is not ours to write.
+        contract parity and ignored: a sway layout lives in sway's own config, and writing it is not done
+        yet -- the route is an `output` line in a file that config sources (AGENTS.md route 2), at the cost
+        of owning a file the user hand-edits.
 
         On i3 nothing is sent at all: there is no `output` command to send it to, so the two phases could only
         produce i3's parse error twice over -- and the first phase would already have recorded the modes it

@@ -775,8 +775,14 @@ class MutterOutputs:
         not_gnome = gnome_overlap.not_gnome_reason(self.flavor.name)
         if not_gnome is not None:
             # The flavour, not the session: Muffin enforces Mutter's adjacency rule with Mutter's own strings
-            # [M recon2/cinnamon.md §2.2], so a Cinnamon user meets this refusal for real -- and the route
-            # behind the flag has nothing to offer them (gnome_overlap.CINNAMON_REASON).
+            # [M recon2/cinnamon.md §2.2], so a Cinnamon user meets this refusal for real, and the route
+            # behind the flag does not reach them as it stands (gnome_overlap.CINNAMON_REASON): its struct
+            # offsets are keyed on a Meta generation muffin does not number. Overlapping monitors are an X
+            # feature and this is a gap, not a verdict -- the rung that would close it is one BELOW the
+            # extension GNOME needs: `org.Cinnamon.Eval` reaching MetaMonitorsConfig with nothing installed
+            # (AGENTS.md route 2), at the cost of an offset record measured per Cinnamon release instead of
+            # per Meta generation [request filed in <scratchpad>/requests-unowned-batch-19.md for
+            # gnome_overlap.py's own sentence].
             raise Fatal("%s only means anything on GNOME; %s\n"
                         % (gnome_overlap.FLAG, not_gnome))
         ov = gnome_overlap.Overlap(self.bus)

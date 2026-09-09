@@ -590,11 +590,19 @@ class Acting(CinnamonCase):
         self.assertEqual(self.backend().pointer(), (120, 240))
 
     def test_there_is_no_picker(self):
-        """`global.stage.grab` does not exist in muffin's Clutter [M cinnamon.md §2.3]."""
+        """`global.stage.grab` does not exist in muffin's Clutter [M cinnamon.md §2.3], so the refusal owes
+        the route. A reactive Clutter actor is code inside Cinnamon, but this backend already pushes JS in
+        over `org.Cinnamon.Eval` with nothing installed, and AGENTS.md line 33 files Eval under rung 2 --
+        the lowest rung that does the job is the one the sentence must name, so it is 2 and not the 3 an
+        extension would be. Pinned whole: this is the one byte-for-byte copy of the sentence, and the same
+        constant is what wxprop prints as its hint."""
         with self.assertRaises(CmdError) as cm:
             self.backend().select_window()
         self.assertTrue(getattr(cm.exception, "unsupported", False))
-        self.assertIn("cinnamon backend", str(cm.exception))
+        self.assertEqual(str(cm.exception),
+                         "selectwindow is not supported by the cinnamon backend: picking a window by "
+                         "clicking is not yet done on Cinnamon (AGENTS.md route 2, a reactive Clutter "
+                         "actor through org.Cinnamon.Eval); name the window another way")
 
     def test_x_info_defers_to_the_session_scan(self):
         """muffin has no `get_x11_display()` to ask, and writes `.mutter-Xwaylandauth.*`, which
@@ -691,8 +699,24 @@ class States(CinnamonCase):
         with umock.patch.object(backend_cinnamon, "warn", err.append):
             self.assertIsNone(b.set_state(1, "SKIP_TASKBAR", 1))
         self.assertEqual(len(err), 1)
-        self.assertIn("Muffin cannot set it", err[0])
+        self.assertIn("Muffin has no setter for it", err[0])
         self.assertIn("SKIP_TASKBAR", b.unsupported_states())
+
+    def test_the_gap_sentences_say_what_would_close_them(self):
+        """AGENTS.md: never the compositor's lack alone. Both shapes -- the warn-and-succeed one and the
+        refusal -- carry the X plane (where wwmctl really does set these on an XWayland window,
+        `unsupported_states()`) and the rung for a native window."""
+        b = self.backend()
+        err = []
+        with umock.patch.object(backend_cinnamon, "warn", err.append):
+            b.set_state(1, "MODAL", 1)
+        with self.assertRaises(CmdError) as cm:
+            b.set_state(1, "BELOW", 1)
+        for said in (err[0], str(cm.exception)):
+            self.assertIn("not yet here", said)
+            self.assertIn("wwmctl sets it on the X plane", said)
+            self.assertIn("AGENTS.md route 6", said)
+        self.assertTrue(err[0].endswith("ignoring"), "the warn still ends where it did")
 
     def test_below_is_a_named_gap(self):
         b = self.backend()

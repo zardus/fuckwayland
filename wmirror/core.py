@@ -181,7 +181,9 @@ def no_session_lines() -> list:
     if passthrough.session_kind(respect_override=False) == "x11":
         return ["this is an X11 session: there is no wl-mirror here",
                 "X11 mirrors whole outputs with `xrandr --output B "
-                "--same-as A`; a region has no route in this toolbox"]
+                "--same-as A`; a region is not done here yet -- it needs an "
+                "X capture client of our own (XShm off the root window), "
+                "which is a tool this toolbox has not written"]
     return ["cannot find a Wayland session to mirror on " "(no wayland socket)"]
 
 
@@ -222,8 +224,9 @@ def no_capture_lines() -> list:
             "cannot capture here" % (SCREENCOPY, EXTCOPY),
             "wl-mirror needs a compositor with %s (sway, Hyprland, labwc, "
             "Wayfire, ...) or %s (COSMIC, labwc, sway 1.12)" % (SCREENCOPY, EXTCOPY),
-            "on GNOME and KDE the only capture route is the desktop "
-            "portal, which asks the user for permission once per session"]
+            "on GNOME and KDE the route is the desktop portal's ScreenCast "
+            "(AGENTS.md route 4), which asks the user for permission once "
+            "per session and is not wired up here yet"]
 
 
 def require_capture(conn) -> list:
@@ -240,7 +243,11 @@ def read_outputs(conn) -> list:
         wlr = wxcore.WlrOutputs(conn=conn)
     except wxcore.Fatal:
         raise Refusal(["this compositor does not advertise %s, so wmirror "
-                       "cannot read the output layout" % OUTPUT_MANAGER])
+                       "cannot read the output layout" % OUTPUT_MANAGER,
+                       "not yet here: the route is the compositor's own "
+                       "display bus or IPC, which wxrandr already speaks on "
+                       "Mutter, KWin, Hyprland and sway (AGENTS.md route 2), "
+                       "at the cost of one layout reader per compositor"])
     except OSError as e:
         raise Refusal(["lost the compositor connection: %s" % e])
     return wxcore.snapshot_wlr(wlr)

@@ -393,11 +393,17 @@ class SwayBackend(WindowBackend):
         if floating:
             self.run("%s focus" % _sel(node))
         else:
-            warn("windowraise: tiled sway windows have no stacking order; ignoring")
+            warn("windowraise: tiled %s windows have no stacking order; not yet, and the route is a "
+                 "patched compositor (AGENTS.md route 6), a restack its layout has no word for today; "
+                 "ignoring" % self.dialect())
 
     def lower(self, wid: int):
+        """XLowerWindow always worked, so this is a gap and not a policy: sway's command list has no `lower`
+        (`swaymsg lower` is a parse error, the same one `output` is on i3), and neither does i3's. The
+        cheapest rung that reaches it is the compositor's own command parser."""
         self._node(wid)
-        warn("windowlower: sway cannot lower windows; ignoring")
+        warn("windowlower: %s has no lower command; not yet, and the route is a patched compositor "
+             "(AGENTS.md route 6), one command in its parser; ignoring" % self.dialect())
 
     def set_state(self, wid: int, state: str, action: int):
         node, _win, _f, ws_name = self._node(wid)
@@ -419,7 +425,11 @@ class SwayBackend(WindowBackend):
             elif action == 0 and hidden:
                 self.run("%s scratchpad show" % _sel(node))
         else:
-            raise CmdError("windowstate %s is not supported by the sway backend" % state)
+            # a plain CmdError, not an `unsupported` one: this refusal has always been a failure and
+            # wwmctl's X-plane retry keys off that flag, so only the sentence changes here
+            raise CmdError("windowstate %s is not supported by the %s backend: %s has no such window "
+                           "state; not yet here, and the route is a patched compositor (AGENTS.md route "
+                           "6), one command and one state bit each" % (state, self.name, self.dialect()))
 
     def window_desktop(self, wid: int) -> int:
         return self._node(wid)[1].desktop
@@ -530,10 +540,15 @@ class SwayBackend(WindowBackend):
         """sway/i3: wait for the next window-focus event.
 
         Not xdotool's semantics (the window under the pointer at the next button press) and knowingly so: sway's
-        IPC has no interactive picker, no pointer position and no way to grab input from outside the compositor,
-        so there is nothing to click *with*. Clicking the window that already has focus therefore does not end
-        this wait -- focus it from another window, or use another selector. Fixing it properly needs a sway-side
-        feature, not a client-side workaround."""
+        IPC has no interactive picker, no pointer position and nothing that grabs a button press from outside
+        the compositor, so there is nothing to click *with*. Clicking the window that already has focus
+        therefore does not end this wait -- focus it from another window, or use another selector.
+
+        The click-to-pick is not yet here rather than out of reach. Two rungs together do it: evdev sees the
+        button press without asking the compositor (AGENTS.md route 4, at the cost of read access to
+        /dev/input, which is the same cost the uinput typing path already pays), and the window under the
+        pointer is a `get_tree` hit test once something says where the pointer is -- sway's IPC does not, so
+        that half is route 6, a `get_seats` that carries the cursor position."""
         for wid, change in self.events():
             if change == "focus":
                 return wid

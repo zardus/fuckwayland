@@ -4,10 +4,13 @@ We inject evdev keycodes through a virtual keyboard, and the compositor
 interprets them through whatever XKB layout the session has active. The fixed
 US-QWERTY table in `keymap.py` is therefore only right when the active layout
 *is* US: under `de`, `fr` or Dvorak even plain ASCII comes out wrong. X11's
-answer (rebind a spare keycode to the wanted keysym) has no Wayland
-equivalent, and Mutter does not implement zwp_virtual_keyboard_v1, so the only
-route left is to reverse the lookup: read the compositor's keymap, find the
-key + modifiers that produce the character, and press *that*.
+answer (rebind a spare keycode to the wanted keysym) is not on the table here
+-- no compositor takes a keymap edit from a client, and Mutter does not
+implement zwp_virtual_keyboard_v1 either -- so the route this file takes
+instead is to reverse the lookup: read the compositor's keymap, find the
+key + modifiers that produce the character, and press *that*. It costs
+nothing at run time and it needs nothing installed, which is why it is the
+one taken rather than a patched compositor.
 
 Every Wayland client is handed the full keymap as a file descriptor on
 `wl_keyboard.keymap`, so `fetch()` binds the seat, takes the keyboard and
@@ -22,7 +25,10 @@ the session bus (`KwinLayouts`), GNOME through the portal that serves its
 setting (`GnomeInputSources`), Hyprland and Wayfire over the same IPC sockets
 their window backends use (`HyprLayouts`, `WayfireLayouts`) and Cinnamon
 through `org.Cinnamon.Eval` (`CinnamonInputSources`). Everywhere else the
-group is inferred, and `Snapshot.group_known` says which of the two happened.
+group is inferred, and `Snapshot.group_known` says which of the two happened
+-- a gap and not a policy: a compositor that is not in that list is one more
+reader of its own bus or socket (AGENTS.md route 2), at the cost of a dialect
+per desktop, which is what each name above already is.
 
     snap = fetch()                               # text + active group
     if not active_group_is_plain_us(snap.text, snap.group):

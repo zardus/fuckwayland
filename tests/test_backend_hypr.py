@@ -328,7 +328,8 @@ class Dispatches(Base):
             self.b.set_state(self.float_id, "MAXIMIZED_VERT", 1)
         self.assertEqual(str(cm.exception),
                          "windowstate MAXIMIZED_VERT is not supported by the hypr backend "
-                         "(Hyprland maximizes both axes at once; ask for both)")
+                         "(Hyprland maximizes both axes at once; ask for both); not yet here, and the "
+                         "route is a patched Hyprland (AGENTS.md route 6), one dispatcher each")
 
     def test_going_from_maximized_to_fullscreen_clears_the_standing_one(self):
         srv = self.hypr()
@@ -381,31 +382,44 @@ class Refusals(Base):
         for op, call in (("windowminimize", b.minimize), ("windowunmap", b.unmap)):
             with self.assertRaises(CmdError) as cm:
                 call(wid)
+            # vm/live-smoke.d/hypr.sh:169 greps the parenthesis contiguous with the prefix, which is why
+            # the route goes after the closing bracket and not inside it
             self.assertEqual(str(cm.exception),
-                             "%s is not supported by the hypr backend (Hyprland has no minimize)" % op)
+                             "%s is not supported by the hypr backend (Hyprland has no minimize); not yet "
+                             "here, and the route is Hyprland's own IPC (AGENTS.md route 2), a special "
+                             "workspace to stash the window in, at the cost of the bookkeeping that brings "
+                             "it back and a listing that keeps showing it while it is stashed" % op)
             self.assertTrue(cm.exception.unsupported)
         self.assertEqual(self.dispatches(), [])
 
     def test_lower_names_what_j_clients_does_not_carry(self):
         """The reason is only what was measured: no row of the recorded `j/clients` orders the windows front
-        to back [M recon2/hyprland.md §2]. It does not claim there is no dispatcher -- `alterzorder` is in
-        the 0.53 dispatcher list and no report has run it."""
+        to back [M recon2/hyprland.md §2]. It does not claim there is no dispatcher -- `alterzorder
+        top,address:0x...` was run on a floating window and answered `ok` [M requests-batch-5.md, "Read by
+        batch 20", item 8] -- so the dispatcher is the route the refusal names, and the cost it names is
+        sending it blind, not a run nobody has done."""
         b = self.backend()
         with self.assertRaises(CmdError) as cm:
             b.lower(backend_mod.mint_id(FOOT_FLOAT))
         self.assertEqual(str(cm.exception),
                          "windowlower is not supported by the hypr backend "
-                         "(Hyprland publishes no stacking order in j/clients)")
+                         "(Hyprland publishes no stacking order in j/clients); not yet here, and the "
+                         "route is `alterzorder bottom` over the IPC we already speak (AGENTS.md route 2), "
+                         "measured to answer ok on a floating window; the cost is sending it unverified, "
+                         "because j/clients publishes no order to read a lower back from")
         self.assertEqual(self.dispatches(), [])
 
     def test_raising_a_tiled_window_warns_and_sends_nothing(self):
-        """sway's shape (wdotool/backend_sway.py): a tiled window is in a layout that has no front, so it
-        gets a warning rather than a dispatch that would do nothing."""
+        """sway's shape and sway's rung (wdotool/backend_sway.py, `raise_`): a tiled window sits in a layout with
+        no z to alter, so `alterzorder` -- the route the floating half names -- is not the route here; the
+        restack has to come from the compositor's own code. Warning, and nothing sent."""
         b = self.backend()
         with mock.patch.object(hypr_mod, "warn") as w:
             b.raise_(backend_mod.mint_id(FOOT_TILED))
         self.assertEqual(w.call_args[0][0],
-                         "windowraise: tiled Hyprland windows have no stacking order; ignoring")
+                         "windowraise: tiled Hyprland windows have no stacking order; not yet, and the "
+                         "route is a patched Hyprland (AGENTS.md route 6), a restack its layout has no "
+                         "word for today; ignoring")
         self.assertEqual(self.dispatches(), [])
 
     def test_an_unknown_window_is_not_found_before_anything_is_sent(self):

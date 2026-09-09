@@ -374,12 +374,31 @@ class States(WlrTest):
         self.assertEqual(comp.opcodes(2), [UNSET_MINIMIZED])
 
     def test_a_state_this_protocol_has_no_word_for(self):
+        """SHADED is a state wmctrl and xdotool both take, so the refusal owes a route and not a full stop:
+        the handle's state array has four members and a fifth is the compositor's to add."""
         _comp, b = self.backend()
         with self.assertRaises(CmdError) as cm:
             b.set_state(BASE_ID, "SHADED", 1)
         self.assertTrue(getattr(cm.exception, "unsupported", False))
         self.assertEqual(str(cm.exception),
-                         "windowstate SHADED is not supported by the wlr backend")
+                         "windowstate SHADED is not supported by the wlr backend: "
+                         "zwlr_foreign_toplevel_management_v1 carries maximized, minimized, activated and "
+                         "fullscreen and no other state; not yet here, and the route is a patched "
+                         "compositor (AGENTS.md route 6), one state bit and one request each")
+
+    def test_a_version_gap_is_told_apart_from_a_missing_feature(self):
+        """`set_fullscreen` is version 2 of the protocol this manager speaks at 1: nobody has to write it,
+        a newer compositor build already has it, and the refusal says which of the two it is."""
+        _comp, b = self.backend()
+        # the fake advertises the manager at 3 and lives in tests/wl_fake.py, which another batch owns, so
+        # the negotiated version is moved here: `mgr_ver` is the field the constructor's bind wrote.
+        b.mgr_ver = 1
+        with self.assertRaises(CmdError) as cm:
+            b.set_state(BASE_ID, "FULLSCREEN", 1)
+        msg = str(cm.exception)
+        self.assertIn("is version 1, whose handles have no set_fullscreen", msg)
+        self.assertIn("AGENTS.md route 1", msg)
+        self.assertIn("not yet here", msg)
 
 
 class VerifyAfterAct(WlrTest):
@@ -416,6 +435,12 @@ class VerifyAfterAct(WlrTest):
         _comp, b = self.backend(cls=ReadOnlyToplevels)
         mini = self.acting(b.minimize, BASE_ID + 1)
         self.assertIn("sway and river-classic have no minimized state", mini)
+        # and, because minimize is one xdotool has always had, what would close it -- on both compositors
+        # the sentence names, not just the one whose gap is closed by a backend we already ship: sway's
+        # scratchpad is route 2, and river, which has no IPC to stash a window with, is route 6
+        self.assertIn("sway's scratchpad", mini)
+        self.assertIn("AGENTS.md route 2", mini)
+        self.assertIn("which is river (route 6)", mini)
         with redirect_stderr(io.StringIO()):
             full = b.set_state(BASE_ID, "FULLSCREEN", 1)
         self.assertNotIn("minimiz", full, "fullscreen has no business naming minimize")

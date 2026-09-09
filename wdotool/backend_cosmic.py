@@ -18,7 +18,8 @@ What the protocol does not carry, and what this backend therefore says instead o
 * **No pid.** Neither `ext_foreign_toplevel_handle_v1` nor `zcosmic_toplevel_handle_v1` has one, so `pid` is
   0 and `kill` refuses with the default `no pid for window N`.
 * **No move, resize, raise or lower.** `zcosmic_toplevel_manager_v1` has `set_rectangle` (a minimise-animation
-  hint) and nothing else, so those four refuse per command and name the protocol.
+  hint) and nothing else, so those four refuse per command, name the protocol, and say what would close the
+  gap: a patched cosmic-comp, AGENTS.md route 6. Every refusal in this file carries that second half.
 * **No numeric id.** `identifier` is 32 base62 characters, so ids are minted from it
   (`backend.mint_id`): 30 bits of blake2b under 0x40000000, stable across processes for the life of the
   window and out of Xwayland's id range, unlike the wlr floor's arrival order.
@@ -85,6 +86,24 @@ _MGR_EV_CAPABILITIES = 0
 NO_GEOMETRY = ("the COSMIC toplevel protocol has no move, resize, raise or lower; not yet here, "
                "and the route is a patched cosmic-comp (AGENTS.md route 6)")
 
+#: The same, for a state name the handle's array has no member for. Five members [R the XML's `state`
+#: enum], and SHADED, ABOVE, BELOW and the taskbar hints are not among them.
+NO_SUCH_STATE = ("the COSMIC toplevel protocol carries maximized, minimized, activated, fullscreen and "
+                 "sticky and no other state; not yet here, and the route is a patched cosmic-comp "
+                 "(AGENTS.md route 6), one state member and one request each")
+
+#: A version gap, which is the cheapest kind: the protocol already defines the request and this build is
+#: older than it. `%s` is the request, `%d` the version it arrived in, `%d` the one this session offers.
+OLD_MANAGER = ("this cosmic-comp's %s is version %d and %s arrived in version %d; not yet here, and the "
+               "route is that version of the protocol it already speaks (AGENTS.md route 1), which "
+               "costs a newer cosmic-comp and no code of ours")
+
+#: What the desktop commands say when the session publishes no workspace global. cosmic-comp does publish
+#: one; this is the line for a build or a session that does not [M recon2/cosmic.md §3].
+NO_WORKSPACES = ("this session publishes no ext_workspace_manager_v1; not yet here, and the route is that "
+                 "protocol where the compositor grows it (AGENTS.md route 1), which costs a newer "
+                 "cosmic-comp and no code of ours")
+
 
 class _Top:
     __slots__ = ("ext", "cosmic", "identifier", "title", "app_id", "states",
@@ -133,7 +152,14 @@ class CosmicBackend(XPlaneViews, WindowBackend):
             raise CmdError("cosmic backend: %s" % e) from None
         if not glist or not ginfo:
             self._close_own()
-            raise CmdError("cosmic backend: compositor does not offer %s and %s" % (EXT_LIST, INFO))
+            # Not a full stop: cosmic-comp builds BOTH behind `client_not_sandboxed`
+            # [R recon2/cosmic/state.rs:647, 748], so the commonest way to meet this line is to be the
+            # sandboxed client rather than to be on a compositor that lacks the protocol.
+            raise CmdError("cosmic backend: compositor does not offer %s and %s; not yet here -- "
+                           "cosmic-comp speaks both and hides them from a sandboxed client, so the route "
+                           "is an unsandboxed run of the protocol it already has (AGENTS.md route 1), and "
+                           "on any other compositor a backend over its own IPC (route 2)"
+                           % (EXT_LIST, INFO))
 
         self.tops: dict[int, _Top] = {}       # ext handle oid -> record
         self.order: list[int] = []            # ext handle oids, arrival order
@@ -293,12 +319,15 @@ class CosmicBackend(XPlaneViews, WindowBackend):
         the live compositor although 5 was not in `[1,2,3,4,6]`, but a client that ignores a capability array
         is a client that will be wrong the first time the array is right."""
         if self.mgr is None:
-            raise CmdError("cosmic backend: compositor offers no %s; cannot %s" % (MANAGER, op))
+            raise CmdError("cosmic backend: compositor offers no %s; cannot %s; not yet here, and the "
+                           "route is an unsandboxed run of the protocol cosmic-comp already speaks "
+                           "(AGENTS.md route 1): the manager is built behind the same sandbox filter as "
+                           "the list [R recon2/cosmic/state.rs:749]" % (MANAGER, op))
         if cap not in self.caps:
-            err = CmdError("%s is not supported by the cosmic backend: cosmic-comp does not advertise the "
-                           "%s capability" % (op, CAP_NAMES.get(cap, cap)))
-            err.unsupported = True
-            raise err
+            self._not_yet(op, "cosmic-comp does not advertise the %s capability; not yet here, and the "
+                              "route is a patched cosmic-comp (AGENTS.md route 6), which is where that "
+                              "array is built [R recon2/cosmic/state.rs:752-756]"
+                              % CAP_NAMES.get(cap, cap))
 
     def _mgr_send(self, opcode: int, args):
         try:
@@ -409,7 +438,8 @@ class CosmicBackend(XPlaneViews, WindowBackend):
         if state == "STICKY":
             on = action == 1 or (action == 2 and ST_STICKY not in rec.states)
             if self.mgr_ver < 3:
-                self._unsupported("windowstate STICKY")
+                self._not_yet("windowstate STICKY",
+                              OLD_MANAGER % (MANAGER, self.mgr_ver, "set_sticky", 3))
             self._act(rec, _MGR_SET_STICKY if on else _MGR_UNSET_STICKY,
                       CAP_STICKY, "windowstate STICKY")
             return None
@@ -418,12 +448,20 @@ class CosmicBackend(XPlaneViews, WindowBackend):
             self._act(rec, _MGR_SET_MINIMIZED if on else _MGR_UNSET_MINIMIZED,
                       CAP_MINIMIZE, "windowstate HIDDEN")
             return None
-        self._unsupported("windowstate %s" % state)
+        self._not_yet("windowstate %s" % state, NO_SUCH_STATE)
 
-    def _no_geometry(self, op: str):
-        err = CmdError("%s is not supported by the cosmic backend: %s" % (op, NO_GEOMETRY))
+    def _not_yet(self, op: str, why: str):
+        """A capability gap, its cause and the route that would close it, as one CmdError.
+
+        The prefix is what `_unsupported` has always printed and what vm/live-smoke.d/cosmic.sh greps for;
+        the sentence after the colon is the half AGENTS.md asks for -- what is missing, and the lowest rung
+        that would fetch it."""
+        err = CmdError("%s is not supported by the cosmic backend: %s" % (op, why))
         err.unsupported = True
         raise err
+
+    def _no_geometry(self, op: str):
+        self._not_yet(op, NO_GEOMETRY)
 
     def move_window(self, wid: int, x: int, y: int):
         self._no_geometry("windowmove")
@@ -441,13 +479,13 @@ class CosmicBackend(XPlaneViews, WindowBackend):
 
     def get_desktop(self) -> int:
         if self.ws is None:
-            self._unsupported("get_desktop")
+            self._not_yet("get_desktop", NO_WORKSPACES)
         self._pump()
         return self.ws.active_index()
 
     def set_desktop(self, n: int):
         if self.ws is None:
-            self._unsupported("set_desktop")
+            self._not_yet("set_desktop", NO_WORKSPACES)
         self._pump()
         if not self.ws.activate(n):
             raise CmdError("cosmic backend: cannot activate workspace %d" % n)
@@ -455,7 +493,7 @@ class CosmicBackend(XPlaneViews, WindowBackend):
 
     def num_desktops(self) -> int:
         if self.ws is None:
-            self._unsupported("get_num_desktops")
+            self._not_yet("get_num_desktops", NO_WORKSPACES)
         self._pump()
         return self.ws.count()
 
@@ -480,11 +518,19 @@ class CosmicBackend(XPlaneViews, WindowBackend):
         and its handler then ignores the value (`_output: Output`, R toplevel_management.rs:144-149) -- the
         workspace handle is what decides where the window lands."""
         if self.ws is None:
-            self._unsupported("set_desktop_for_window")
+            self._not_yet("set_desktop_for_window", NO_WORKSPACES)
         rec = self._by_wid(wid)
         self._need(CAP_MOVE_TO_WORKSPACE, "set_desktop_for_window")
-        if self.mgr_ver < 4 or not self.outputs:
-            self._unsupported("set_desktop_for_window")
+        if self.mgr_ver < 4:
+            self._not_yet("set_desktop_for_window",
+                          OLD_MANAGER % (MANAGER, self.mgr_ver, "move_to_ext_workspace", 4))
+        if not self.outputs:
+            # Not a rung on the ladder: `wl_output` is core and every COSMIC session has one, so this is
+            # our registry pass (above) having bound none, which is ours to look at. The sentence says
+            # that and does not invent a route for it.
+            self._not_yet("set_desktop_for_window",
+                          "this client bound no wl_output during its registry pass and cosmic-comp's "
+                          "dispatcher drops the request without one [R recon2/cosmic/tlmgmt.rs:255-262]")
         handles = self._ws_handles()
         if not 0 <= n < len(handles):
             raise CmdError("cosmic backend: no workspace %d" % n)

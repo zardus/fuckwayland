@@ -441,6 +441,48 @@ class Events(I3Base):
         self.assertEqual(b._event_wid({"id": 7, "window": 99}), 7)
 
 
+class RefusalsCarryTheirRoute(I3Base):
+    """AGENTS.md: a gap is NOT YET plus the rung that would close it, never the compositor's lack alone.
+
+    XLowerWindow and `_NET_WM_STATE_SHADED` are both things the X11 toolbox has always done, so neither
+    `windowlower` nor an unknown `windowstate` is allowed to stop at "sway cannot".  What must NOT change is
+    the mechanics either sentence carries: `windowlower` still warns and exits 0 (docs/WDOTOOL.md's `warn
+    and succeed` column, and the live check at tests/test_windows_sway.py:239), and the state refusal is
+    still a plain failure that wwmctl's X-plane retry does not treat as a capability gap."""
+
+    def test_windowlower_warns_with_a_route_and_still_succeeds(self):
+        b = self.backend(tree=tree_with_fwsmoke_on_ws2(floating=True))
+        rc, out, err = self.run_chain(b, ["windowlower", str(X_ID)])
+        self.assertEqual((rc, out), (0, ""))
+        self.assertIn("i3 has no lower command", err)
+        self.assertIn("AGENTS.md route 6", err)
+        self.assertIn("not yet", err)
+        self.assertTrue(err.rstrip("\n").endswith("ignoring"), err)
+        self.assertNotIn("sway", err)
+        self.assertEqual(self.commands(), [], "a warning is not a command")
+
+    def test_raising_a_tiled_window_names_the_route_in_the_dialect(self):
+        b = self.backend(tree=tree_with_fwsmoke_on_ws2(floating=False))
+        rc, _out, err = self.run_chain(b, ["windowraise", str(X_ID)])
+        self.assertEqual(rc, 0)
+        self.assertIn("tiled i3 windows have no stacking order", err)
+        self.assertIn("AGENTS.md route 6", err)
+        self.assertEqual(self.commands(), [])
+
+    def test_a_state_neither_dialect_has_says_what_would_close_it(self):
+        """The one byte pin for this sentence in the suite: `FakeSwayBackend` in tests/test_wwmctl_cli.py
+        carries the head clause only, on purpose, so there is no second copy to keep in step. Also the
+        mechanics: an `unsupported` state refusal has always been a FAILURE (wwmctl's X-plane retry keys
+        off the flag), and rewording it did not make it a warning."""
+        b = self.backend(tree=tree_with_fwsmoke_on_ws2(floating=True))
+        rc, _out, err = self.run_chain(b, ["windowstate", "--add", "SHADED", str(X_ID)])
+        self.assertNotEqual(rc, 0, "a state refusal is a failure and stays one")
+        self.assertIn("windowstate SHADED is not supported by the sway backend: i3 has no such window "
+                      "state; not yet here, and the route is a patched compositor (AGENTS.md route 6)",
+                      err)
+        self.assertEqual(self.commands(), [])
+
+
 class Dialect(I3Base):
     """What decides all of the above: one GET_VERSION, and sway's answers are untouched by it."""
 

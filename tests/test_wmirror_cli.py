@@ -444,6 +444,32 @@ class Detection(Base):
         self.assertIn("X11 session", lines[0])
         self.assertIn("--same-as", " ".join(lines))
 
+    def test_every_refusal_that_names_a_gap_names_its_route(self):
+        """AGENTS.md, applied to the three lines wmirror prints when it can do nothing.  A region mirror on
+        X11 and a capture on GNOME/KDE are both things this toolbox does not do YET, and a user who reads
+        `there is no route` stops looking -- so each line ends in the work that would close it and what that
+        work costs, and none of them stops at what a compositor lacks."""
+        from fwcommon import passthrough
+        passthrough.reset_cache()
+        self.addCleanup(passthrough.reset_cache)
+        with mock.patch.object(passthrough, "session_kind", return_value="x11"):
+            x11 = " ".join(core.no_session_lines())
+        self.assertIn("not done here yet", x11)
+        self.assertIn("XShm", x11)
+        self.assertNotIn("no route", x11)
+
+        capture = " ".join(core.no_capture_lines())
+        self.assertIn("AGENTS.md route 4", capture)
+        self.assertIn("not wired up here yet", capture)
+
+        with mock.patch.object(wxcore, "WlrOutputs", side_effect=wxcore.Fatal("no manager")):
+            with self.assertRaises(core.Refusal) as cm:
+                core.read_outputs(mock.Mock())
+        layout = " ".join(cm.exception.lines)
+        self.assertIn(core.OUTPUT_MANAGER, layout)
+        self.assertIn("AGENTS.md route 2", layout)
+        self.assertIn("not yet here", layout)
+
     def test_the_escape_hatch_does_not_decide_this(self):
         """FUCKWAYLAND_PASSTHROUGH is about handing over to an X11 original,
         and wmirror has none -- it must not turn an X11 box into a Wayland

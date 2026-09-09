@@ -77,6 +77,14 @@ MAX_HORZ, MAX_VERT = 1, 2
 _COSMETIC_STATES = {"SKIP_TASKBAR", "SKIP_PAGER", "MODAL"}
 _GAP_REASONS = {"BELOW": "Muffin has no API for it"}
 
+#: The second half of every gap sentence in this file. Eval already runs arbitrary JS inside Cinnamon
+#: (AGENTS.md route 2) and an extension is the same API from inside (route 3), so neither reaches a setter
+#: muffin does not have: the rung that does is muffin's own code. What XWayland windows get instead is not
+#: hypothetical -- `unsupported_states()` below hands them to wwmctl's X-plane route, which is where these
+#: states have always worked.
+_GAP_ROUTE = ("not yet here: for an XWayland window wwmctl sets it on the X plane instead, and for a "
+              "native one the route is a patched muffin (AGENTS.md route 6), one setter each")
+
 
 class CinnamonBackend(WindowBackend):
     name = "cinnamon"
@@ -84,10 +92,15 @@ class CinnamonBackend(WindowBackend):
     #: `wmctrl -m` answers the same with or without Xwayland running
     #: [M recon2/cinnamon.md §3.1]
     wm_name = "Mutter (Muffin)"
-    #: no picker: `global.stage.grab` does not exist in muffin's Clutter, and
-    #: `global.begin_modal` (which does) is a keyboard grab, not a click
-    #: [M cinnamon.md §2.3]
-    select_window_hint = "the cinnamon backend cannot pick a window interactively"
+    #: no picker yet: `global.stage.grab` does not exist in muffin's Clutter, and `global.begin_modal`
+    #: (which does) is a keyboard grab, not a click [M cinnamon.md §2.3]. The route is a reactive full-stage
+    #: Clutter actor, and the lowest rung that carries it is the one this whole backend already rides:
+    #: `org.Cinnamon.Eval`, which installs nothing (AGENTS.md route 2). Shipping the same actor as a
+    #: Cinnamon extension is route 3 and only buys surviving a Cinnamon restart. Either way the cost is a
+    #: modal grab that has to be released even when wdotool dies holding it, which is why it is not written
+    #: yet.
+    select_window_hint = ("picking a window by clicking is not yet done on Cinnamon (AGENTS.md route 2, a "
+                          "reactive Clutter actor through org.Cinnamon.Eval); name the window another way")
 
     def __init__(self, bus: Bus | None = None, names: list[str] | None = None,
                  settle: float = SETTLE):
@@ -317,15 +330,15 @@ class CinnamonBackend(WindowBackend):
             action = 0 if self._has_state(wid, state) else 1
         if state not in js.STATES:
             if state in _COSMETIC_STATES:
-                warn("windowstate %s: Muffin cannot set it on Wayland; ignoring" % state)
+                warn("windowstate %s: Muffin has no setter for it; %s; ignoring" % (state, _GAP_ROUTE))
                 return None
             raise self._state_gap(state)
         self._window_act(wid, js.state(wid, state, action == 1))
         return None
 
     def _state_gap(self, state: str) -> CmdError:
-        err = CmdError("windowstate %s is not supported by the cinnamon backend (%s)"
-                       % (state, _GAP_REASONS.get(state, "Muffin has no API for it")))
+        err = CmdError("windowstate %s is not supported by the cinnamon backend (%s); %s"
+                       % (state, _GAP_REASONS.get(state, "Muffin has no API for it"), _GAP_ROUTE))
         err.unsupported = True
         return err
 
@@ -390,7 +403,11 @@ class CinnamonBackend(WindowBackend):
             return None
 
     def select_window(self) -> int:
-        self._unsupported("selectwindow")
+        """The hint above says what would close this; the refusal says it again, because a script reads the
+        error and not the hint."""
+        err = CmdError("selectwindow is not supported by the cinnamon backend: %s" % self.select_window_hint)
+        err.unsupported = True
+        raise err
 
     # -- optional hooks -----------------------------------------------------
 

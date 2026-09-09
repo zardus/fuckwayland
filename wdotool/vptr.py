@@ -48,13 +48,23 @@ origin, one at scale 1.5):
   one but the receiving client then never sees `wl_pointer.frame` -- so
   every request here ends in a frame.
 
-WHAT IT CANNOT DO: say where the pointer is. `zwlr_virtual_pointer_v1` has
-no events at all; zero arrive on the object across motion, buttons and
-axes, and sway's IPC carries no cursor position either. So the daemon's
-`getmouselocation` reports the position it put the pointer at -- which on
-this path is exact, because the absolute map above has no error -- and
-refuses to answer at all when it has not moved it. See
+WHAT IS NOT DONE HERE YET: saying where the pointer is.
+`zwlr_virtual_pointer_v1` has no events at all; zero arrive on the object
+across motion, buttons and axes, and sway's IPC carries no cursor position
+either. So the daemon's `getmouselocation` reports the position it put the
+pointer at -- which on this path is exact, because the absolute map above
+has no error -- and refuses to answer at all when it has not moved it. See
 `daemon.POINTER_UNKNOWN`.
+
+`xdotool getmouselocation` always answers, so this is a gap of ours and
+gets a route. Two reach it. A wlr-layer-shell overlay is a protocol every
+compositor in this family already speaks (AGENTS.md route 1) and its
+`wl_pointer.motion` is the cursor, at the cost of a surface that eats the
+events it reads -- it has to be unmapped again before the user's next
+click. evdev is the other (route 4): integrate REL_X/REL_Y off
+/dev/input, at the cost of read access to the devices and an anchor to
+count from, since the kernel says how far the pointer moved and never
+where it is.
 
 LIFETIME is the keyboard's exactly: a held button does not survive the
 client disconnecting (the release is delivered the instant the holder

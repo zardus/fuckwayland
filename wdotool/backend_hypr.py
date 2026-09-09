@@ -20,8 +20,9 @@ outside the range Xwayland hands out ((client << 21) | serial) so a minted id is
 same listing. `stableId` is not the key: it is a decimal string on 0.56 [M recon2/arch.md] and does not exist
 on 0.53 (it is absent from every row of the recorded fixture).
 
-What Hyprland cannot do is refused by name with the reason, which is the whole point of the backend replacing
-the floor: a refusal a script can read beats a success that did not happen."""
+What Hyprland does not do yet is refused by name, with the reason and the rung of AGENTS.md's ladder that
+would close it, which is the whole point of the backend replacing the floor: a refusal a script can read
+beats a success that did not happen."""
 
 import os
 
@@ -53,9 +54,13 @@ class HyprBackend(WindowBackend):
     #: to read and the compositor's name is all there is to say.
     wm_name = "Hyprland"
 
-    #: sway's wording, and sway's reason: Hyprland's IPC has no interactive picker and no way to grab input
-    #: from outside the compositor, so there is nothing to click *with*. The next `activewindowv2` is the
-    #: answer, which means focusing the window that already has focus does not end the wait.
+    #: sway's wording, and sway's reason: Hyprland's IPC has no interactive picker and nothing that grabs a
+    #: button press from outside the compositor, so there is nothing to click *with*. The next
+    #: `activewindowv2` is the answer, which means focusing the window that already has focus does not end
+    #: the wait. xdotool's click-to-pick is not yet here: the routes are evdev, which sees the press without
+    #: the compositor's help (AGENTS.md route 4, at the cost of read access to /dev/input), plus something
+    #: that says which window is under the pointer -- `j/cursorpos` gives the point and `j/clients` the
+    #: rectangles, so route 2 finishes it.
     select_window_hint = "focus the target window to select it"
 
     def __init__(self, sockpath: "str | None" = None, ipc: "HyprIPC | None" = None):
@@ -178,48 +183,72 @@ class HyprBackend(WindowBackend):
         self._refuse_tiled(row, "resize", "size")
         self.ipc.dispatch("resizewindowpixel exact %d %d,%s" % (w, h, self._addr(row)))
 
-    def _no(self, op: str, why: str):
-        """A capability gap with its reason attached. `_unsupported()` names the operation and the backend;
-        on Hyprland the interesting half is *why*, because the wlr floor answered these silently."""
-        err = CmdError("%s is not supported by the hypr backend (%s)" % (op, why))
+    def _no(self, op: str, why: str, route: str):
+        """A capability gap with its reason and its route attached. `_unsupported()` names the operation and
+        the backend; on Hyprland the interesting half is *why*, because the wlr floor answered these
+        silently -- and after the why, what would close the gap, which is what AGENTS.md asks a refusal for.
+
+        The parenthesis stays closed around the reason alone: vm/live-smoke.d/hypr.sh:169 greps for
+        `(Hyprland has no minimize)` contiguous, and the route goes after it."""
+        err = CmdError("%s is not supported by the hypr backend (%s); %s" % (op, why, route))
         err.unsupported = True
         raise err
 
     #: The reason the three minimize-shaped gaps share.
     NO_MINIMIZE = "Hyprland has no minimize"
+    #: And the rung that would close it. A special workspace is a stash, not a minimize: the window keeps
+    #: its size and stays in `j/clients`, so the bookkeeping to bring it back is ours to write. The verb is
+    #: the `movetoworkspacesilent special:<name>` that `set_desktop_for_window` below already sends for a
+    #: numbered move; no report has run it against a stash and back, which is the rest of the cost [R].
+    MINIMIZE_ROUTE = ("not yet here, and the route is Hyprland's own IPC (AGENTS.md route 2), a special "
+                      "workspace to stash the window in, at the cost of the bookkeeping that brings it "
+                      "back and a listing that keeps showing it while it is stashed")
     #: What `j/clients` does and does not carry. Only what was measured: the rows have `focusHistoryID` and
     #: nothing that orders them front to back [M recon2/hyprland.md §2, the recorded fixture's keys].
     NO_STACKING = "Hyprland publishes no stacking order in j/clients"
+    #: The dispatcher that would be the lower is already in the IPC and has been run: `dispatch alterzorder
+    #: top,address:0x...` on a floating window answers `ok` [M requests-batch-5.md, "Read by batch 20", item
+    #: 8]. What is missing is not the run, it is the read-back -- every other verb here verifies itself
+    #: against `j/clients` and this one cannot -- which is why it is a route with a cost and not a patch.
+    STACKING_ROUTE = ("not yet here, and the route is `alterzorder bottom` over the IPC we already speak "
+                      "(AGENTS.md route 2), measured to answer ok on a floating window; the cost is "
+                      "sending it unverified, because j/clients publishes no order to read a lower back "
+                      "from")
+    #: Everything else about a window state. Hyprland's dispatcher list is the whole surface, so a state it
+    #: has no dispatcher for is Hyprland's own code away.
+    STATE_ROUTE = "not yet here, and the route is a patched Hyprland (AGENTS.md route 6), one dispatcher each"
 
     def minimize(self, wid: int):
         self._row(wid)
-        self._no("windowminimize", self.NO_MINIMIZE)
+        self._no("windowminimize", self.NO_MINIMIZE, self.MINIMIZE_ROUTE)
 
     def unmap(self, wid: int):
         self._row(wid)
-        self._no("windowunmap", self.NO_MINIMIZE)
+        self._no("windowunmap", self.NO_MINIMIZE, self.MINIMIZE_ROUTE)
 
     def map(self, wid: int):
         self._row(wid)
-        self._no("windowmap", self.NO_MINIMIZE + ", so there is nothing to restore")
+        self._no("windowmap", self.NO_MINIMIZE + ", so there is nothing to restore", self.MINIMIZE_ROUTE)
 
     def raise_(self, wid: int):
         """Focus, for a floating window; sway's warning for a tiled one -- the shape the sway backend has
-        (wdotool/backend_sway.py:376) and the one the plan asks for here.
+        (wdotool/backend_sway.py:391) and the one the plan asks for here.
 
-        Focusing is as close to a raise as this gets: a tiled window sits in a layout that has no front, and
-        `dispatch alterzorder top,address:...` -- which would be the real thing for a floating one -- is a
-        dispatcher no report has run [R the 0.53 dispatcher list; batch 12's live run is asked to record it].
-        So what is sent is the verb that was measured."""
+        Focusing is as close to a raise as this gets on a floating window, and it is what was measured.
+        `alterzorder top,address:...` answers ok [M requests-batch-5.md, "Read by batch 20", item 8] and
+        changes nothing anyone can read back, so it is not an improvement on a verb that demonstrably
+        focuses; a tiled window sits in a layout with no z at all, so it gets sway's warning and its rung."""
         row = self._row(wid)
         if row.get("floating"):
             self.ipc.dispatch("focuswindow %s" % self._addr(row))
         else:
-            warn("windowraise: tiled Hyprland windows have no stacking order; ignoring")
+            warn("windowraise: tiled Hyprland windows have no stacking order; not yet, and the route is a "
+                 "patched Hyprland (AGENTS.md route 6), a restack its layout has no word for today; "
+                 "ignoring")
 
     def lower(self, wid: int):
         self._row(wid)
-        self._no("windowlower", self.NO_STACKING)
+        self._no("windowlower", self.NO_STACKING, self.STACKING_ROUTE)
 
     def maximize_pair_state(self) -> "str | None":
         """`dispatch fullscreen 1` takes both axes at once and there is no per-axis dispatcher, so the pair is
@@ -234,7 +263,7 @@ class HyprBackend(WindowBackend):
             self._toggle_fullscreen(row, action, FS_MAXIMIZED, DISPATCH_MAXIMIZE)
         elif state in ("MAXIMIZED_VERT", "MAXIMIZED_HORZ"):
             self._no("windowstate %s" % state,
-                     "Hyprland maximizes both axes at once; ask for both")
+                     "Hyprland maximizes both axes at once; ask for both", self.STATE_ROUTE)
         elif state == "STICKY":
             if not row.get("floating"):
                 raise CmdError("hypr: only floating windows can be pinned (setfloating it first)")
@@ -242,7 +271,8 @@ class HyprBackend(WindowBackend):
             if on != bool(row.get("pinned")):
                 self.ipc.dispatch("pin %s" % self._addr(row))
         else:
-            self._no("windowstate %s" % state, "Hyprland has no such window state")
+            self._no("windowstate %s" % state, "Hyprland has no such window state",
+                     self.STATE_ROUTE)
         return None
 
     #: which `dispatch fullscreen <n>` clears each state

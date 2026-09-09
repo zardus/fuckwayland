@@ -530,6 +530,22 @@ class RelativeMotion(VptrTest):
             d.handle({"op": "pointer"})
         self.assertEqual(str(cm.exception), daemon.POINTER_UNKNOWN)
 
+    @unittest.expectedFailure
+    def test_the_unknown_position_refusal_owes_a_route(self):
+        """`xdotool getmouselocation` always answers, so a session where ours does not is a gap of ours and
+        AGENTS.md wants the rung that would close it in the sentence.  `daemon.POINTER_UNKNOWN` stops at what
+        the protocol and sway's IPC do not carry.
+
+        The routes are written down in wdotool/vptr.py's header: a wlr-layer-shell overlay whose
+        `wl_pointer.motion` IS the cursor (route 1, at the cost of a surface that eats the events it reads)
+        or evdev integration off /dev/input (route 4, at the cost of read access and an anchor).  The string
+        lives in wdotool/daemon.py, which no batch of this wave owns -- see
+        <scratchpad>/requests-unowned-batch-19.md -- so this is expectedFailure until someone applies it, and
+        turns into an unexpected success the day they do."""
+        # the shape the rest of the tree prints, not the bare word: `route` alone would turn green on any
+        # edit that happened to use it, and the deliverable is the rung
+        self.assertIn("AGENTS.md route", daemon.POINTER_UNKNOWN)
+
     def test_a_position_that_was_known_survives_it_exactly(self):
         d = self.daemon(uinput=False)
         d.op_mousemove_abs(1000, 500, [])

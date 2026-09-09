@@ -218,7 +218,10 @@ class NoWorkspaceProtocol(WorkspaceTest):
             with self.assertRaises(CmdError) as cm:
                 b.set_desktop(1)
             self.assertEqual(str(cm.exception),
-                             "set_desktop is not supported by the wlr backend")
+                             "set_desktop is not supported by the wlr backend: this compositor publishes "
+                             "no ext_workspace_manager_v1; not yet here, and the routes are that protocol "
+                             "where the compositor grows it (AGENTS.md route 1) or the compositor's own "
+                             "IPC where it has one (route 2), which is a backend per compositor")
             self.assertIsNone(b.workspaces())
 
     def test_a_window_still_reports_no_desktop_of_its_own(self):

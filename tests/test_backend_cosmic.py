@@ -83,6 +83,24 @@ class NoWorkspaceProtocol(Cosmic):
         return [g for g in super().advertise() if g[0] != wl_fake.WS_MANAGER]
 
 
+class Sandboxed(Cosmic):
+    """What a sandboxed client sees: cosmic-comp builds the toplevel list, the info and the manager behind
+    `client_not_sandboxed` [R recon2/cosmic/state.rs:647, 748, 749], so a client the filter rejects never
+    gets the globals announced at all. The session is otherwise the recorded one."""
+
+    def advertise(self):
+        gone = (wl_fake.EXT_TOPLEVEL_LIST, wl_fake.COSMIC_INFO, wl_fake.COSMIC_MGR)
+        return [g for g in super().advertise() if g[0] not in gone]
+
+
+class NoManager(Cosmic):
+    """The half-sandboxed shape: the read side is announced, the write side is not, which is exactly what
+    the filter would do if only `toplevel_management_state` grew a stricter one."""
+
+    def advertise(self):
+        return [g for g in super().advertise() if g[0] != wl_fake.COSMIC_MGR]
+
+
 class ExtWorkspaceEnter(Cosmic):
     """cosmic-comp's own shape for a v3 client: `ext_workspace_enter` (opcode 10), one workspace per window.
 
@@ -153,6 +171,23 @@ class CosmicTest(unittest.TestCase):
 
 
 class Listing(CosmicTest):
+    def test_a_session_that_announces_neither_toplevel_global_says_what_would_change_that(self):
+        """The constructor's own precondition. `no Wayland session found ... the compositor does not offer
+        wlr-foreign-toplevel` is what every COSMIC session answered before this backend existed
+        (vm/live-smoke.d/cosmic.sh:14); this one keeps that head and stops being a full stop, because the
+        commonest way to meet it is to be the sandboxed client rather than to be on a compositor without
+        the protocol -- cosmic-comp builds both behind `client_not_sandboxed`
+        [R recon2/cosmic/state.rs:647, 748]."""
+        self.compositor(Sandboxed)
+        with self.assertRaises(CmdError) as cm:
+            CosmicBackend()
+        said = str(cm.exception)
+        self.assertTrue(said.startswith("cosmic backend: compositor does not offer "
+                                        "ext_foreign_toplevel_list_v1 and zcosmic_toplevel_info_v1"), said)
+        self.assertIn("hides them from a sandboxed client", said)
+        self.assertIn("AGENTS.md route 1", said)
+        self.assertIn("(route 2)", said, "and the compositor that really has neither gets its own rung")
+
     def test_ids_are_minted_from_the_identifier(self):
         """`ext_foreign_toplevel_handle_v1.identifier` is 32 base62 characters and is the only handle the
         protocol carries -- no pid, no X id, no number [M recon2/cosmic.md §4]. So the id is minted from it:
@@ -275,7 +310,9 @@ class Capabilities(CosmicTest):
     def test_fullscreen_is_gated_on_the_advertised_array(self):
         """Decision C5.15. `set_fullscreen` did work on the live compositor even though 5 is not in
         `[1,2,3,4,6]`, but a client that ignores the capability array is a client that will be wrong the
-        first time the array is right -- so the array decides, and the refusal names the capability."""
+        first time the array is right -- so the array decides, and the refusal names the capability, then
+        what would close the gap: the array is built in cosmic-comp itself, so route 6 is the lowest rung
+        that reaches it."""
         comp, b = self.backend()
         self.assertNotIn(CAP_FULLSCREEN, CAPS)
         with self.assertRaises(CmdError) as cm:
@@ -283,8 +320,25 @@ class Capabilities(CosmicTest):
         self.assertTrue(getattr(cm.exception, "unsupported", False))
         self.assertEqual(str(cm.exception),
                          "windowstate FULLSCREEN is not supported by the cosmic backend: "
-                         "cosmic-comp does not advertise the fullscreen capability")
+                         "cosmic-comp does not advertise the fullscreen capability; not yet here, and "
+                         "the route is a patched cosmic-comp (AGENTS.md route 6), which is where that "
+                         "array is built [R recon2/cosmic/state.rs:752-756]")
         self.assertEqual(comp.calls, [])
+
+    def test_a_missing_manager_names_the_sandbox_filter_and_not_just_the_absence(self):
+        """The write side gone is not a compositor without the protocol: cosmic-comp has it and hides it
+        from a client `client_not_sandboxed` rejects [R recon2/cosmic/state.rs:749]. So the refusal keeps
+        its old head -- `offers no <iface>; cannot <op>` -- and owes the rest: run unsandboxed and the
+        protocol that is already there answers. Rung 1, because no code of ours is missing."""
+        _comp, b = self.backend(cls=NoManager)
+        with self.assertRaises(CmdError) as cm:
+            b.close(self.wid(b, "cosmicterm"))
+        said = str(cm.exception)
+        self.assertTrue(said.startswith("cosmic backend: compositor offers no zcosmic_toplevel_manager_v1; "
+                                        "cannot windowclose"), said)
+        self.assertIn("not yet here", said)
+        self.assertIn("AGENTS.md route 1", said)
+        self.assertIn("sandbox filter", said)
 
     def test_a_compositor_that_does_advertise_it_gets_the_request(self):
         comp, b = self.backend(capabilities=CAPS + (CAP_FULLSCREEN,))
@@ -334,11 +388,31 @@ class Capabilities(CosmicTest):
             self.assertIn("AGENTS.md route 6", str(cm.exception))
 
     def test_a_state_this_protocol_has_no_word_for(self):
+        """SHADED is one wmctrl and xdotool both take, so the refusal owes it a route and not a full stop:
+        the handle's state array has five members and a sixth is cosmic-comp's to add (route 6)."""
         _comp, b = self.backend()
         with self.assertRaises(CmdError) as cm:
             b.set_state(self.wid(b, "cosmicterm"), "SHADED", 1)
         self.assertEqual(str(cm.exception),
-                         "windowstate SHADED is not supported by the cosmic backend")
+                         "windowstate SHADED is not supported by the cosmic backend: the COSMIC toplevel "
+                         "protocol carries maximized, minimized, activated, fullscreen and sticky and no "
+                         "other state; not yet here, and the route is a patched cosmic-comp "
+                         "(AGENTS.md route 6), one state member and one request each")
+
+    def test_a_version_gap_is_told_apart_from_a_missing_feature(self):
+        """`set_sticky` is version 3 of a protocol this session speaks at 2: nothing has to be written for
+        it, a newer cosmic-comp already has it, and the refusal has to say so rather than read like the
+        capability refusal above."""
+        _comp, b = self.backend(capabilities=CAPS + (CAP_STICKY,))
+        # the fake in tests/wl_fake.py advertises the manager at 4 and belongs to another batch, so the
+        # negotiated version is moved here instead: `mgr_ver` is the field the bind above wrote.
+        b.mgr_ver = 2
+        with self.assertRaises(CmdError) as cm:
+            b.set_state(self.wid(b, "cosmicterm"), "STICKY", 1)
+        msg = str(cm.exception)
+        self.assertIn("zcosmic_toplevel_manager_v1 is version 2 and set_sticky arrived in version 3", msg)
+        self.assertIn("AGENTS.md route 1", msg)
+        self.assertIn("not yet here", msg)
 
 
 class Geometry(CosmicTest):
