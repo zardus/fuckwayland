@@ -1,0 +1,65 @@
+#cloud-config
+# vmctl flavor resolute-wayfire: Ubuntu 26.04 LTS (resolute) + Wayfire 0.10.0-1 (wlroots 0.19.1) with
+# Xwayland, foot, grim and wf-shell's panel; greetd autologin ([initial_session]) of user test (uid 1000,
+# password test, NOPASSWD sudo) into wayfire on vt 1.  Native display tool: Wayfire's own JSON IPC
+# (window-rules/list-outputs), with wlr-randr 0.4.1 as the second opinion.  No NetworkManager (networkd stays).
+#
+# The second privilege-free family after sway, and the only IPC oracle in the rig that is independent of the
+# protocol the tool being measured writes through: every wxrandr apply of recon2/wayfire.md §2.1 was verified
+# against window-rules/list-outputs, which reads Wayfire's internal output state and not zwlr_output_manager.
+#
+# The IPC plugins ship INSIDE the base wayfire package (dpkg -L wayfire carries libipc.so, libipc-rules.so and
+# libstipc.so; wayfire-plugins-extra does not exist in 26.04 at all) and none of the three is in the default
+# plugin list, so the ini vm/build-image.sh writes is what turns the backend on [recon2/wayfire.md §1.1, §1.2].
+# A stock Wayfire is a wlr-floor compositor; this image is the configured one.
+#
+# wcm is the GUI config tool: it is installed and never started, so that `wwmctl -l` on this flavor has one
+# more Wayland client available to a hand session than foot alone.  xterm is EXTRA rather than optional here
+# because the WM_CLASS-instance check (xterm.XTerm where the wlr floor printed XTerm.XTerm) needs an X client
+# [recon2/wayfire.md §2.4].
+#
+# 26.04 and not 24.04: noble ships Wayfire 0.8.0, whose IPC keeps the view methods in stipc under other names,
+# so a noble-wayfire would measure a different protocol [recon2/wayfire.md §4].
+#
+# vmctl fills in the two @@...@@ placeholders at build time (root ssh public
+# key; the contents of vm/build-image.sh). The base image lives in $VMIMAGES:
+# vmctl-base: ubuntu-26.04-server-cloudimg-amd64.img
+# vmctl-desktop: wayfire
+# vmctl-distro: ubuntu
+# vmctl-ci: push
+hostname: resolute-wayfire
+manage_etc_hosts: true
+disable_root: false
+ssh_pwauth: false
+ssh_authorized_keys:
+  - @@ROOT_PUBKEY@@
+users:
+  - name: test
+    uid: 1000
+    gecos: Test User
+    groups: [adm, sudo]
+    shell: /bin/bash
+    lock_passwd: false
+    plain_text_passwd: test
+    sudo: ALL=(ALL) NOPASSWD:ALL
+write_files:
+  - path: /etc/ssh/sshd_config.d/60-vmctl.conf
+    content: "PermitRootLogin prohibit-password\n"
+  - path: /etc/modules-load.d/uinput.conf
+    content: "uinput\n"
+  - path: /etc/vmctl-build.env
+    content: |
+      FLAVOR=resolute-wayfire
+      DESKTOP=wayfire
+      DESKTOP_PKG="wayfire wf-shell wcm xwayland foot grim greetd dbus-user-session wlr-randr wl-mirror"
+      EXTRA_PKGS="xdotool wmctrl x11-utils x11-xserver-utils xterm"
+  - path: /usr/local/sbin/vmctl-build
+    permissions: '0755'
+    content: |
+      @@BUILD_SCRIPT@@
+runcmd:
+  - [/usr/local/sbin/vmctl-build]
+power_state:
+  mode: poweroff
+  message: vmctl golden build finished
+  timeout: 120

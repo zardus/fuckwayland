@@ -1,0 +1,87 @@
+#cloud-config
+# vmctl flavor resolute-cinnamon: Ubuntu 26.04 LTS (resolute) + Cinnamon 6.4.13-2ubuntu0.2 on muffin
+# 6.4.1-1build1, the DEFAULT session -- `cinnamon.desktop`, X11; LightDM autologin
+# (autologin-session=cinnamon) of user test (uid 1000, password test, NOPASSWD sudo).
+# The X11-path oracle here is real xrandr, as on resolute-xfce.
+#
+# The Wayland twin, resolute-cinnamon-wayland, installs the SAME package set and differs only in
+# LightDM's autologin-session: one desktop, two session types, one controlled comparison.  Cinnamon
+# ships both session files (`cinnamon.desktop` Exec=cinnamon-session-cinnamon and
+# `cinnamon-wayland.desktop` Exec=cinnamon-session-cinnamon --wayland, a six-line /bin/sh), and both
+# .session files carry `DesktopName=X-Cinnamon`, so XDG_CURRENT_DESKTOP is `X-Cinnamon` on either
+# [recon2/cinnamon 1].  LightDM 1.32's built-in sessions-directory covers /usr/share/xsessions and
+# /usr/share/wayland-sessions alike, which is why one autologin stanza selects either.
+#
+# What this half measures is the HANDOVER, and the recon measured it byte for byte on a live Cinnamon
+# 6.4.13: `wwmctl -lGpx` identical to `wmctrl -lGpx`, `wwmctl -m` printing `Name: Mutter (Muffin)` (what
+# muffin writes on its _NET_SUPPORTING_WM_CHECK window), `wxprop -id` and `wxrandr --print-backend`
+# (x11) all correct with NO code of ours in the path at all [recon2/cinnamon 3.1].  muffin's EWMH is
+# full -- _NET_SUPPORTED lists 70+ atoms including _NET_WM_STATE_SHADED, _NET_MOVERESIZE_WINDOW and
+# _NET_RESTACK_WINDOW, plus Cinnamon's own _NET_WM_XAPP_* -- so shading, which mutter dropped and KWin 6
+# refuses, is a live state on this image and vm/live-smoke.d/cinnamon.sh asserts it sticks.
+#
+# The trap this flavor exists to keep honest: `org.cinnamon.Muffin.DisplayConfig` is on the session bus
+# HERE TOO, on an X11 session, answering GetCurrentState with `'renderer': <'xrandr'>` -- the same shape
+# as GNOME-on-Xorg owning org.gnome.Shell.  A backend chosen by bus name alone would take the D-Bus
+# route on a session where xrandr is the truth, so passthrough.session_kind() runs first and the smoke's
+# `muffin` phase checks that it did [recon2/cinnamon 3.1].
+#
+# One thing the twin's first build (2026-09-09) says about this half: on the WAYLAND session Xwayland
+# 24.1.10 segfaults and takes muffin with it, so today the X plane of that flavor is missing and this
+# flavor -- where Xorg IS the session -- is the one of the pair with a working X plane.  This golden has
+# not been built yet; the twin's took 53.1 min for the same 1783 packages, and the only thing that
+# differs here is LightDM's autologin-session, so the numbers should be its numbers.
+#
+# Everything else about the image is the Wayland twin's: `ubuntucinnamon-desktop` 26.04.4 (universe) --
+# `ubuntu-cinnamon-desktop` is not a package in this archive (apt-cache policy, this box, 2026-09-08) --
+# with slick-greeter pulling LightDM, xserver-xorg, nemo and cinnamon-core (whose `gnome-terminal |
+# x-terminal-emulator` first alternative puts gnome-terminal on the image).  xwayland and wl-mirror are
+# named for the twin's sake and are simply unused here; xterm is EXTRA because the handover
+# measurement's window was an xterm and `wwmctl -lGpx` against `wmctrl -lGpx` needs a client whose
+# geometry and WM_CLASS nobody argues about [recon2/cinnamon 3.1].
+#
+# vmctl fills in the two @@...@@ placeholders at build time (root ssh public
+# key; the contents of vm/build-image.sh). The base image lives in $VMIMAGES:
+# vmctl-base: ubuntu-26.04-server-cloudimg-amd64.img
+# vmctl-desktop: cinnamon
+# vmctl-distro: ubuntu
+# vmctl-ci: push
+hostname: resolute-cinnamon
+manage_etc_hosts: true
+disable_root: false
+ssh_pwauth: false
+ssh_authorized_keys:
+  - @@ROOT_PUBKEY@@
+users:
+  - name: test
+    uid: 1000
+    gecos: Test User
+    groups: [adm, sudo]
+    shell: /bin/bash
+    lock_passwd: false
+    plain_text_passwd: test
+    sudo: ALL=(ALL) NOPASSWD:ALL
+write_files:
+  # No `owner:` on any entry: write_files runs BEFORE the users module, so
+  # `owner: test:test` aborts the whole module and cloud-init ends in status:
+  # error [recon2/hyprland 6].  build-image.sh chowns under /home/test instead.
+  - path: /etc/ssh/sshd_config.d/60-vmctl.conf
+    content: "PermitRootLogin prohibit-password\n"
+  - path: /etc/modules-load.d/uinput.conf
+    content: "uinput\n"
+  - path: /etc/vmctl-build.env
+    content: |
+      FLAVOR=resolute-cinnamon
+      DESKTOP=cinnamon
+      DESKTOP_PKG="ubuntucinnamon-desktop xwayland wl-mirror"
+      EXTRA_PKGS="xdotool wmctrl x11-utils x11-xserver-utils xterm"
+  - path: /usr/local/sbin/vmctl-build
+    permissions: '0755'
+    content: |
+      @@BUILD_SCRIPT@@
+runcmd:
+  - [/usr/local/sbin/vmctl-build]
+power_state:
+  mode: poweroff
+  message: vmctl golden build finished
+  timeout: 120

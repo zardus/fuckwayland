@@ -1,0 +1,95 @@
+#cloud-config
+# vmctl flavor arch-hypr: Arch Linux (the 20260901 cloud image) + Hyprland 0.56.2 with
+# Xwayland and foot; greetd autologin ([initial_session]) of user test into `Hyprland` on vt 1.
+# Native display tool: hyprctl -j monitors, with wlr-randr 0.5.0 as a second, independent reader.
+#
+# It exists to BRACKET one open measurement.  resolute-hypr runs 0.53.3, where the
+# zwlr_output_manager apply worked exactly once per fresh session and timed out for ever after
+# [recon2/hyprland 4].  Here at 0.56.2 the wlr path was dead from the FIRST request of a fresh
+# single-head session, which is the difference between the two versions:
+#
+#   wxrandr --output Virtual-1 --mode 1280x1024        -> timed out
+#   wlr-randr --output Virtual-1 --mode 1280x1024      -> rc 124, hung until the outer timeout
+#   hyprctl keyword monitor 'Virtual-1,1920x1080@75,0x0,2'  -> ok, and the scale stayed 1
+#
+# [recon2/arch 3.4].  The third line is NOT a measurement of `keyword monitor` on this version:
+# it was run only after those five timed-out applies had been through the session, and 0.53.3 was
+# measured to stop taking `keyword monitor` in exactly that state -- ok, no change, three times in
+# a row, while the same command on a fresh session applies at once [recon2/hyprland 4].  Whether a
+# FRESH 0.56.2 session takes it -- the route wxrandr's hypr backend uses, AGENTS.md route 2 -- is
+# what this flavor's first run settles, and nothing else in the tree can.  Until then the apply
+# half of vm/live-smoke.d/hypr.sh is an `xwant` here and a plain check on resolute-hypr; if the
+# run goes red the next route down the ladder is a patched Hyprland (route 6), a package to build
+# and carry.  Reading is right in every case measured, on both versions.  Upstream has the shape
+# recorded twice (hyprwm/Hyprland#5101 since 2024-03; discussions/15526, where since 0.56.0 a
+# no-op apply never receives its mandatory succeeded/failed/cancelled) [R, read not measured].
+#
+# Everything else measured green here as the wlroots family: 0.56.2 advertises
+# zwlr_foreign_toplevel_manager_v1 v3, zwlr_output_manager_v1 v4, zwp_virtual_keyboard_manager_v1,
+# zwlr_virtual_pointer_manager_v1 v2, zwlr_screencopy_manager_v1 v3 AND
+# ext_image_copy_capture_manager_v1 v1 (0.53.3 has screencopy alone), plus ext_workspace_manager_v1
+# and ext_foreign_toplevel_list_v1.  `wdotool type` landed with no root, no group and no udev rule,
+# and `wdotool mousemove 640 360` came back x:640 y:360 [recon2/arch 3.4].
+#
+# The two Arch goldens differ by their compositor packages and by nothing else: DESKTOP_PKG here
+# is arch-sway's with sway, swaybg and grim out and hyprland in (grim is a screenshot tool no
+# check in hypr.sh calls), and EXTRA_PKGS is arch-sway's verbatim -- which is what makes a
+# difference between the two runs a difference about the compositor.  hyprland itself installed in
+# 4 s on top of that set [recon2/arch 6].  EXTRA is also the reason Arch is here at all: this
+# archive carries xdotool 4.20260303.1 and wmctrl 1.07, the exact versions this project clones, so
+# the X11 handover lands on the parity target [recon2/arch 2].  It has no xmessage (Arch ships one
+# in `xorg-xmessage`), so hypr.sh's XWayland id join runs on the `xterm` EXTRA does carry -- the
+# window recon2/arch 3.4 measured `window id # 0x40000c` on.
+#
+# Two facts about the base image, both measured: cloud-init 26.2 is IN the image, so the seed
+# vmctl attaches works unchanged; and ssh answered 70 s after qemu started [recon2/arch 1].  The
+# image is pinned to the DATED build rather than the `latest` symlink name -- a rolling golden rots
+# weekly -- and `# vmctl-base-sha256:` stays out until somebody has verified the published
+# .SHA256 file's bytes, exactly as in arch-sway.yaml.
+#
+# vmctl fills in the two @@...@@ placeholders at build time (root ssh public key; the
+# contents of vm/build-image.sh). The base image lives in $VMIMAGES:
+# vmctl-base: Arch-Linux-x86_64-cloudimg-20260901.583572.qcow2
+# vmctl-desktop: hypr
+# vmctl-distro: arch
+# vmctl-ci: push
+hostname: arch-hypr
+manage_etc_hosts: true
+disable_root: false
+ssh_pwauth: false
+ssh_authorized_keys:
+  - @@ROOT_PUBKEY@@
+users:
+  - name: test
+    uid: 1000
+    gecos: Test User
+    groups: [wheel]
+    shell: /bin/bash
+    lock_passwd: false
+    plain_text_passwd: test
+    sudo: ALL=(ALL) NOPASSWD:ALL
+write_files:
+  # No `owner:` on any entry here.  write_files runs BEFORE the users module, so
+  # `owner: test:test` aborts the whole module with `OSError: Unknown user or
+  # group ... 'test'` and cloud-init ends in status: error [recon2/hyprland 6].
+  # Everything under /home/test is chowned by the build script instead.
+  - path: /etc/ssh/sshd_config.d/60-vmctl.conf
+    content: "PermitRootLogin prohibit-password\n"
+  - path: /etc/modules-load.d/uinput.conf
+    content: "uinput\n"
+  - path: /etc/vmctl-build.env
+    content: |
+      FLAVOR=arch-hypr
+      DESKTOP=hypr
+      DESKTOP_PKG="hyprland foot xorg-xwayland greetd"
+      EXTRA_PKGS="xdotool wmctrl xorg-xprop xorg-xrandr wl-mirror python-gobject gtk3 acl xterm wlr-randr wayland-utils"
+  - path: /usr/local/sbin/vmctl-build
+    permissions: '0755'
+    content: |
+      @@BUILD_SCRIPT@@
+runcmd:
+  - [/usr/local/sbin/vmctl-build]
+power_state:
+  mode: poweroff
+  message: vmctl golden build finished
+  timeout: 120

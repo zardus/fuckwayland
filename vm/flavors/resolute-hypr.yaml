@@ -1,0 +1,86 @@
+#cloud-config
+# vmctl flavor resolute-hypr: Ubuntu 26.04 LTS (resolute) + Hyprland 0.53.3 (aquamarine) with
+# Xwayland, foot and wl-mirror; greetd autologin ([initial_session]) of user test (uid 1000,
+# password test, NOPASSWD sudo) into `Hyprland` on vt 1.  Native display tool:
+# `hyprctl -j monitors`, which is also what vm/live-smoke.d/oracle.py reads here.
+#
+# This is the cheapest new Wayland image in the tree -- one apt transaction over the base every
+# other Ubuntu cloud flavor already uses -- and it is the only one where three things are
+# measured at all:
+#
+#   * the two Hyprland backends (wdotool/backend_hypr.py over the compositor's own IPC socket,
+#     wxrandr/hypr.py over `keyword monitor`) against the wlroots FLOOR they replaced.  On the
+#     floor, measured here on 0.53.3: `wwmctl -lGpx` printed the whole output as every window's
+#     geometry with pid 0 and desktop -1, `wwmctl -d` failed outright, ids moved when a window
+#     closed, and `windowminimize` was accepted and did nothing [recon2/hyprland 3];
+#   * the zwlr_output_management apply defect.  The FIRST apply of a fresh session worked
+#     (rc 0 in 0.25 s); every apply after it timed out at 10.06 s with nothing changed and no
+#     `[COutputConfiguration] Applying configuration` line in Hyprland's own log, and `wlr-randr`
+#     -- the reference client for the same protocol, which has no deadline of its own -- hung for
+#     ever on the same request.  Not ours: the route wxrandr takes here is Hyprland's own IPC,
+#     which applied instantly on a session that had never touched the protocol [recon2/hyprland 4];
+#   * typing with no privilege at all.  zwp_virtual_keyboard_manager_v1 and
+#     zwlr_virtual_pointer_manager_v1 are both advertised, so `wdotool --vkbd on type` needs
+#     neither root nor a udev rule, and the pointer landed with 0 px of error twice
+#     [recon2/hyprland 2, 3].
+#
+# Hyprland is not in 24.04 or 25.04 at all; 25.10 carries 0.41.2, this release 0.53.3+ds-4
+# (universe) and 26.10 0.55.4.  `arch-hypr` is the same desktop at 0.56.2 and is what brackets
+# the apply defect against this one.
+#
+# `python3-gi`/`gir1.2-gtk-3.0` are deliberately absent, exactly as on resolute-sway: warandr's
+# GTK window is measured on the desktops that ship the bindings anyway, and a Hyprland install
+# pulls in neither [recon2/hyprland 5].  `wlr-randr` IS installed, as a second and independent
+# READER of the layout; nothing here applies through it (see above).
+#
+# The session config -- unscaled Virtual-N left to right, no logo, no splash, animations off --
+# is written by vm/build-image.sh's desktop_hypr, not here.  scale 1 is pinned there because
+# Hyprland's default `auto` gave a runtime headless output scale 2.0 [recon2/hyprland 6].
+#
+# vmctl fills in the two @@...@@ placeholders at build time (root ssh public
+# key; the contents of vm/build-image.sh). The base image lives in $VMIMAGES:
+# vmctl-base: ubuntu-26.04-server-cloudimg-amd64.img
+# vmctl-desktop: hypr
+# vmctl-distro: ubuntu
+# vmctl-ci: push
+hostname: resolute-hypr
+manage_etc_hosts: true
+disable_root: false
+ssh_pwauth: false
+ssh_authorized_keys:
+  - @@ROOT_PUBKEY@@
+users:
+  - name: test
+    uid: 1000
+    gecos: Test User
+    groups: [adm, sudo]
+    shell: /bin/bash
+    lock_passwd: false
+    plain_text_passwd: test
+    sudo: ALL=(ALL) NOPASSWD:ALL
+write_files:
+  # No `owner:` on any entry here.  write_files runs BEFORE the users module, so
+  # `owner: test:test` aborts the whole module with `OSError: Unknown user or
+  # group ... 'test'` and cloud-init ends in status: error -- measured on this
+  # very desktop while the recon was building it [recon2/hyprland 6].
+  # Everything under /home/test is chowned by the build script instead.
+  - path: /etc/ssh/sshd_config.d/60-vmctl.conf
+    content: "PermitRootLogin prohibit-password\n"
+  - path: /etc/modules-load.d/uinput.conf
+    content: "uinput\n"
+  - path: /etc/vmctl-build.env
+    content: |
+      FLAVOR=resolute-hypr
+      DESKTOP=hypr
+      DESKTOP_PKG="hyprland xwayland foot greetd dbus-user-session wl-mirror wlr-randr"
+      EXTRA_PKGS="xdotool wmctrl x11-utils x11-xserver-utils"
+  - path: /usr/local/sbin/vmctl-build
+    permissions: '0755'
+    content: |
+      @@BUILD_SCRIPT@@
+runcmd:
+  - [/usr/local/sbin/vmctl-build]
+power_state:
+  mode: poweroff
+  message: vmctl golden build finished
+  timeout: 120

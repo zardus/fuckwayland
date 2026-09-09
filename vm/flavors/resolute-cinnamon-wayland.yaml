@@ -1,0 +1,112 @@
+#cloud-config
+# vmctl flavor resolute-cinnamon-wayland: Ubuntu 26.04 LTS (resolute) + Cinnamon 6.4.13-2ubuntu0.2 on
+# muffin 6.4.1-1build1, the "Cinnamon on Wayland (Experimental)" session; LightDM autologin
+# (autologin-session=cinnamon-wayland) of user test (uid 1000, password test, NOPASSWD sudo).
+# Native display tool: `org.cinnamon.Muffin.DisplayConfig.GetCurrentState` over gdbus, which is what
+# vm/live-smoke.d/oracle.py reads here -- Mutter's own interface under Cinnamon's bus name.
+#
+# This is where the two Cinnamon backends are measured, and both of them exist because muffin renamed
+# Mutter rather than reimplementing it:
+#
+#   * displays.  muffin's DisplayConfig carries Mutter's signatures BYTE FOR BYTE (`GetCurrentState` and
+#     `ApplyMonitorsConfig` against wxrandr/mutter.py's own APPLY_SIG, introspected on a live 6.4.13), so
+#     wxrandr/mutter.py's MUFFIN flavour is Mutter's backend with three constants swapped -- measured
+#     against nested muffin, including a real mode change applied and read back.  The saved file is
+#     `~/.config/cinnamon-monitors.xml`, not monitors.xml, and Cinnamon has the same *Keep these display
+#     settings?* dialog, so --persistent has GNOME's 20-second shape [recon2/cinnamon 2.2, 4];
+#   * windows.  `org.Cinnamon.Eval` is an ungated `JSON.stringify(eval(code))` on the session bus (there
+#     is no unsafe-mode gate anywhere in Cinnamon's JS tree), ~9 ms per round trip including a gdbus
+#     spawn, so wdotool/backend_cinnamon.py needs no extension installed at all -- it is KWin's
+#     loadScript story, not GNOME's bridge story [recon2/cinnamon 2.2, 4].
+#
+# BUILT AND RUN ONCE, 2026-09-09 (53.1 min, 1783 packages, two 1920x1080 heads), and what that first run
+# found is the flavor's headline: LightDM autologs in, logind says Type=wayland Service=lightdm-autologin,
+# Cinnamon starts completely (`Cinnamon took 2888 ms to start`, both monitors seen, wayland-0 listening)
+# -- and then Xwayland 24.1.10 dies with `Fatal server error: Caught signal 11 (Segmentation fault)`
+# after `Xwayland glamor: GBM Wayland interfaces not available` / `Failed to initialize glamor, falling
+# back to sw`, muffin calls that fatal (`Connection to xwayland lost`) and exits, and cinnamon-session
+# gives up with `App 'cinnamon-wayland.desktop' respawning too quickly`.  The recon saw the identical
+# crash under `muffin --wayland --nested`, so it is not a nesting artefact; forcing software GL
+# (LIBGL_ALWAYS_SOFTWARE=1, GALLIUM_DRIVER=llvmpipe) changed nothing, and muffin 6.4 has no glamor switch
+# (`strings libmuffin.so.0`: MUTTER_DEBUG_*, XWAYLAND_STFU, _XWAYLAND_ALLOW_COMMITS, and no
+# XWAYLAND_NO_GLAMOR).  With /usr/bin/Xwayland moved aside the session comes up and stays up, and every
+# tool measurement in vm/live-smoke.d/cinnamon-wayland.sh's header was taken there.
+#
+# So the X plane of this flavor is NOT YET, and the route is the rig's own before it is anybody's code: a
+# GL-capable virtio-vga (`virtio-vga-gl`/virgl in vm/vmctl's device line) so that Xwayland's glamor path
+# has a GBM device to bind, and failing that AGENTS.md route 5 -- an Xwayland that does not die on its
+# software fallback.  `xwayland` stays in DESKTOP_PKG below because that is what a Cinnamon user has, and
+# the day the crash is gone this flavor is the one image in the rig that can list an XWayland xterm and a
+# native gnome-terminal side by side, the xterm under the X id get_xwindow() hands over [recon2/cinnamon 8].
+# Multi-head applies, hotplug, --persistent and Mutter's adjacency refusals are still unmeasured: the
+# display backend refuses before it reaches them (wxrandr/cli.py's `cinnamon` arm is not wired to
+# mutter.py's MUFFIN flavour yet), which the smoke's display phase carries as an xwant.
+#
+# `xwayland` is named in DESKTOP_PKG because NOTHING in the Cinnamon stack depends on it: `apt-cache show
+# muffin cinnamon` on 26.04 carries no xwayland in either Depends, and `apt-cache rdepends xwayland`
+# names mutter, kwin-wayland, gnome-session, labwc and hyprland -- not muffin (measured on this box
+# 2026-09-08).  Without it the Wayland session has no X plane at all and the mixed list above cannot
+# exist.  `wl-mirror` is installed for the opposite reason: muffin advertises neither
+# zwlr_screencopy_manager_v1 nor ext_image_copy_capture_manager_v1 among its 23 globals, and with the
+# helper present `wmirror --check` refuses over the COMPOSITOR's missing protocols rather than over a
+# missing helper -- which is the sentence this flavor is here to record [recon2/cinnamon 2.1, 3.2].
+# `wlr-randr` is deliberately absent: there is no zwlr_output_manager_v1 here for it to read.
+#
+# The desktop metapackage is `ubuntucinnamon-desktop` 26.04.4 (universe), the official Ubuntu Cinnamon
+# flavor's own -- `ubuntu-cinnamon-desktop` is not a package name in this archive at all (apt-cache
+# policy, this box, 2026-09-08).  It pulls slick-greeter (hence LightDM), xserver-xorg, nemo and
+# cinnamon-core, whose `gnome-terminal | x-terminal-emulator` first alternative is where the smoke's
+# native Wayland client comes from.  resolute-cinnamon installs the SAME package set: the two flavors
+# differ in LightDM's autologin-session and in nothing else, which is what makes the pair a controlled
+# comparison of one desktop's two session types.
+#
+# 26.04 and not 24.04: noble ships Cinnamon 6.0.4 and muffin 6.0.1.  Upstream Cinnamon 6.8 (Mint 24, end
+# of 2026) drops the "Experimental" from this session and its muffin adds zwp_virtual_keyboard_v1 and
+# wlr-layer-shell -- neither of which 6.4 has, so on this image every keystroke goes through /dev/uinput,
+# exactly as on GNOME and KDE [recon2/cinnamon 1, 2.1].
+#
+# vmctl fills in the two @@...@@ placeholders at build time (root ssh public
+# key; the contents of vm/build-image.sh). The base image lives in $VMIMAGES:
+# vmctl-base: ubuntu-26.04-server-cloudimg-amd64.img
+# vmctl-desktop: cinnamon-wayland
+# vmctl-distro: ubuntu
+# vmctl-ci: push
+hostname: resolute-cinnamon-wayland
+manage_etc_hosts: true
+disable_root: false
+ssh_pwauth: false
+ssh_authorized_keys:
+  - @@ROOT_PUBKEY@@
+users:
+  - name: test
+    uid: 1000
+    gecos: Test User
+    groups: [adm, sudo]
+    shell: /bin/bash
+    lock_passwd: false
+    plain_text_passwd: test
+    sudo: ALL=(ALL) NOPASSWD:ALL
+write_files:
+  # No `owner:` on any entry: write_files runs BEFORE the users module, so
+  # `owner: test:test` aborts the whole module and cloud-init ends in status:
+  # error [recon2/hyprland 6].  build-image.sh chowns under /home/test instead.
+  - path: /etc/ssh/sshd_config.d/60-vmctl.conf
+    content: "PermitRootLogin prohibit-password\n"
+  - path: /etc/modules-load.d/uinput.conf
+    content: "uinput\n"
+  - path: /etc/vmctl-build.env
+    content: |
+      FLAVOR=resolute-cinnamon-wayland
+      DESKTOP=cinnamon-wayland
+      DESKTOP_PKG="ubuntucinnamon-desktop xwayland wl-mirror"
+      EXTRA_PKGS="xdotool wmctrl x11-utils x11-xserver-utils xterm"
+  - path: /usr/local/sbin/vmctl-build
+    permissions: '0755'
+    content: |
+      @@BUILD_SCRIPT@@
+runcmd:
+  - [/usr/local/sbin/vmctl-build]
+power_state:
+  mode: poweroff
+  message: vmctl golden build finished
+  timeout: 120
