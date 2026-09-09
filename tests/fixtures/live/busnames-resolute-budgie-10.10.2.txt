@@ -1,0 +1,69 @@
+# Every well-known name ACQUIRED on user 1000's session bus of the resolute-budgie golden
+# (Ubuntu Budgie 10.10.2 over labwc 0.9.3, budgie-core 10.10.2-1ubuntu4.1), read with
+# `busctl --user list --no-pager --acquired` in the guest on 2026-09-09.  Activatable names
+# are NOT here: a name nobody owns yet is not on the bus, and ListNames does not return one.
+#
+# The row this file exists for is org.gnome.Shell, whose owner on this desktop is
+# budgie-power-dialog (pid 2697, connection :1.85) -- and there is no org.gnome.Mutter.*
+# name anywhere in the list.  wdotool/backend_detect.py used to read the first of those as
+# "this is GNOME"; the second is what says it is not.
+ca.desrt.dconf
+io.elementary.desktop.AppLauncherService
+org.UbuntuBudgie.ExtrasDaemon
+org.a11y.Bus
+org.ayatana.indicator.application
+org.bluez.obex
+org.buddiesofbudgie.BudgieScreenlock
+org.buddiesofbudgie.BudgieScreenshot
+org.buddiesofbudgie.BudgieScreenshotControl
+org.buddiesofbudgie.PowerDialog
+org.buddiesofbudgie.Sendto
+org.buddiesofbudgie.Services
+org.buddiesofbudgie.XDGDirTracker
+org.buddiesofbudgie.budgie-desktop-view
+org.budgie_desktop.BudgieOSD
+org.budgie_desktop.Notifications
+org.budgie_desktop.Panel
+org.budgie_desktop.Raven
+org.budgie_desktop.Session.EndSessionDialog
+org.freedesktop.DBus
+org.freedesktop.GeoClue2.DemoAgent
+org.freedesktop.Notifications
+org.freedesktop.impl.portal.PermissionStore
+org.freedesktop.impl.portal.desktop.gtk
+org.freedesktop.impl.portal.desktop.wlr
+org.freedesktop.network-manager-applet
+org.freedesktop.portal.Desktop
+org.freedesktop.portal.Documents
+org.freedesktop.systemd1
+org.gnome.Disks.NotificationMonitor
+org.gnome.Evolution-alarm-notify
+org.gnome.Identity
+org.gnome.OnlineAccounts
+org.gnome.ScreenSaver
+org.gnome.SessionManager
+org.gnome.SettingsDaemon.A11ySettings
+org.gnome.SettingsDaemon.Datetime
+org.gnome.SettingsDaemon.Housekeeping
+org.gnome.SettingsDaemon.Power
+org.gnome.SettingsDaemon.PrintNotifications
+org.gnome.SettingsDaemon.Rfkill
+org.gnome.SettingsDaemon.Sharing
+org.gnome.SettingsDaemon.Smartcard
+org.gnome.SettingsDaemon.Sound
+org.gnome.SettingsDaemon.UsbProtection
+org.gnome.SettingsDaemon.Wwan
+org.gnome.Shell
+org.gnome.evolution.dataserver.AddressBook10
+org.gnome.evolution.dataserver.Calendar8
+org.gnome.evolution.dataserver.Sources5
+org.gtk.vfs.AfcVolumeMonitor
+org.gtk.vfs.Daemon
+org.gtk.vfs.GPhoto2VolumeMonitor
+org.gtk.vfs.GoaVolumeMonitor
+org.gtk.vfs.MTPVolumeMonitor
+org.gtk.vfs.Metadata
+org.gtk.vfs.UDisks2VolumeMonitor
+org.kde.StatusNotifierWatcher
+org.pipewire.Telephony
+org.pulseaudio.Server

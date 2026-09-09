@@ -778,21 +778,80 @@ class WlrOutputs:
 
     def apply(self, state: "State", targets: list, persistent: bool = False) -> list:
         """Single atomic zwlr_output_configuration apply (positions resolved against predicted logical sizes —
-        same math wlroots uses), then the fresh snapshot. `persistent` is accepted for contract parity and
-        ignored: wlroots stores no layout of its own."""
+        same math wlroots uses), then the fresh snapshot, then — when the snapshot disagrees with the layout
+        that was just accepted — the same configuration once more. `persistent` is accepted for contract
+        parity and ignored: wlroots stores no layout of its own.
+
+        The second apply is labwc's, and it is measured rather than defensive.  On resolute-labwc (labwc
+        0.9.3 / wlroots 0.19.2, three 1920x1080 heads, 2026-09-09) the first configuration of a session that
+        re-enables a head into a position another head already occupies — which is what `--output X --off`
+        followed by `--output X --auto` asks for, because xrandr brings an output back at 0,0 and X is the
+        oracle — is answered `succeeded` and then IGNORED: labwc lays the three heads out itself, and from
+        then on every configuration comes back with one head somewhere labwc chose.  Measured, per step,
+        asked -> read back:
+
+            --off              V-1 0,0   V-2 1920,0                            landed
+            --auto             V-1 0,0   V-2 1920,0   V-3 0,0     -> V-3 0,0   V-1 1920,0  V-2 3840,0
+            --right-of V-2     V-1 0,0   V-2 1920,0   V-3 3840,0  -> V-1 0,0   V-3 3840,0  V-2 5760,0
+            --below V-2        V-1 0,0   V-2 5760,0   V-3 5760,1080 -> V-2 7680,1080
+            --right-of V-2     V-1 0,0   V-2 7680,1080 V-3 9600,1080 -> V-2 11520,1080
+
+        the stray head landing immediately to the right of the last one labwc did place.  `wlr-randr` 0.4.1,
+        the reference client, produces the identical layout from the identical starting state, so this is not
+        our wire: the same three set_position requests were read off ours (probe of WlrOutputs.send in the
+        guest) and they were the ones the layout was asked for.  Re-sending that same configuration lands it
+        exactly, on the first retry, every time it was tried.  So the cost of the fix is one extra apply on a
+        compositor that has re-arranged, and nothing at all on one that has not: labwc 0.9.3 is the only
+        compositor measured on THIS path that reaches the second send — sway 1.11 forced onto the wlr
+        backend does not (tests/test_wxrandr_live.py test_41/test_42, and the one-apply counts the fake
+        compositor keeps in tests/test_wxrandr_hostile.py).  Hyprland is not on this path at all: detection
+        sends it to `wxrandr/hypr.py`, whose `_verify_applied` is this read-back's analogue there.  A
+        compositor that ignores the retry too gets the numbers in a sentence instead of a layout nobody
+        asked for.
+        """
         dims = {}
         for t in targets:
             if t.enabled:
                 dims[t.name] = predicted_dims(t, state, wire="fixed")
         pos = resolve_positions(targets, dims)
-        self.send({t.name: t for t in targets}, pos)
-        # re-read the heads for the post-apply query.  A compositor that accepted the configuration and then
-        # stopped answering gets a sentence rather than the socket's own `timed out`.
+        plan = {t.name: t for t in targets}
+        self.send(plan, pos)
+        fresh = self._reread(state)
+        stray = _stray_head(pos, fresh)
+        if stray is None:
+            return fresh
+        self.send(plan, pos)
+        fresh = self._reread(state)
+        stray = _stray_head(pos, fresh)
+        if stray is None:
+            return fresh
+        name, want, got = stray
+        raise Fatal("the compositor accepted the position %d,%d for %s twice and put it at %d,%d "
+                    "both times\n" % (want[0], want[1], name, got[0], got[1]))
+
+    def _reread(self, state: "State | None"):
+        """The post-apply snapshot. A compositor that accepted the configuration and then stopped answering
+        gets a sentence rather than the socket's own `timed out`."""
         try:
             self.conn.roundtrip()
             return snapshot_wlr(self, state)
         except OSError:
             raise Fatal("the compositor applied the output configuration " "and then stopped responding\n")
+
+
+def _stray_head(pos: dict, fresh: list) -> tuple | None:
+    """The first enabled output in `fresh` that is not where `pos` put it, as (name, asked, read-back).
+
+    Snapshot order, not dict order, so the sentence a caller builds from this names the same output on every
+    run.  A head the compositor turned off is not a stray: `--off` is checked by the caller's own targets and
+    an output that vanished has no position to disagree about."""
+    for o in fresh:
+        if not o.active:
+            continue
+        want = pos.get(o.name)
+        if want is not None and (o.x, o.y) != (want[0], want[1]):
+            return (o.name, (want[0], want[1]), (o.x, o.y))
+    return None
 
 
 def _hypr_clause() -> str:

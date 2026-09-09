@@ -855,9 +855,36 @@ window_manager=labwc
 compositor=labwc
 EOF
     chown -R test:test "$TESTHOME/.config/lxqt"
+    lxqt_wayland_desktops
     wlr_layout
     autostart_wlr_layout          # NOT labwc_config: see the comment on it
     hide_autostart xscreensaver lxqt-powermanagement lubuntu-update-notifier
+}
+# Three workspaces for the LXQt Wayland session, written into LXQt's OWN labwc rc.xml.
+#
+# Not labwc_config's file and not a copy of it.  Measured on the resolute-lxqt-wayland golden
+# 2026-09-09: `startlxqtwayland` copies /usr/share/lxqt/wayland/labwc to $XDG_CONFIG_HOME/labwc
+# only when that directory does not exist yet, and then runs
+# `labwc -C $XDG_CONFIG_HOME/labwc -S lxqt-session` -- so the config dir IS ~/.config/labwc, but
+# pre-creating it at build time would stop LXQt's menu.xml, themerc and environment from ever
+# being installed and would leave a desktop that is not Lubuntu's.  Patching the system copy
+# gets the session the workspaces AND everything else LXQt ships.
+#
+# lxqt-wayland-session's rc.xml declares exactly one, `<name>Default</name>` at six spaces of
+# indent; the four-name example above it in the same file is inside an XML comment and is
+# indented eight, which is why the anchor is the whole line and not the tag.  With one desktop
+# `wwmctl -d` printed one row on the first run of this flavor (CI 34308982263) and
+# vm/live-smoke.d/labwc.sh reads that as the ext_workspace reader having nothing to read.
+lxqt_wayland_desktops() {
+    local rc=$VMCTL_ROOT/usr/share/lxqt/wayland/labwc/rc.xml
+    [ -f "$rc" ] || fail "no $rc (lxqt-wayland-session): nothing to give three workspaces to"
+    grep -q '^      <name>Default</name>$' "$rc" || \
+        fail "$rc no longer has the one-line <name>Default</name> this patches"
+    local two='      <name>Workspace 2</name>\n      <name>Workspace 3</name>'
+    sed -i "s|^      <name>Default</name>\$|      <name>Default</name>\n$two|" "$rc"
+    written "$rc"
+    say "LXQt on Wayland: three workspaces in $rc (shipped: one), so ext_workspace_manager_v1 has \
+something to report"
 }
 desktop_lxqt() {
     # Measured on a real Lubuntu session: without window_manager=openbox lxqt-session

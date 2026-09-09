@@ -59,7 +59,7 @@
 # size below is compared with a tolerance), and the adjacency validator strings are in
 # libmuffin.so.0.0.0 with nothing having made muffin print one yet [recon2/cinnamon 2.2, 4].
 
-SMOKE_PHASES="busrec install windows wm input display persistent root nodialog"
+SMOKE_PHASES="xwayland busrec install windows wm input display persistent root nodialog"
 
 # gnome-terminal is the terminal cinnamon-core's `gnome-terminal | x-terminal-emulator` first
 # alternative puts on the image, and it is the smoke's NATIVE Wayland client.  The pattern is a regex
@@ -84,6 +84,71 @@ cmx_sum() { guest "md5sum $CMX 2>/dev/null | cut -d' ' -f1" | tr -d ' \r\n'; }
 
 #: The X client the mixed-list check needs; started by phase_wm and killed there.
 XTERM_TITLE=smokex
+
+# Is Cinnamon's own shell answering on the session bus?  `(true, '"2"')` when it is; the bus itself is
+# systemd's and is up either way, so a dead compositor answers ServiceUnknown and never the word `true`.
+# This is the same question wdotool's detection asks (`org.Cinnamon` in ListNames) and the reason it is
+# the gate below: with muffin gone the socket at /run/user/1000/wayland-0 is still THERE and refuses
+# connections, so every tool in the run reports something true about a corpse.
+cin_alive() { guest "gdbus call --session --dest org.Cinnamon --object-path /org/Cinnamon \
+                     --method org.Cinnamon.Eval 'String(1+1)' 2>&1"; }
+
+# The rig gate, and the first phase for that reason: without it nothing below this line is a measurement
+# of ours.  Twice in CI (runs 34308982263 and 34319854037, `--deb --remove --heads 3`) this flavor ended
+# 19/9 and 19/10 with ONE cause -- Xwayland 24.1.10 segfaults as muffin brings it up, muffin treats that
+# as fatal and exits, and cinnamon-session gives up; `vmctl session` still logs an active logind session
+# (cinnamon-session keeps respawning) and every check downstream then reads a compositor that is not
+# there: `wdotool` said `no Wayland session found`, `wxrandr --print-backend` fell through to `wlr` with
+# `cannot connect to the compositor`, and `wmirror --check` said `[Errno 111] Connection refused` against
+# the socket file muffin left behind.  The header records the same crash from this flavor's first run.
+#
+# So the phase asks the question first and says which world the rest of the run is in.  With Xwayland
+# moved aside the session comes up and stays up -- that is where every byte in the header's table was
+# measured -- and the X plane is missing, which the checks that need it already carry as xwants naming
+# their route.  Moving the binary is the rig's own lowest rung and not a route on AGENTS.md's ladder at
+# all: nothing of ours is being worked around here, and the day the rig has a render node the xwant below
+# goes XPASS and the move stops happening.
+#
+# What the recording under tests/fixtures/live/ carries is the --reuse branch only -- `test -x
+# /usr/bin/Xwayland` -> no, then the `want` on the bus -- because capture-from-run ran against the
+# instance this phase had already fixed.  The crash branch (the survival xwant, the mv, the reboot)
+# is the live run's alone and cannot be replayed at all, for the reason no recording carries
+# `install`: a reboot is not a guest command with an answer.  It was measured on 2026-09-09 and the
+# run log of that measurement is what the report cites.
+phase_xwayland() {
+    local alive present
+    alive=$(await 30 'true' "gdbus call --session --dest org.Cinnamon --object-path /org/Cinnamon \
+                             --method org.Cinnamon.Eval 'String(1+1)' 2>&1" || true)
+    # Whether the binary is still there decides which claim this phase can make.  On a --reuse run of an
+    # instance this phase has already moved it aside, "the session is up" says nothing about Xwayland and
+    # the xwant below would XPASS on the wrong evidence; so that case is a plain `want` on the session and
+    # a note saying why the other line is not being asked.
+    present=$(root 'test -x /usr/bin/Xwayland && echo yes || echo no' | tr -d ' \r\n' || true)
+    if [ "$present" = no ]; then
+        note "/usr/bin/Xwayland is already aside in this instance (an earlier run of this phase moved it)"
+        want "Cinnamon answers on the session bus with Xwayland moved aside" "true" "$alive"
+        return 0
+    fi
+    xwant "the session survives with Xwayland installed (until this rig has a render node: virtio-vga-gl \
+with -display dbus,gl=on, which this host refuses with 'egl: no drm render node available' and no /dev/dri; \
+else AGENTS.md route 5, an Xwayland that does not die on the software path)" \
+          "true" "$alive"
+    if printf '%s\n' "$alive" | grep -q true; then
+        note "org.Cinnamon answers: $(ev "$alive") -- nothing was moved aside"
+        return 0
+    fi
+    note "muffin's last words: $(ev "$(root "journalctl -b --no-pager | grep -iE \
+         'Fatal server error|Caught signal|Connection to xwayland lost|respawning too quickly'" \
+         | tail -3 || true)")"
+    root "test -x /usr/bin/Xwayland && mv /usr/bin/Xwayland /usr/bin/Xwayland.moved-aside; true" >/dev/null
+    step "Xwayland moved aside; rebooting into a session that can hold a compositor"
+    root "( sleep 1; reboot ) >/dev/null 2>&1 &" >/dev/null 2>&1 || true
+    sleep 8
+    wait_session >/dev/null || { fail "no session after the Xwayland reboot"; return 1; }
+    after_reboot
+    want "with /usr/bin/Xwayland moved aside Cinnamon answers on the session bus" "true" "$(cin_alive)"
+    note "cinnamon's own processes now: $(ev "$(root 'ps -o comm= -u test | sort -u' | tr '\n' ' ' || true)")"
+}
 
 # No text editor on this golden: the "editor" is gnome-terminal running `cat >>`, which is sway.sh's
 # helper and for sway.sh's reason -- `cat >` keeps its offset across editor_clear's truncation and the
@@ -377,8 +442,9 @@ phase_display() {
     # `Logical monitors overlap` and `Logical monitor scales must be identical` are all in
     # libmuffin.so.0.0.0 -- but the recon had no KMS, so no muffin has ever been made to print one.
     out=$(guest "wxrandr --output $second --pos 4000x0 2>&1") || true
-    xwant "a gap is refused in Muffin's own words (until a multi-head Cinnamon has been run once)" \
-          "not adjacent" "$out"
+    # It has been run now, on three heads: Muffin really does raise Mutter's own string.  This was an
+    # xwant waiting for exactly that run.
+    want "a gap is refused in Muffin's own words" "not adjacent" "$out"
     guest "wxrandr --output $second --right-of $first" >/dev/null || true
 }
 
@@ -406,7 +472,13 @@ phase_persistent() {
     before=$(cmx_sum)
     note "cinnamon-monitors.xml before: ${before:-absent}"
     out=$(guest "wxrandr --output $second --below $first --persistent 2>&1") || st=$?
-    want "--persistent prints the Keep-changes warning" 'Keep changes\?' "$out"
+    # Cinnamon's own sentence and not GNOME's: wxrandr/mutter.py:112 gives the MUFFIN flavour
+    # `keep_dialog="Keep these display settings?"`, quoted off usr/share/cinnamon/js/ui/windowManager.js,
+    # where GNOME's is `Keep changes?`.  This line was gnome.sh's regex and it failed on the right answer
+    # -- measured on the live session, 2026-09-09: `xrandr: Cinnamon will ask "Keep these display
+    # settings?" for 20 s; confirm the dialog or the layout reverts`.
+    want "--persistent prints the Keep-changes warning in Cinnamon's own words" \
+         'Keep these display settings\?' "$out"
     now=$(cmx_sum)
     same "nothing is written before the dialog is answered" "${before:-absent}" "${now:-absent}"
     sleep 25
@@ -417,11 +489,11 @@ phase_persistent() {
     note "answering the dialog through Eval: $(ev "$keep")"
     sleep 3
     after=$(cmx_sum)
-    # The label's event, spelled out here because it does not fit on the xwant line: nobody has yet run
-    # `complete_display_change(true)` against a live Cinnamon Keep-changes dialog, so whether that is the
-    # Eval spelling of the button is unmeasured -- and until it is, a written file cannot be claimed.
-    xwant "keeping the change writes cinnamon-monitors.xml (until a live Keep-changes dialog is answered)" \
-          "^[0-9a-f]{32}$" "$after"
+    # Measured, 2026-09-09, on a three-head session: `global.window_manager.complete_display_change(true)`
+    # answers `(true, '"undefined"')` -- the JS function returns nothing -- and cinnamon-monitors.xml,
+    # which was `absent` before the apply, is written.  So that IS the Eval spelling of the dialog's Keep
+    # button, and the line is a `want`.
+    want "keeping the change writes cinnamon-monitors.xml" "^[0-9a-f]{32}$" "$after"
     same "whatever the dialog did, monitors.xml is not the file this desktop writes" "absent" \
          "$(guest 'test -f $HOME/.config/monitors.xml && echo present || echo absent' | tr -d ' \r\n' || true)"
     guest "wxrandr --output $second --right-of $first" >/dev/null || true

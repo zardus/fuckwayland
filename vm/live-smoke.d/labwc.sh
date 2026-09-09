@@ -180,6 +180,18 @@ $(guest 'wdotool getmouselocation' || true)"
     local st=0
     guestq "wdotool mousemove 300 300 click 1" || st=$?
     ok "mousemove 300 300 click 1" "$st"
+    # ...and then put the desktop back, because that click LANDED and labwc did what its own
+    # rc.xml says: a press of button 1 on the Root context is `ShowMenu root-menu`, and with
+    # 300,300 on the wallpaper of Virtual-1 the menu (Terminal / Reconfigure / Exit) opens
+    # there and takes the keyboard grab.  Every keystroke after it goes to the menu, which is
+    # why phase_input read an empty $SMOKE_FILE three times in CI run 34308982263 on this
+    # flavor and only on this flavor -- Budgie, Xfce and LXQt put a desktop window under that
+    # pixel, so the click never reaches labwc's Root.  Measured on the rig 2026-09-09: the
+    # menu is in the head-0 screendump after the click, `wdotool type -- 'us: yz@'` leaves the
+    # file empty, and one Escape followed by the same type lands it byte-exact.
+    guest "wdotool key Escape" >/dev/null 2>&1 || true
+    sleep 0.5
+    guest "wdotool windowactivate --sync $WIN" >/dev/null 2>&1 || true
 }
 
 # ---------------------------------------------------------------- the window manager

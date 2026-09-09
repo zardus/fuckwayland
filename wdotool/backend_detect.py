@@ -38,6 +38,29 @@ KWIN_NAME = "org.kde.KWin"
 GNOME_NAME = "org.gnome.Shell"
 CINNAMON_NAME = "org.Cinnamon"
 
+#: The two names that, beside org.gnome.Shell, say the session really is GNOME.
+#:
+#: `org.gnome.Shell` is not proof of GNOME Shell.  On Ubuntu Budgie 10.10.2 (resolute-budgie golden,
+#: measured with `busctl --user list` on 2026-09-09, recorded verbatim in
+#: tests/fixtures/live/busnames-resolute-budgie-10.10.2.txt) it is owned by `budgie-power-dialog`, and the
+#: session it belongs to is labwc: no org.gnome.Mutter.* name anywhere on that bus, and the compositor
+#: advertises zwlr_foreign_toplevel_manager_v1.  Detection took that name for GNOME and every window command
+#: on the flavor answered with the bridge's install hint instead of a window list ("the fuckwayland bridge
+#: extension is installed in ... but the running GNOME Shell has not loaded it", CI run 34308982263).
+#:
+#: This CORRECTS recon2/budgie.md, whose §2 says a Budgie session owns no `org.gnome.Shell` and whose §6
+#: plans the hermetic detection test on that premise: that reading was taken before budgie-power-dialog
+#: had claimed the name, and the golden's bus says otherwise.  Read the fixture, not the recon, for what
+#: this session owns.
+#:
+#: Two names settle it and they are both a positive test rather than a blocklist of desktops.  Mutter's
+#: DisplayConfig is gnome-shell's own, claimed by the same process, and it is what wxrandr's mutter backend
+#: drives (`* mutter available org.gnome.Mutter.DisplayConfig on the session bus`, recorded in
+#: tests/fixtures/live/noble-gnome-46.0-capture.txt); our bridge's name can only be owned by an extension
+#: running INSIDE gnome-shell, so it is the honest answer to "is our own code in there".
+MUTTER_NAME = "org.gnome.Mutter.DisplayConfig"
+BRIDGE_NAME = "org.fuckwayland.Bridge"
+
 #: the toplevel protocols the registry step chooses between
 WLR_TOPLEVEL = "zwlr_foreign_toplevel_manager_v1"
 EXT_TOPLEVEL = "ext_foreign_toplevel_list_v1"
@@ -218,6 +241,28 @@ def session_conn():
     return _registry_conn
 
 
+def _toplevel_family(reg: dict) -> str | None:
+    """Which foreign-toplevel family a registry offers: `"wlr"`, `"cosmic"`, or None for neither.
+
+    ONE copy of that rule, read by `detect()`'s last two arms and by `_has_toplevel()` above them, so the
+    GNOME arm's reading of the registry cannot drift away from the arm that actually picks the backend.  A
+    compositor with both families is `wlr`, the older and better-tested path (module docstring, COSMIC)."""
+    if WLR_TOPLEVEL in reg:
+        return "wlr"
+    if EXT_TOPLEVEL in reg and COSMIC_TOPLEVEL in reg:
+        return "cosmic"
+    return None
+
+
+def _has_toplevel() -> bool:
+    """Does this session's compositor publish a foreign-toplevel protocol of either flavour?
+
+    The same question `detect()`'s last two arms ask -- through the same `_toplevel_family` they ask it
+    with -- one step earlier, and off the same cached registry, so asking it twice costs one round trip and
+    not two."""
+    return _toplevel_family(session_registry() or {}) is not None
+
+
 def detect():
     forced = os.environ.get("WDOTOOL_BACKEND")
     if forced:
@@ -240,9 +285,16 @@ def detect():
         # Not swallowed either (see the module docstring): KWin offers no
         # foreign-toplevel protocol, so nothing below this could work here.
         return _kwin()
-    if GNOME_NAME in names:
-        # Not swallowed: the GNOME error carries the bridge install hint and
-        # nothing below it can work under Mutter.
+    if GNOME_NAME in names and (BRIDGE_NAME in names or MUTTER_NAME in names or not _has_toplevel()):
+        # `org.gnome.Shell` alone is not proof of GNOME Shell (see MUTTER_NAME above: on Budgie 10.10.2 it
+        # is budgie-power-dialog that owns it).  With one of GNOME's OWN two names beside it this is GNOME,
+        # and the arm is never swallowed -- the GNOME error carries the bridge install hint and nothing
+        # below it can work under Mutter.  With neither, the registry decides, and the module docstring's
+        # own reason for not swallowing is what decides it: Mutter publishes no foreign-toplevel protocol
+        # of either flavour, so a session that publishes one is not Mutter and the wlr/COSMIC arm below is
+        # the honest answer.  A session that publishes neither still falls in here, where the bridge hint
+        # is the most useful sentence there is.  The extra round trip is paid on that one shape of session
+        # and never on GNOME, which always has DisplayConfig.
         return _gnome()
     if CINNAMON_NAME in names:
         # Not swallowed: Muffin advertises no foreign-toplevel protocol of
@@ -260,13 +312,13 @@ def detect():
             # was for [requests-batch-1.md, from batch 6].
             if getattr(e, "api_gate", False):
                 raise
-    reg = session_registry() or {}
+    fam = _toplevel_family(session_registry() or {})
     # No swallow on these two arms, unlike the socket arms above: the registry we just read IS the evidence
     # that the protocol is there, so whatever the backend says on the way up is a better answer than the
     # sentence below, which would claim the compositor offers neither family and be wrong.
-    if WLR_TOPLEVEL in reg:
+    if fam == "wlr":
         return _wlr()
-    if EXT_TOPLEVEL in reg and COSMIC_TOPLEVEL in reg:
+    if fam == "cosmic":
         return _cosmic()
     bus_note = ("no session D-Bus reachable" if session_names() is None
                 else "no KWin, GNOME Shell or Cinnamon on the session D-Bus")

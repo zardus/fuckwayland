@@ -12,6 +12,7 @@ handover is `tests/test_passthrough_exec.py`.
 """
 
 import ast
+import collections
 import errno
 import contextlib
 import gc
@@ -915,6 +916,36 @@ class EnvRepair(Base):
         # stubbed out here rather than left to the machine the tests run on)
         with mock.patch("fwcommon.session.find_xauthority", lambda *a, **k: None):
             self.assertIsNone(passthrough.find_xauthority({}, 126))
+
+    def test_gdms_cookie_one_directory_down_beats_a_stale_home_one(self):
+        """GDM keeps an X11 session's cookie at `<runtime dir>/gdm/Xauthority`, one directory below the two
+        names this scan had. Without it the scan found nothing in the runtime dir and answered `~/.Xauthority`
+        -- a file that exists on any box that has ever run an X server of its own and that authorises nothing
+        on this one, and which is *ahead* of the `session.find_xauthority()` fallback that does glob GDM's
+        name. noble-gnome-x11's seated session really does carry XAUTHORITY=/run/user/1000/gdm/Xauthority
+        [M this rig, 2026-09-09]."""
+        rd = self.runtime_dir()
+        home = self.mkdir("home")
+        stale = self.touch(os.path.join(home, ".Xauthority"), "old")
+        os.utime(stale, (1.0, 1.0))
+        cookie = self.touch(os.path.join(rd, "gdm", "Xauthority"), "live")
+        pw = collections.namedtuple("pw", "pw_dir")(home)
+        with mock.patch("pwd.getpwuid", lambda u: pw):
+            self.assertEqual(passthrough.find_xauthority({}, self.uid), cookie)
+
+    def test_the_newest_of_the_three_runtime_dir_cookies_wins(self):
+        """The three names are one mtime comparison and not a priority list: a session that has been through
+        both a Wayland and an X11 login leaves more than one behind, and the live one is the newest. This is
+        the claim the arm added for GDM must not have broken -- an appended glob that skipped the comparison
+        would make gdm/Xauthority win even when it is the older file."""
+        rd = self.runtime_dir()
+        old = self.touch(os.path.join(rd, "gdm", "Xauthority"), "old")
+        os.utime(old, (1.0, 1.0))
+        new = self.touch(os.path.join(rd, ".mutter-Xwaylandauth.ABC123"), "new")
+        os.utime(new, (2.0, 2.0))
+        self.assertEqual(passthrough.find_xauthority({}, self.uid), new)
+        os.utime(old, (3.0, 3.0))
+        self.assertEqual(passthrough.find_xauthority({}, self.uid), old)
 
     def test_dead_xauthority_is_dropped_not_forwarded(self):
         """A stale `$XAUTHORITY` we cannot better is worse than none: left in

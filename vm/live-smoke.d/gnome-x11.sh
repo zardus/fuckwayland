@@ -10,13 +10,14 @@
 #
 # Four phases only this flavor can run:
 #
-#   * `bridge`.  GNOME-on-Xorg is the GNOME where the bridge needs no logout: `gnome-shell --replace`
-#     hands the WM role to a second shell over the same X server and the extension comes back with it.
-#     On Wayland gnome-shell IS the display server, so --replace ends the session; a reload with no
-#     logout is NOT YET done there -- the route is code installed into the compositor (AGENTS.md route
-#     3: the bridge re-exec'ing the shell's extension from inside it) and, failing that, a patched
-#     gnome-shell (route 6).  gnome/install-bridge.sh's failure text asks for a logout today; nothing
-#     has ever run the X11 move.
+#   * `bridge`.  The bridge, taken out of the running shell and put back with nobody logged out, and
+#     the tools still handing over the whole time.  What the first two live runs of this flavor found is
+#     that `gnome-shell --replace` -- the move this phase was written around -- is not that: Ubuntu
+#     24.04 runs the shell as `org.gnome.Shell@x11.service` (Restart=always, RestartSec=0ms,
+#     RefuseManualStart/Stop=on) and `--replace` walks it into its own start limit, whose OnFailure sets
+#     `org.gnome.shell disable-user-extensions true` -- persistently, for that user, in every session
+#     after it.  phase_bridge's own comment carries the whole measurement; the move it makes now is
+#     `gnome-extensions disable`/`enable` in the running shell, watched on the bus.
 #   * `display`.  Two oracles that must agree: real xrandr, and org.gnome.Mutter.DisplayConfig, which
 #     mutter 46 serves from MetaMonitorManagerXrandr on this very session (`strings` of libmutter-14:
 #     MetaBackendX11Cm and meta-monitor-manager-xrandr.c are both in it, and both are gone from
@@ -32,14 +33,25 @@
 #
 # The editor is gnome-text-editor, which ubuntu-desktop puts on the image, so this flavor's package set
 # stays byte-identical to noble-gnome's -- the pair is a controlled experiment and one extra package
-# would be one uncontrolled variable.  WM_CLASS is org.gnome.TextEditor here exactly as it is under
-# Wayland, so EDITOR_CLASS is TextEditor and not gnome-text-editor.
+# would be one uncontrolled variable.  Its WM_CLASS is NOT the same on the two halves of that pair, and
+# that is the one thing the twin cannot tell you: under Wayland gnome-text-editor carries its desktop-file
+# id (`org.gnome.TextEditor`, gnome.sh's EDITOR_CLASS), while the SAME binary on this Xorg session is a
+# plain X client and carries the X11 pair -- measured on the live session, 2026-09-09:
+#
+#     wmctrl -l -x  ->  0x00a00004  0 gnome-text-editor.gnome-text-editor  ... fw-smoke.txt (~/) - Text Editor
+#
+# so `search --class TextEditor` (an extended regex, handed to the REAL xdotool here) matches nothing --
+# `TextEditor` has no hyphen in it -- and both checks that look for the editor failed with an empty
+# answer in CI runs 34308982263 and 34319854037.  EDITOR_CLASS is the ONE spelling that session carries,
+# with no alternation in it: common.sh:343 (phase_windows, which `--phases windows` can select on any
+# flavor) interpolates EDITOR_CLASS into a guest command unquoted, and a `|` there is a pipe in the
+# guest's shell into a command named TextEditor.  The window title is matched separately, by editor_xid.
 #
 # shellcheck source=live-smoke.d/xfce.sh
 . "$STEPS/xfce.sh"
 
 SMOKE_PHASES="install passthrough bridge display root uinput"
-EDITOR_CLASS=TextEditor
+EDITOR_CLASS=gnome-text-editor
 BRIDGE_UUID=fuckwayland-bridge@fuckwayland
 BR='--session -d org.fuckwayland.Bridge -o /org/fuckwayland/Bridge -m org.fuckwayland.Bridge1'
 
@@ -50,56 +62,137 @@ editor_start() {
 }
 editor_save() { guest "wdotool key ctrl+s" >/dev/null || true; }
 
+# gnome.sh's install_extra, and for its reason: the phase below is about the BRIDGE, and in the default
+# (working-tree) mode the tree's zipapps land in /usr/local/bin while the extension stays whatever the
+# package put under /usr/share/gnome-shell/extensions -- so without this the one phase that only this
+# flavor can run would be measuring the shipped 0.4.0 extension.js against a tree of tools.  It is
+# gnome.sh's body verbatim; this flavor sources xfce.sh (the handover), which has no such hook.  The
+# driver calls it only in tree mode, before the reboot that makes gnome-shell rescan the directory.
+install_extra() {
+    "$VM" scp "$NAME" "$REPO/gnome/$BRIDGE_UUID/extension.js"                "$NAME:/tmp/b-extension.js" >/dev/null
+    "$VM" scp "$NAME" "$REPO/gnome/$BRIDGE_UUID/metadata.json"               "$NAME:/tmp/b-metadata.json" >/dev/null
+    "$VM" scp "$NAME" "$REPO/gnome/$BRIDGE_UUID/org.fuckwayland.Bridge1.xml" "$NAME:/tmp/b-iface.xml" >/dev/null
+    root "d=/usr/share/gnome-shell/extensions/$BRIDGE_UUID; mkdir -p \$d;
+          install -m 644 /tmp/b-extension.js \$d/extension.js;
+          install -m 644 /tmp/b-metadata.json \$d/metadata.json;
+          install -m 644 /tmp/b-iface.xml \$d/org.fuckwayland.Bridge1.xml; true" >/dev/null
+    pass "the tree's $BRIDGE_UUID is installed over the package's copy"
+}
+
 # The editor window's X id, as the REAL wmctrl prints it: the anchor several phases need and the one
 # number both planes agree on.
 editor_xid() {
     guest "wmctrl -l -x | awk '/TextEditor|Text Editor/ { print \$1; exit }'" | tr -d ' \r\n'
 }
 
-# The bridge, reloaded into a running shell.  A reload elsewhere costs a logout; here it does not, and
-# that is the claim -- plus the one that matters more: the four tools go on handing over while the bridge
-# holds its name, because the session type decided that before any bus name was read.
+# `NameHasOwner org.fuckwayland.Bridge` -- `(true,)` or `(false,)`, the bus's own answer to "is the
+# extension's code running in there right now".  It is the only honest oracle for the off/on move below:
+# `gnome-extensions info` reports what the shell's ExtensionManager thinks, and the name is what every
+# tool of ours actually needs.
+#
+# <regex> is what the caller is waiting FOR, and there is no version of this without one.  A shell that
+# has been told to disable an extension releases the name when it gets to it: on this rig that was about
+# three seconds after the disable and about four after the enable, and a fixed `sleep` cut to those two
+# numbers is a check that measures a KVM runner's load average instead of the bridge -- exactly the kind
+# of red this phase's rewrite was for.  await polls for thirty seconds and returns the moment the bus
+# agrees, so the `same` below stays byte-equal and the timing drops out of it.
+bridge_owned() {
+    await 30 "${1:-.}" "gdbus call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus \
+           --method org.freedesktop.DBus.NameHasOwner org.fuckwayland.Bridge 2>&1" | tr -d ' \r\n'
+}
+
+# The bridge, taken out of a running shell and put back, with nobody logged out -- plus the one that
+# matters more: the four tools go on handing over while the bridge holds its name, because the session
+# type decided that before any bus name was read.
+#
+# This phase used to make that claim with `gnome-shell --replace`, and the first two live runs of the
+# flavor (CI 34308982263 and 34319854037) say what that does on Ubuntu 24.04's GNOME 46, which runs the
+# shell as a systemd user unit.  Measured by hand on this rig, 2026-09-09:
+#
+#   * /usr/lib/systemd/user/org.gnome.Shell@x11.service is `Restart=always`, `RestartSec=0ms`,
+#     `RefuseManualStart=on`, `RefuseManualStop=on`, `OnFailure=org.gnome.Shell-disable-extensions.service
+#     gnome-session-failed.target`.
+#   * `gnome-shell --replace` therefore does not hand the WM role anywhere: the unit's shell exits, systemd
+#     restarts it instantly, the hand-started one still holds the selection, and after four rounds the unit
+#     goes `failed (Result: protocol)` -- `Start request repeated too quickly` -- and fires OnFailure.
+#   * OnFailure is `ExecStart=gsettings set org.gnome.shell disable-user-extensions true`, a PERSISTENT
+#     dconf key, plus the three `gnome-session-failed` windows both CI logs show in `wmctrl -l -x`.
+#   * From then on that user has no extensions in any session: the bridge reads `Enabled: No / State:
+#     INITIALIZED`, `org.fuckwayland.Bridge` is unowned, and our own backend says (correctly) "installed
+#     but not enabled (state 2)".  It does not come back on a reboot, or on `gnome-extensions enable`, or
+#     on deleting /run/user/1000/gnome-shell-disable-extensions -- all three tried.  One thing recovers it,
+#     live and with no logout: `gsettings set org.gnome.shell disable-user-extensions false`, after which
+#     the shell loads the extension and takes the name inside four seconds.
+#
+# So `--replace` is not run here any more.  What replaces it is a better measurement of the same claim: an
+# extension the running shell already knows can be taken out and put back IN THAT PROCESS, which is what
+# "no logout" means for a bridge that is already installed.  The half that really does need something
+# nobody has -- reloading CHANGED extension code without a logout -- is the xwant at the end, and it is
+# asked of the shell's own D-Bus method rather than asserted about.
 phase_bridge() {
     note "gnome-shell $(guest 'gnome-shell --version' | tr -d '\r\n' || true), session $(guest \
          'echo $XDG_SESSION_TYPE' | tr -d '\r' || true)"
     local pid0 pid1 info owned ownerpid ours oid xid
-    # A window first: it is the thing that must still be there after a second shell takes the WM role,
-    # and phase_install's reboot may have left none.
+    # A window first: it is the thing the id checks below are about, and phase_install's reboot may have
+    # left none.
     editor_start
-    # The move is made on EVERY run and not only when the extension is found disabled.  A bridge that is
-    # already ACTIVE because the image booted into it says nothing at all about `--replace`, and the
-    # check below is named after `--replace`: the pid before and after is what makes it a measurement.
+    # The precondition, as a check rather than an assumption: this one key off makes every line below red
+    # for a reason that has nothing to do with the bridge, and that is exactly how both CI runs failed.
+    same "this user's extensions are switched on at all (org.gnome.shell disable-user-extensions)" \
+         "false" "$(guest 'gsettings get org.gnome.shell disable-user-extensions' | tr -d ' \r\n' || true)"
     pid0=$(guest 'pgrep -x gnome-shell | head -1' | tr -d ' \r\n' || true)
-    guest "gnome-extensions enable $BRIDGE_UUID" >/dev/null 2>&1 || true
-    # THE X11-only move: a second gnome-shell takes the WM role over the same X server, and the session's
-    # windows, buses and cookie stay exactly where they were.
-    guest "setsid nohup gnome-shell --replace >/dev/null 2>&1 </dev/null & sleep 12; true" \
-        >/dev/null 2>&1 || true
-    pid1=$(await 60 '^[0-9]+$' 'pgrep -x gnome-shell | head -1' | grep -E '^[0-9]+$' | head -1 || true)
-    if [ -n "$pid0" ] && [ -n "$pid1" ] && [ "$pid0" != "$pid1" ]; then
-        pass "gnome-shell --replace put a NEW shell on this X session (pid $pid0 -> $pid1)"
-    else
-        fail "no second shell took over [before '$pid0', after '$pid1']: every line below would be about \
-the session and not about --replace"
-    fi
     info=$(await 40 'State: ACTIVE' "gnome-extensions info $BRIDGE_UUID" || true)
-    want "the bridge is ACTIVE in the shell that replaced the old one, with nobody logged out" \
+    want "the bridge is ACTIVE in this Xorg session, with nobody logged out since the install" \
          "State: ACTIVE" "$info"
     owned=$(guest "gdbus call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus \
                    --method org.freedesktop.DBus.ListNames 2>&1 | tr ',' '\n' | grep fuckwayland" || true)
     want "org.fuckwayland.Bridge is owned on this Xorg session" "org.fuckwayland.Bridge" "$owned"
-    # Owned by WHICH process: the name has to be held by the shell that came up, not left behind by the
-    # one that went away.  `GetConnectionUnixProcessID` is the bus's own answer to that question.
+    # Owned by WHICH process: the name has to be held by the session's own gnome-shell and not by
+    # something else that took the name.  `GetConnectionUnixProcessID` is the bus's own answer.
     ownerpid=$(guest "gdbus call --session --dest org.freedesktop.DBus \
                       --object-path /org/freedesktop/DBus \
                       --method org.freedesktop.DBus.GetConnectionUnixProcessID org.fuckwayland.Bridge \
                       2>&1 | sed -n 's/.*uint32 \([0-9]*\).*/\1/p'" | tr -d ' \r\n' || true)
-    if [ -n "$pid1" ] && [ -n "$ownerpid" ]; then
-        same "...and the name is held by that new shell's own process" "$pid1" "$ownerpid"
+    if [ -n "$pid0" ] && [ -n "$ownerpid" ]; then
+        same "...and the name is held by this session's own gnome-shell" "$pid0" "$ownerpid"
     else
-        fail "nothing holds org.fuckwayland.Bridge [shell '$pid1', owner '$ownerpid']"
+        fail "nothing holds org.fuckwayland.Bridge [shell '$pid0', owner '$ownerpid']"
     fi
     want "the bridge answers GetVersion" "uint32|[0-9]" "$(guest "gdbus call $BR.GetVersion 2>&1" || true)"
+    # The no-logout move, in the bus's own words.  Measured live on this rig: `(false,)` about three
+    # seconds after the disable, `(true,)` about four after the enable, and the shell's pid unchanged
+    # across both -- waited for rather than slept through, for the reason bridge_owned's comment gives.
+    guest "gnome-extensions disable $BRIDGE_UUID" >/dev/null 2>&1 || true
+    same "disabling the bridge releases the name inside the running shell" "(false,)" \
+         "$(bridge_owned '\(false,\)')"
+    guest "gnome-extensions enable $BRIDGE_UUID" >/dev/null 2>&1 || true
+    same "...and enabling it takes the name back, with nobody logged out" "(true,)" \
+         "$(bridge_owned '\(true,\)')"
+    pid1=$(guest 'pgrep -x gnome-shell | head -1' | tr -d ' \r\n' || true)
+    same "...in the same gnome-shell process, which never restarted" "$pid0" "$pid1"
+    # The half that is NOT YET: a bridge whose extension.js has CHANGED needs the shell to re-read the
+    # file, and nothing on this session does that today.  The ladder, lowest first.  Route 2 (the
+    # compositor's own scripting surface) has the method and refuses: `org.gnome.Shell.Extensions.
+    # ReloadExtension` answers `NotSupported: ReloadExtension is deprecated and does not work` on 46.2 --
+    # that is what the xwant below asks, so it goes XPASS the day GNOME un-deprecates it.  Route 3 (code
+    # we install into the compositor) is the next one and it is OURS to write: extension.js is an ES
+    # module and GJS re-reads a module when it is imported under a URL it has not seen, so a two-file
+    # bridge -- a stub enable()/disable() that dynamic-imports the real module with a cache-busting query
+    # (`?v=<mtime>`) and a Reload method that drops the old instance and imports it again -- reloads
+    # changed code inside the running shell with no logout.  Cost: the bridge splits in two, every method
+    # gains a hop through the stub, and the old module's closures stay alive in the JS heap for the life
+    # of the session (GJS has no way to unload one), so the stub has to disconnect every signal and drop
+    # every timeout in disable() or a reloaded bridge leaks a listener per reload.  Nobody has written it
+    # and nobody has measured it against a live shell, so it is NOT YET and not a claim.  Route 6 (a
+    # package of ours that patches the shell or its unit) is below that, and only there because
+    # `--replace` costs the session's extensions (see the header) and the unit refuses `systemctl --user
+    # restart`.
+    xwant "the shell reloads the bridge's own code with no logout (until GNOME's ReloadExtension works \
+again, or AGENTS.md route 3 splits the bridge into a stub that dynamic-imports the real module, or \
+route 6 patches org.gnome.Shell@x11.service, which is RefuseManualStart with \
+Restart=always/RestartSec=0ms)" "^\(\)$" \
+          "$(guest "gdbus call --session --dest org.gnome.Shell --object-path /org/gnome/Shell \
+                    --method org.gnome.Shell.Extensions.ReloadExtension $BRIDGE_UUID 2>&1" || true)"
     # And now the point of the whole phase: with all three GNOME names on the bus, the tools are still
     # the originals.  `--version` is the shortest proof -- the answer is the INSTALLED xdotool's version
     # string (3.x on Ubuntu), never our 4.20260303.1.
@@ -144,19 +237,48 @@ phase_display() {
     # refuses an X11 session in the first place -- and Mutter's own config manager refuses the same
     # layout with `Logical monitors not adjacent`, from meta-monitor-config-manager.c, which is backend
     # independent and present in libmutter-14 [M recon2/gnome-xorg.md 9].  Whether the mutter backend
-    # can be made to REFUSE it on Xorg is the one thing the recon could not measure at all.
-    local pair first second pos0
+    # can be made to REFUSE it on Xorg was the one thing the recon could not measure at all, and this
+    # flavor's first run answers it: it CANNOT.  Measured by hand on the live session, 2026-09-09,
+    #
+    #     wxrandr --backend mutter --output Virtual-3 --pos 1920x0   ->  rc 0, no output at all
+    #     xrandr --query                                             ->  Virtual-2 and Virtual-3 BOTH at
+    #                                                                    1920x1080+1920+0
+    #
+    # -- so on Xorg the D-Bus route places an overlapping layout exactly as the X server does, and the
+    # `Logical monitors not adjacent` string that IS in libmutter-14 belongs to the path a Wayland Mutter
+    # takes, not to what this session's DisplayConfig validates.  Both halves of the pair are `same`
+    # checks on the position now; the second one used to be an xwant waiting for this run.
+    local pair first second pos0 back
     pair=$(display_pair); first=${pair%% *}; second=${pair#* }
     if [ -n "$second" ]; then
-        pos0=$(opos "$second")
+        pos0=$(opos "$second"); back=$(printf '%s' "$pos0" | tr ',' 'x')
         guest "wxrandr --output $second --pos $(opos "$first" | tr ',' 'x')" >/dev/null 2>&1 || true
         sleep 2
         same "an overlapping layout is accepted through the X server, which places one natively" \
              "$(opos "$first")" "$(opos "$second")"
-        xwant "--backend mutter refuses the same layout in Mutter's own words (until noble-gnome-x11 runs once)" \
-              "not adjacent" \
-              "$(guest "wxrandr --backend mutter --output $second --pos $(opos "$first" | tr ',' 'x') 2>&1" || true)"
-        guest "wxrandr --output $second --pos $(printf '%s' "$pos0" | tr ',' 'x')" >/dev/null 2>&1 || true
+        # back first, so the D-Bus route below is the thing that moves the head and not a no-op that
+        # would pass on the X server's own work
+        guest "wxrandr --output $second --pos $back" >/dev/null 2>&1 || true
+        sleep 2
+        # What `--backend mutter` IS here, before what it does: the position check below can only say
+        # that the head moved, and a cli.py that one day handed `--backend mutter` over to xrandr on an
+        # x11 session would keep it green while its label went false.  So the route is pinned first, in
+        # the tool's own words -- measured on this session, 2026-09-09:
+        #
+        #     wxrandr --print-backend --backend mutter --verbose
+        #     mutter / session: x11 / chosen by: flag (--backend mutter) / compositor: Mutter /
+        #     protocol: org.gnome.Mutter.DisplayConfig (D-Bus) / available: yes
+        #
+        # (cinnamon-wayland.sh pins its own Muffin route the same way, for the same reason.)
+        want "--backend mutter is the D-Bus route on this Xorg session, not a fallthrough to xrandr" \
+             "protocol: org\.gnome\.Mutter\.DisplayConfig \(D-Bus\)" \
+             "$(guest 'wxrandr --print-backend --backend mutter --verbose 2>&1' || true)"
+        guest "wxrandr --backend mutter --output $second --pos $(opos "$first" | tr ',' 'x')" \
+            >/dev/null 2>&1 || true
+        sleep 2
+        same "...and through Mutter's own DisplayConfig, which does not refuse one on Xorg either" \
+             "$(opos "$first")" "$(opos "$second")"
+        guest "wxrandr --output $second --pos $back" >/dev/null 2>&1 || true
         sleep 2
         same "...and the layout is put back where the phase found it" "$pos0" "$(opos "$second")"
     fi
@@ -205,7 +327,8 @@ phase_root() {
     # route left, which is what the recon measured going to None.  `pkill -STOP` would stop the session;
     # naming the file is as far as a smoke should go, so the check is that root reads it directly.
     want "root can read that cookie and talk to the display with it" "^[0-9]+$" \
-         "$(root 'w=$(command -v wdotool); env -i "$w" search --class TextEditor 2>&1 | head -1' || true)"
+         "$(root "w=\$(command -v wdotool); env -i \"\$w\" search --onlyvisible --class '$EDITOR_CLASS' \
+                  2>&1 | head -1" || true)"
 }
 
 # The input path X and Wayland share up to the kernel: our own uinput devices, created UNPRIVILEGED
@@ -215,7 +338,12 @@ phase_uinput() {
          "$(root 'getfacl -p /dev/uinput 2>/dev/null' || true)"
     local out win
     editor_start
-    out=$(await 30 '[0-9]' "wdotool search --class $EDITOR_CLASS | head -1" || true)
+    # --onlyvisible, and it is not a nicety: on this Xorg session gnome-text-editor owns TWO windows of
+    # that class -- 0x00a00002 `gnome-text-editor` (never mapped) and 0x00a00004 `fw-smoke.txt (~/) - Text
+    # Editor`, measured live on 2026-09-09 -- and `search --class` prints both, lowest first.  Activating
+    # the unmapped one focuses nothing, and every keystroke below then lands wherever the pointer left the
+    # focus.  Under Wayland this does not arise: the bridge lists toplevels and there is only one.
+    out=$(await 30 '[0-9]' "wdotool search --onlyvisible --class '$EDITOR_CLASS' | head -1" || true)
     win=$(printf '%s\n' "$out" | grep -E '^[0-9]+$' | head -1)
     if [ -z "$win" ]; then fail "no $EDITOR_CLASS window to type into [$(ev "$out")]"; return 1; fi
     guest "wdotool windowactivate --sync $win" >/dev/null 2>&1 || true
@@ -226,11 +354,16 @@ phase_uinput() {
     wantnot "wdotool creates its uinput devices without sudo" "cannot create uinput devices" "$out"
     sleep 1
     editor_save
-    sleep 1
-    # An `xwant`: whether the X server picks the events off our virtual keyboard and delivers them to
-    # the focused window has never been run -- the recon's container had no /dev/uinput at all
-    # [M recon2/gnome-xorg.md 2].  The day it passes this line is promoted to a `same`.
-    xwant "the keystrokes reach the focused X window (until noble-gnome-x11 runs once)" \
-          "x11 uinput" "$(editor_text || true)"
+    # gnome-text-editor's ctrl+s is asynchronous, and the file is read when it holds the text rather than
+    # one second later: on a --reuse run of this instance on 2026-09-09 the read one second after ctrl+s
+    # came back EMPTY and the same file held `x11 uinput` a moment after -- a fixed sleep here measures
+    # the guest's disk and not the input path.
+    local typed; typed=$(await 20 'x11 uinput' "cat $SMOKE_FILE 2>/dev/null" || true)
+    # It has been run now, and it works: the X server hotplugs the device our own code creates (`xinput
+    # list` shows `wdotool virtual keyboard` beside the XTEST one) and delivers its events to the focused
+    # window like any other keyboard -- `x11 uinput` arrived in gnome-text-editor byte for byte on the
+    # live session, 2026-09-09, with no sudo anywhere in the line.  So this is a `want` and no longer the
+    # xwant the recon left, whose container had no /dev/uinput at all [M recon2/gnome-xorg.md 2].
+    want "the keystrokes reach the focused X window" "x11 uinput" "$typed"
     note "the editor holds: $(ev "$(editor_text || true)")"
 }

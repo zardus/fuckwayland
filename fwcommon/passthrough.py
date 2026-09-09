@@ -480,7 +480,14 @@ def find_xauthority(e=None, uid=None):
     With no target uid known, a *system* account's runtime directory is skipped — same rule as
     `find_wayland_socket()`, and for the same reason: on a box with a display manager the lowest-numbered
     runtime dir is the greeter's, and handing the original the greeter's cookie is worse than handing it
-    none."""
+    none.
+
+    `gdm/Xauthority` is in the runtime-dir list beside `.mutter-Xwaylandauth.*` and `xauth_*` because that is
+    where GDM keeps an X11 session's cookie, one directory down: on noble-gnome-x11 the seated session's own
+    $XAUTHORITY is /run/user/1000/gdm/Xauthority [M this rig, 2026-09-09]. `session.find_xauthority()` at the
+    bottom of this function globs it too, but it is reached only after `~/.Xauthority`, and a home cookie left
+    over from some earlier X server exists on plenty of boxes and authorises nothing on this one -- so the
+    live file has to be found here, in the same mtime comparison as the other two."""
     import glob
 
     e = os.environ if e is None else e
@@ -496,7 +503,8 @@ def find_xauthority(e=None, uid=None):
         elif duid is not None and duid < 1000:
             continue            # a greeter's cookie is not the user's
         cands = sorted(glob.glob(os.path.join(d, ".mutter-Xwaylandauth.*"))) + \
-            sorted(glob.glob(os.path.join(d, "xauth_*")))
+            sorted(glob.glob(os.path.join(d, "xauth_*"))) + \
+            sorted(glob.glob(os.path.join(d, "gdm", "Xauthority")))
         best, best_m = None, -1.0
         for c in cands:
             try:

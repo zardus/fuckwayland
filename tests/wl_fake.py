@@ -678,3 +678,170 @@ class CosmicCompositor(WorkspaceServer, Server):
         elif not on and bit in rec.states:
             rec.states.remove(bit)
         self._send_cosmic_state(conn, rec)
+
+
+# -- zwlr_output_management, with a layout that answers back -------------------
+
+#: The three heads resolute-labwc boots with under `vm/vmctl start --heads 3`: three 1920x1080 virtio
+#: connectors, announced in the order labwc announces them (Virtual-3 first, measured in the guest on
+#: 2026-09-09) and laid out left to right by the rig's own vmctl-wlr-layout helper.
+LABWC_HEADS = (
+    ("Virtual-3", 3840, 0),
+    ("Virtual-2", 1920, 0),
+    ("Virtual-1", 0, 0),
+)
+
+_CONF_REQUESTS = {0: "enable_head", 1: "disable_head", 2: "apply", 3: "test", 4: "destroy"}
+_CH_REQUESTS = {0: "set_mode", 1: "set_custom_mode", 2: "set_position", 3: "set_transform", 4: "set_scale"}
+
+
+class OutputManagerServer(Server):
+    """zwlr_output_manager_v1 over a layout it really keeps, so an apply can be read back.
+
+    tests/fixtures/fake_wlr.py is the one-head version of this and stays where it is: it is a subprocess and
+    a test there drives the whole CLI. This one is in-process and multi-head, because what it exists to
+    reproduce is a THREE-head layout that a compositor rearranges after saying `succeeded`.
+
+    `stray_once(name)` arms exactly that, in the shape it was measured in on resolute-labwc (labwc 0.9.3 /
+    wlroots 0.19.2, 2026-09-09): the next apply is answered `succeeded`, every other head lands where it was
+    asked, and `name` is put immediately to the right of the last head that did land instead of where the
+    configuration put it. It is one-shot because the retry is what was measured to land -- re-sending the
+    identical configuration put every head where it was asked, on the first retry, every time.
+
+    `applies` records one {name: (x, y, enabled)} dict per apply, so a test can say how many configurations
+    were sent and that the second carried the same numbers as the first.
+    """
+
+    MANAGER = "zwlr_output_manager_v1"
+    PREFIX = "wxrandr-wlr-"
+    WIDTH, HEIGHT, REFRESH = 1920, 1080, 74998
+
+    def __init__(self, heads=LABWC_HEADS, manager_version=4):
+        self.heads = [{"name": n, "x": x, "y": y, "enabled": True} for n, x, y in heads]
+        self.applies = []
+        self.tests = 0
+        self._stray = None
+        self._next_id = 0xFF000000
+        self._serial = 0
+        self._confs = {}      # configuration id -> {head name: {...}}
+        self._chs = {}        # configuration_head id -> (configuration id, head name)
+        self._by_head_id = {}
+        super().__init__(manager_version=manager_version)
+
+    # -- what a test drives it with
+    def stray_once(self, name: str):
+        """Arm one apply that lands every head but `name` where it was asked."""
+        self._stray = name
+
+    def layout(self) -> dict:
+        """{name: (x, y)} for the heads that are on, which is what wlr-randr prints."""
+        return {h["name"]: (h["x"], h["y"]) for h in self.heads if h["enabled"]}
+
+    # -- the protocol
+    def advertise(self):
+        return [("wl_compositor", 4), ("wl_output", 4)]
+
+    def _alloc(self) -> int:
+        self._next_id += 1
+        return self._next_id
+
+    def on_bind(self, conn, state, name, iface, version, new_id):
+        if iface != self.MANAGER:
+            return
+        state["mgr"] = new_id
+        for h in self.heads:
+            hid, mid = self._alloc(), self._alloc()
+            h["id"], h["mode_id"] = hid, mid
+            self._by_head_id[hid] = h
+            self._send(conn, new_id, 0, struct.pack("<I", hid))            # head
+            self._send(conn, hid, 0, wstr(h["name"]))                      # name
+            self._send(conn, hid, 1, wstr("QEMU Monitor (%s)" % h["name"]))
+            self._send(conn, hid, 2, struct.pack("<ii", 480, 270))         # physical_size
+            self._send(conn, hid, 3, struct.pack("<I", mid))               # mode
+            self._send(conn, mid, 0, struct.pack("<ii", self.WIDTH, self.HEIGHT))
+            self._send(conn, mid, 1, struct.pack("<i", self.REFRESH))
+            self._send(conn, mid, 2)                                       # preferred
+            self._send_head_state(conn, h)
+            self._send(conn, hid, 10, wstr("Red Hat, Inc."))               # make
+            self._send(conn, hid, 11, wstr("QEMU Monitor"))                # model
+            self._send(conn, hid, 12, wstr("Unknown"))                     # serial
+        self._done(conn, new_id)
+
+    def _send_head_state(self, conn, h):
+        """enabled + the four events that only mean anything while it is on, as wlroots orders them."""
+        self._send(conn, h["id"], 4, struct.pack("<i", 1 if h["enabled"] else 0))
+        if not h["enabled"]:
+            return
+        self._send(conn, h["id"], 5, struct.pack("<I", h["mode_id"]))      # current_mode
+        self._send(conn, h["id"], 6, struct.pack("<ii", h["x"], h["y"]))   # position
+        self._send(conn, h["id"], 7, struct.pack("<i", 0))                 # transform
+        self._send(conn, h["id"], 8, struct.pack("<i", 1 * 256))           # scale, wl_fixed
+
+    def _done(self, conn, mgr):
+        self._serial += 1
+        self._send(conn, mgr, 1, struct.pack("<I", self._serial))
+
+    def on_request(self, conn, state, oid, opcode, body, fds):
+        if oid == state.get("mgr"):
+            if opcode == 0:                                    # create_configuration(id, serial)
+                (cid,) = struct.unpack_from("<I", body)
+                self._confs[cid] = {}
+            return
+        if oid in self._chs:
+            cid, name = self._chs[oid]
+            plan = self._confs[cid].setdefault(name, {})
+            what = _CH_REQUESTS.get(opcode)
+            if what == "set_position":
+                plan["pos"] = struct.unpack_from("<ii", body)
+            elif what == "set_mode":
+                plan["mode"] = struct.unpack_from("<I", body)[0]
+            return
+        if oid in self._confs:
+            self._on_configuration(conn, state, oid, opcode, body)
+
+    def _on_configuration(self, conn, state, cid, opcode, body):
+        what = _CONF_REQUESTS.get(opcode)
+        if what == "enable_head":
+            ch, hid = struct.unpack_from("<II", body)
+            name = self._by_head_id[hid]["name"]
+            self._chs[ch] = (cid, name)
+            self._confs[cid].setdefault(name, {})["enabled"] = True
+        elif what == "disable_head":
+            (hid,) = struct.unpack_from("<I", body)
+            self._confs[cid][self._by_head_id[hid]["name"]] = {"enabled": False}
+        elif what == "test":
+            self.tests += 1
+            self._send(conn, cid, 0)                           # succeeded
+        elif what == "apply":
+            self._apply(conn, state, cid)
+        elif what == "destroy":
+            self._confs.pop(cid, None)
+
+    def _apply(self, conn, state, cid):
+        plan = self._confs.get(cid, {})
+        self.applies.append({n: (p.get("pos", (0, 0))[0], p.get("pos", (0, 0))[1], p.get("enabled", False))
+                             for n, p in plan.items()})
+        stray, self._stray = self._stray, None
+        placed = []
+        for h in self.heads:
+            p = plan.get(h["name"])
+            if p is None:
+                continue
+            h["enabled"] = bool(p.get("enabled"))
+            if not h["enabled"] or h["name"] == stray:
+                continue
+            if "pos" in p:
+                h["x"], h["y"] = p["pos"]
+            placed.append(h)
+        if stray is not None:
+            h = next(x for x in self.heads if x["name"] == stray)
+            if h["enabled"]:
+                # Where labwc put it, measured: hard against the right edge of everything it did place, on
+                # the row of the last one -- Virtual-2 at 5760,0 beside Virtual-3 at 3840,0, then at
+                # 7680,1080 beside Virtual-3 at 5760,1080, then at 11520,1080 beside 9600,1080.
+                h["x"] = max((o["x"] + self.WIDTH for o in placed), default=0)
+                h["y"] = placed[-1]["y"] if placed else 0
+        for h in self.heads:
+            self._send_head_state(conn, h)
+        self._done(conn, state["mgr"])
+        self._send(conn, cid, 0)                               # succeeded

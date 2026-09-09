@@ -40,8 +40,12 @@ phase_budgie() {
         note "one head only: the layout-restore question needs a second head (--heads 2)"
         return 0
     fi
-    note "org.buddiesofbudgie.Services on the system bus: \
-$(root 'busctl --system list --no-pager 2>/dev/null | grep -i buddiesofbudgie' | tr '\n' '|' || true)"
+    # The SESSION bus, as the seated user.  The first run of this flavor (2026-09-09) asked the system bus
+    # as root and got nothing back, which read as "the service is not there" when it is: every
+    # org.buddiesofbudgie.* name on this golden is on user 1000's bus, and Services itself is owned by
+    # /usr/libexec/budgie-desktop/org.buddiesofbudgie.Services (pid 1703, connection :1.13).
+    note "org.buddiesofbudgie.* on the session bus: \
+$(guest 'busctl --user list --no-pager 2>/dev/null | grep -i buddiesofbudgie' | tr '\n' '|' || true)"
     guest "wxrandr --output $second --below $first" >/dev/null 2>&1 || true
     sleep 2
     before=$(opos "$second")
@@ -50,13 +54,17 @@ $(root 'busctl --system list --no-pager 2>/dev/null | grep -i buddiesofbudgie' |
     after=$(opos "$second")
     note "$second at $before immediately after the apply, at $after ten seconds later"
     if [ -z "$before" ]; then
-        # Without a position to compare against, an `xwant` on `^$` would XPASS on an equally
-        # empty second reading and report agreement between two failures to read anything.
+        # Without a position to compare against, a check on `^$` would pass on an equally empty second
+        # reading and report agreement between two failures to read anything.
         fail "wlr-randr gave no position for $second after the apply: the wait below has nothing to compare"
     else
-        xwant "Budgie's own display service leaves a wxrandr apply alone (until a run of this \
-flavor says what org.buddiesofbudgie.Services does with an output it did not move)" \
-              "^$(printf '%s' "$before" | sed 's/[.[]/\\&/g')$" "$after"
+        # A want since the first run of this flavor answered the question it was an xwant for: on
+        # resolute-budgie (Budgie 10.10.2 over labwc 0.9.3, 2026-09-09) `--output Virtual-3 --below
+        # Virtual-2` left Virtual-3 at 1920,1080 immediately and at 1920,1080 ten seconds later, with
+        # org.buddiesofbudgie.Services running on the session bus the whole time.  Budgie's display
+        # service does not restore a layout it did not write, so a wxrandr apply here is not a race.
+        want "Budgie's own display service leaves a wxrandr apply alone" \
+             "^$(printf '%s' "$before" | sed 's/[.[]/\\&/g')$" "$after"
     fi
     guest "wxrandr --output $second --right-of $first" >/dev/null 2>&1 || true
     sleep 2
