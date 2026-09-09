@@ -128,7 +128,21 @@ fail() { printf 'fail: %s\\n' "$*" >> "$FAKE_LOG"; exit 9; }
 written() { printf '%s\\n' "$@" >> "$WRITTEN"; }
 """
 
+# The display managers' unit files as the packages ship them.  Debian's gdm3.service
+# is the odd one: no [Install] section, because the gdm3 postinst links
+# display-manager.service itself from /etc/X11/default-display-manager -- which is
+# why `systemctl enable gdm3` succeeds and enables nothing (CI run 34286867525).
+_ALIASED = "[Unit]\nDescription=%s\n\n[Install]\nAlias=display-manager.service\n"
+UNIT_FILES = {"gdm3": "[Unit]\nDescription=GNOME Display Manager\n",
+              "gdm": _ALIASED % "GNOME Display Manager",
+              "sddm": _ALIASED % "Simple Desktop Display Manager",
+              "plasmalogin": _ALIASED % "Plasma Login Manager",
+              "lightdm": _ALIASED % "Light Display Manager",
+              "greetd": _ALIASED % "Greeter daemon"}
+
 # systemd's enable/disable, as far as a display manager's Alias=display-manager.service
+# goes (the double links the alias only when the unit's [Install] carries it, and
+# says so when it does not, exit 0, as systemd does).
 # goes: `enable` needs the unit file and refuses when the alias already points at
 # another unit (systemd's "File display-manager.service already exists and is a
 # symlink to ..."), `disable` drops the alias of the unit named.  A stub that only
@@ -143,6 +157,7 @@ for u in "$@"; do
     case $cmd in
     enable)
         [ -f "$unit" ] || { echo "Failed to enable unit: Unit file ${u%%.service}.service does not exist." >&2; exit 1; }
+        grep -q "^Alias=display-manager.service" "$unit" || { echo "The unit files have no installation config (WantedBy=, RequiredBy=, Also=, Alias= settings in the [Install] section, and DefaultInstance= for template units)." >&2; continue; }
         if [ -L "$alias" ] && [ "$(readlink -f "$alias")" != "$unit" ]; then
             echo "Failed to enable unit: File display-manager.service already exists and is a symlink to $(readlink "$alias")." >&2
             exit 1
@@ -800,7 +815,8 @@ class TheDisplayManagers(unittest.TestCase):
         for u in units:   # the unit files the display-manager packages installed
             path = os.path.join(root, "usr/lib/systemd/system", u + ".service")
             os.makedirs(os.path.dirname(path), exist_ok=True)
-            open(path, "w").close()
+            with open(path, "w") as fh:
+                fh.write(UNIT_FILES[u])
         log = os.path.join(tmp, "log")
         open(log, "w").close()
         d = stubs(tmp, ["systemctl", "usermod", "getent=2"], log)
@@ -1044,7 +1060,7 @@ class TheDisplayManagers(unittest.TestCase):
                                   tree=["usr/share/xsessions/xubuntu.desktop"], units=())
         self.assertEqual(got.returncode, 9)
         with open(log) as fh:
-            self.assertIn("fail: systemctl enable lightdm failed", fh.read())
+            self.assertRegex(fh.read(), r"fail: (systemctl enable lightdm failed|no unit file for lightdm)")
 
     def alias(self, root):
         return os.path.basename(os.readlink(os.path.join(root, "etc/systemd/system/display-manager.service")))
@@ -1074,6 +1090,40 @@ class TheDisplayManagers(unittest.TestCase):
                     if other != unit:
                         self.assertIn("systemctl disable " + other, lines)
 
+    def test_debians_gdm3_unit_has_no_install_section_so_the_alias_is_linked_by_hand(self):
+        """The second half of the 2026-09-08 regression, found by the CI rigs
+        after the first half was fixed: `systemctl enable gdm3` exits 0 and
+        links nothing, because Debian's unit carries no [Install] and the
+        postinst that would have linked display-manager.service ran before
+        /etc/X11/default-display-manager named gdm3.  dm_enable makes the link
+        the postinst makes, and only then: Fedora's gdm.service has the Alias
+        and is linked by systemd itself."""
+        got, root, log = self.run_dm("dm_gdm wayland", tree=["etc/gdm3/", self.WL + "ubuntu.desktop"])
+        self.assertEqual(got.returncode, 0, got.stderr)
+        self.assertEqual(self.alias(root), "gdm3.service")
+        with open(log) as fh:
+            text = fh.read()
+        self.assertIn("gdm3.service has no [Install] section; linking display-manager.service", text)
+        self.assertIn("systemctl daemon-reload", text)
+        got, root, log = self.run_dm("dm_gdm wayland", tree=["etc/gdm/", self.WL + "gnome.desktop"])
+        self.assertEqual(got.returncode, 0, got.stderr)
+        self.assertEqual(self.alias(root), "gdm.service")
+        with open(log) as fh:
+            self.assertNotIn("linking display-manager.service", fh.read())
+
+    def test_ubuntus_gdm3_unit_is_a_symlink_to_gdm_service_and_the_check_follows_it(self):
+        """Measured on the third build of 2026-09-09: Ubuntu 24.04 ships
+        gdm.service and gdm3.service as a symlink to it, so the alias resolves
+        to gdm.service and a check on the unit's NAME refuses the image it just
+        configured.  Both sides are compared resolved."""
+        tree = ["etc/gdm3/", self.WL + "ubuntu.desktop"]
+        got, root, _ = self.run_dm("dm_gdm wayland", tree=tree, units=("gdm",),
+                                   links=[("usr/lib/systemd/system/gdm3.service",
+                                           "usr/lib/systemd/system/gdm.service")])
+        self.assertEqual(got.returncode, 0, got.stderr)
+        self.assertEqual(os.path.basename(os.path.realpath(
+            os.path.join(root, "etc/systemd/system/display-manager.service"))), "gdm.service")
+
     def test_the_debian_pointer_file_is_written_only_where_debian_reads_one(self):
         """/etc/X11/default-display-manager is x11-common's; dnf and pacman
         systems have neither the file nor anything that reads it."""
@@ -1092,7 +1142,7 @@ class TheDisplayManagers(unittest.TestCase):
         got, _, log = self.run_dm("dm_gdm wayland", tree=["etc/gdm3/", self.WL + "ubuntu.desktop"], units=())
         self.assertEqual(got.returncode, 9)
         with open(log) as fh:
-            self.assertIn("fail: systemctl enable gdm3 failed", fh.read())
+            self.assertRegex(fh.read(), r"fail: (systemctl enable gdm3 failed|no unit file for gdm3)")
 
 
 class ThePlasmaWelcomeCentre(unittest.TestCase):

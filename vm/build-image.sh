@@ -230,7 +230,14 @@ dm_enable() {   # dm_enable <unit> <binary> -- make <unit> THE display manager o
     # reads one, the other DMs' alias dropped, ours enabled, and the alias that
     # results checked, because an image that boots into the wrong desktop (or
     # none) is forty minutes nobody gets back.
-    local unit=$1 bin=$2 other dmlink
+    local unit=$1 bin=$2 other dmlink uf want
+    # the unit file, wherever this distro keeps it; on Ubuntu gdm3.service is itself a
+    # symlink to gdm.service, so what the alias resolves to is compared resolved
+    for uf in usr/lib/systemd/system/$unit.service lib/systemd/system/$unit.service; do
+        [ -f "$VMCTL_ROOT/$uf" ] && break
+    done
+    [ -f "$VMCTL_ROOT/$uf" ] || fail "no unit file for $unit under /usr/lib/systemd/system or /lib/systemd/system"
+    want=$(readlink -f "$VMCTL_ROOT/$uf")
     if [ "$PKG" = apt ]; then
         wdir "$VMCTL_ROOT/etc/X11"
         echo "$bin" > "$VMCTL_ROOT/etc/X11/default-display-manager"
@@ -240,8 +247,20 @@ dm_enable() {   # dm_enable <unit> <binary> -- make <unit> THE display manager o
         [ "$other" = "$unit" ] || systemctl disable "$other" 2>/dev/null || true   # drops its display-manager.service alias
     done
     systemctl enable "$unit" || fail "systemctl enable $unit failed"
+    if [ ! -L "$VMCTL_ROOT/etc/systemd/system/display-manager.service" ]; then
+        # Debian's gdm3.service has no [Install] section at all: `systemctl enable gdm3`
+        # answers "has no installation config", exits 0 and links nothing (CI run
+        # 34286867525, every GNOME rig), because on Debian the gdm3 postinst makes the
+        # display-manager.service link itself from /etc/X11/default-display-manager.
+        # lightdm, sddm, greetd and upstream gdm carry Alias=display-manager.service and
+        # never get here.  Made the way the postinst makes it.
+        say "$unit.service has no [Install] section; linking display-manager.service -> /$uf by hand"
+        wdir "$VMCTL_ROOT/etc/systemd/system"
+        ln -sfn "$VMCTL_ROOT/$uf" "$VMCTL_ROOT/etc/systemd/system/display-manager.service"
+        systemctl daemon-reload 2>/dev/null || true
+    fi
     dmlink=$(readlink -f "$VMCTL_ROOT/etc/systemd/system/display-manager.service")
-    [ "${dmlink##*/}" = "$unit.service" ] || fail "display-manager.service is not $unit: ${dmlink:-missing}"
+    [ "$dmlink" = "$want" ] || fail "display-manager.service is not $unit: ${dmlink:-missing} (want $want)"
     say "$unit is the display manager (display-manager.service -> $dmlink)"
 }
 dm_gdm() {   # dm_gdm wayland|x11 -- resolve the GNOME session file, then the DM
