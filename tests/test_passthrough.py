@@ -15,6 +15,7 @@ import ast
 import collections
 import errno
 import contextlib
+import importlib
 import gc
 import io
 import os
@@ -661,6 +662,76 @@ class SuiteGuard(Base):
             if bare and self.BOOTSTRAP not in src:
                 missing.append("%s (imports %s)" % (name, ", ".join(sorted(bare))))
         self.assertEqual(missing, [], "add `%s` beside the ROOT bootstrap" % self.BOOTSTRAP)
+
+    # -- state that outlives the file that set it ----------------------------
+
+    def test_the_process_environment_is_still_the_real_one(self):
+        """`os.environ` is `os._Environ`, and every `os.environ[k] = v` in it
+        calls `putenv`, which is what a child spawned with the INHERITED
+        environment reads.  Replace the object with a plain dict and that stops
+        happening silently: the tests that read `os.environ` back still pass and
+        the ones that spawn a process stop seeing what they set.
+
+        Found under `unittest discover -s tests`, where
+        tests/test_live_smoke.py had `self.mod.os.environ = env` (its `os` is
+        the interpreter's) and a cleanup that read `os.environ` after the
+        assignment, so what it restored was the plain dict.  From there the run
+        carried four failures in tests/test_wmirror_lifetime.py -- its
+        wl-mirror stub never got `$WMIRROR_STUB_LOG` -- and two errors in
+        tests/test_overlap_consent.py, both files green run alone.  CI never saw
+        it because CI runs one file per job; the full-suite gate the release
+        runs does."""
+        self.assertIsInstance(os.environ, os._Environ)
+
+    def test_a_module_taken_away_for_one_test_is_still_importable(self):
+        """`gi`, the one module a test in this suite removes from
+        `sys.modules` on purpose (tests/test_live_smoke.py's `without_gi`, so
+        the gdbus-text branch of the Mutter reader runs on a host that has the
+        bindings).  Putting a DIFFERENT object back is not putting it back:
+        Debian's gi/__init__.py refuses a second load beside the static
+        bindings and raises "you must not import static modules like gobject",
+        which is how `from warandr import gui` failed in
+        tests/test_overlap_consent.py under `unittest discover` and nowhere
+        else.  ModuleNotFoundError is a box without python3-gi and is a skip;
+        any other ImportError is this.
+
+        A guard and not coverage: run as `python3 tests/test_passthrough.py`
+        this can only pass, since nothing in the file touches `gi`.  It has
+        teeth under `unittest discover`, where it runs after
+        tests/test_live_smoke.py, and that is the run it is written for."""
+        try:
+            importlib.import_module("gi")
+        except ModuleNotFoundError:
+            raise unittest.SkipTest("python3-gi is not installed")
+
+    def test_no_test_file_rebinds_environ_on_a_module(self):
+        """The guard for the failure above, at the source rather than after the
+        fact: an assignment to `<something>.environ` replaces the object for
+        every module in the process, and there is no way to write one that is
+        safe.  `mock.patch.dict(os.environ, ..., clear=True)` sets values in the
+        object that is already there and puts back what it replaced, which is
+        what the fixed test uses."""
+        offenders = []
+        for name in sorted(os.listdir(self.TESTS_DIR)):
+            if not name.endswith(".py"):
+                continue
+            with open(os.path.join(self.TESTS_DIR, name)) as f:
+                tree = ast.parse(f.read(), filename=name)
+            for node in ast.walk(tree):
+                targets = getattr(node, "targets", [])
+                if isinstance(node, ast.AugAssign):
+                    targets = [node.target]
+                for target in targets:
+                    if isinstance(target, ast.Attribute) and target.attr == "environ":
+                        offenders.append("%s:%d" % (name, node.lineno))
+                if (isinstance(node, ast.Call)
+                        and isinstance(node.func, ast.Name) and node.func.id == "setattr"
+                        and len(node.args) > 1
+                        and isinstance(node.args[1], ast.Constant)
+                        and node.args[1].value == "environ"):
+                    offenders.append("%s:%d (setattr)" % (name, node.lineno))
+        self.assertEqual(offenders, [],
+                         "use mock.patch.dict(os.environ, ...) instead")
 
     def test_the_module_path_invocation_form_imports_the_file(self):
         """The third documented form, end to end, on the file that has the

@@ -1,0 +1,55 @@
+# The Fedora unit-test and rpm-build image, the sibling of .github/ci/Dockerfile.
+# Same contract: everything a test file can shell out to is in here, so a file
+# skips for a reason and not for a missing package.  Package names come from
+# recon2/fedora.md and recon2/pkg-rpm.md, both measured on Fedora 44 -- the ones
+# that are not (Xvfb, xauth, gtk4, the dbus split) are confirmed by this build.
+#
+# Two things differ from the Ubuntu image and both are measured:
+#
+#   * Fedora's xdotool is 3.20211022.1, not the 4.20260303.1 the parity oracle
+#     pins, so tests/test_cli_parity.py SKIPs here rather than comparing bytes
+#     [recon2/fedora.md].  The parity claim against a distro binary is the
+#     `parity-arch` job, whose Arch xdotool IS 4.20260303.1 [recon2/pkg-arch.md].
+#   * dbus-broker is the system default; `dbus-run-session` ships in
+#     dbus-daemon and dbus_mini's fork path works against the broker, measured
+#     [recon2/fedora.md].
+#
+# `cpio` is in that list for one test and is not obvious: tests/test_release_rpm.py
+# unpacks the built rpms with `rpm2cpio | cpio -idmu` and SKIPS its whole
+# payload-against-the-tree comparison when either binary is missing -- which is
+# the rpm job going green while proving nothing, the failure R24 exists to stop.
+# fedora:44 has rpm2cpio (in rpm) and does not have cpio.
+#
+# labwc, wayfire, i3 and openbox are NOT here: the four live compositor files
+# (tests/test_labwc_live.py and its siblings) run on the Ubuntu image, where the
+# packages are measured -- and there only on the releases that package the
+# measured versions, see .github/ci/Dockerfile's second RUN.  Adding them here is
+# one word each and an image rebuild; they stay out until somebody has run those
+# files on Fedora once.
+ARG BASE=fedora:44
+FROM ${BASE}
+ARG NODE=v22.22.1
+ENV LANG=C.UTF-8
+# Weak dependencies are NOT disabled: the point of this image is that nothing
+# skips, and a %pyproject_* macro package that quietly lost a recommended
+# dependency is a build that dies half way through, which is what
+# scripts/build-rpm.sh's own tool check exists to prevent.
+RUN dnf -y install \
+        python3 python3-gobject gtk3 gtk4 \
+        sway xorg-x11-server-Xwayland xterm foot xorg-x11-server-Xvfb xorg-x11-xauth \
+        xprop xrandr xdotool wmctrl \
+        dbus-daemon dbus-tools glib2 gobject-introspection-devel \
+        rpm-build python3-devel pyproject-rpm-macros systemd-rpm-macros rpmlint acl cpio \
+        ca-certificates curl xz zstd git procps-ng sudo \
+    && dnf clean all
+# Fedora's nodejs is a different major from the one tests/test_bridge_js.py was
+# written against, so the image takes the same tarball the Ubuntu one does.
+RUN curl -fsSL "https://nodejs.org/dist/${NODE}/node-${NODE}-linux-x64.tar.xz" | tar -xJ -C /opt \
+    && ln -s "/opt/node-${NODE}-linux-x64/bin/node" /usr/local/bin/node && node --version
+# uid 1000 because the sudo fixtures name SUDO_UID=1000 and the handover resolves
+# it through passwd; NOPASSWD because scripts/build-rpm.sh dnf-installs what it
+# is missing (it finds nothing missing here, which is the point of the list above).
+RUN if getent passwd 1000 >/dev/null; then userdel -r "$(getent passwd 1000 | cut -d: -f1)"; fi \
+    && useradd -m -u 1000 -s /bin/bash ci \
+    && install -d -m 0700 -o ci -g ci /tmp/xdg-ci \
+    && echo 'ci ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/ci

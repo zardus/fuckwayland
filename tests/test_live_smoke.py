@@ -42,6 +42,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 # The suite never hands a tool over to the real X11 one: see tests/conftest.py
 # (which covers pytest) and tests/test_passthrough.py.  This line is what
@@ -159,10 +160,23 @@ class TheOracle(unittest.TestCase):
         `gdbus call` text; this host HAS the bindings, so the text branch would
         never be reached -- and it is the branch the KDE, sway and wlroots
         goldens, which carry no gi, actually run.  `sys.modules['gi'] = None`
-        makes `import gi` raise, which is what "not installed" looks like."""
-        self.addCleanup(sys.modules.pop, "gi", None)
-        had = sys.modules.get("gi")
-        if had is not None:
+        makes `import gi` raise, which is what "not installed" looks like.
+
+        Exactly ONE cleanup, and which one depends on what was there.  Two of
+        them looked safer and were not: cleanups run last-in-first-out, so a
+        `pop` registered first ran AFTER the `__setitem__` that put the real
+        module back and took it away again.  A re-imported `gi` is not the same
+        object -- Debian's gi/__init__.py refuses to load a second time beside
+        the static bindings and raises "you must not import static modules like
+        gobject" -- so under `unittest discover` this left
+        tests/test_overlap_consent.py's `test_it_records_no_agreement` with an
+        ImportError on `from warandr import gui`, a file that is green run
+        alone."""
+        missing = object()
+        had = sys.modules.get("gi", missing)
+        if had is missing:
+            self.addCleanup(sys.modules.pop, "gi", None)
+        else:
             self.addCleanup(sys.modules.__setitem__, "gi", had)
         sys.modules["gi"] = None
 
@@ -284,21 +298,30 @@ class TheOracle(unittest.TestCase):
         fwcommon.session.find_wayfire_socket uses.  The measured name has an
         empty pid field (`wayfire-wayland-1-.socket`), so nothing may match on
         one [recon2/wayfire 1.2]."""
+        # `mock.patch.dict` and not `self.mod.os.environ = env`: oracle.py's `os`
+        # IS the interpreter's `os`, so that assignment replaced os.environ for
+        # the whole process with a plain dict -- and the cleanup that put it back
+        # read `os.environ` AFTER the assignment, so what it restored was the
+        # plain dict.  A plain dict never reaches `putenv`, so from that point on
+        # every child spawned with the inherited environment saw a stale one:
+        # under `unittest discover` this file left tests/test_wmirror_lifetime.py
+        # with four failures and tests/test_overlap_consent.py with two errors,
+        # both of them green run alone.  patch.dict restores the object it
+        # replaced values in, so there is nothing to get wrong.
         with tempfile.TemporaryDirectory() as tmp:
             env = dict(os.environ)
             env.pop("WAYFIRE_SOCKET", None)
             env.pop("_WAYFIRE_SOCKET", None)
             env["XDG_RUNTIME_DIR"] = tmp
-            self.mod.os.environ = env
-            self.addCleanup(setattr, self.mod.os, "environ", os.environ)
-            self.assertIsNone(self.mod.wayfire_socket())
-            path = os.path.join(tmp, "wayfire-wayland-1-.socket")
-            open(path, "w").close()
-            self.assertEqual(self.mod.wayfire_socket(), path)
-            other = os.path.join(tmp, "named-by-the-variable")
-            open(other, "w").close()
-            env["WAYFIRE_SOCKET"] = other
-            self.assertEqual(self.mod.wayfire_socket(), other)
+            with mock.patch.dict(os.environ, env, clear=True):
+                self.assertIsNone(self.mod.wayfire_socket())
+                path = os.path.join(tmp, "wayfire-wayland-1-.socket")
+                open(path, "w").close()
+                self.assertEqual(self.mod.wayfire_socket(), path)
+                other = os.path.join(tmp, "named-by-the-variable")
+                open(other, "w").close()
+                os.environ["WAYFIRE_SOCKET"] = other
+                self.assertEqual(self.mod.wayfire_socket(), other)
 
     # -- the table itself ----------------------------------------------------
 

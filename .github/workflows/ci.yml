@@ -1,24 +1,47 @@
 # Every push, the whole thing, spread as wide as GitHub will let it:
 #
-#   image    the unit-test container per Ubuntu release (24.04, 26.04, 26.10), built once per
-#            change to .github/ci/Dockerfile and kept in GHCR
-#   lint     ruff (the project's lint-only config), scripts/check-docs.py, bash -n on vm/
-#   unit     ONE JOB PER TEST FILE PER RELEASE, in that container, as an unprivileged user
-#   parity   tests/test_cli_parity.py and test_wwmctl_cli.py against the flake-pinned
-#            xdotool 4.20260303.1 and wmctrl 1.07 (scripts/parity-oracle.sh under nix)
-#   deb      scripts/build-deb.sh, the fresh package proved to be the tree, then installed
-#            with apt on each release and every tool answering --version
-#   vm       ONE JOB PER FLAVOR of the QEMU rig, KVM on the runner: the golden image from the
-#            GHCR cache or built here (ISO installs included), then vm/live-smoke.sh --deb with
-#            the package the deb job built from this tree
+#   plan         the file list, the flavor set split by `# vmctl-ci:`, and one image key
+#                per Dockerfile
+#   image        the unit-test container per Ubuntu release (24.04, 26.04, 26.10) plus the
+#                Fedora 44 and Arch ones, built once per change to its Dockerfile, in GHCR
+#   lint         ruff (the project's lint-only config), scripts/check-docs.py, bash -n on vm/
+#   unit         ONE JOB PER TEST FILE PER RELEASE, in that container, as an unprivileged user
+#   unit-distro  the WHOLE suite in one job on Fedora 44 and on Arch, one process per file
+#                as in `unit`: the same files against another distro's python, dbus and
+#                originals
+#   parity       tests/test_cli_parity.py and test_wwmctl_cli.py against the flake-pinned
+#                xdotool 4.20260303.1 and wmctrl 1.07 (scripts/parity-oracle.sh under nix)
+#   parity-arch  the same parity run against ARCH'S OWN xdotool 4.20260303.1 and wmctrl 1.07,
+#                which is the one distro shipping the version this clone is written against
+#   deb          scripts/build-deb.sh, the fresh package proved to be the tree, then installed
+#   deb-install  with apt on each release and every tool answering --version
+#   rpm          scripts/build-rpm.sh in the Fedora container, rpmlint, the payload vs the tree
+#   rpm-install  dnf install of those rpms on Fedora 43, 44 and rawhide
+#   pkgbuild     scripts/build-pkgbuild.sh in the Arch container, namcap, install and remove
+#   nix          the five flake packages, `nix run`, tests/test_flake.py live, and the three
+#                cheap flake checks (module-eval, tools, nixos-sway)
+#   nix-full     the two expensive NixOS VM checks (nixos-gnome, nixos-kde), scope=all only
+#   vm           ONE JOB PER FLAVOR of the QEMU rig, KVM on the runner: the golden image from
+#                the GHCR cache or built here (ISO installs and the NixOS build included),
+#                then vm/live-smoke.sh --pkg with the package this run built from this tree
 #
-# 26.10 is a development release that moves under the flavor, so its jobs may fail
-# without failing the run. Everything else must be green.
+# 26.10 is a development release and Arch is rolling: both move under the flavor, so their
+# jobs may fail without failing the run. Everything else must be green.
+#
+# The rig runs the `# vmctl-ci: push` flavors on a push. The rest -- ISO installs, the
+# desktops nobody has measured twice -- go with `workflow_dispatch` and `scope: all`, or by
+# putting the `ci:all-flavors` label on a pull request.
 name: ci
 on:
   push:
   pull_request:
   workflow_dispatch:
+    inputs:
+      scope:
+        description: which rig flavors to run
+        type: choice
+        options: [push, all]
+        default: push
 
 permissions:
   contents: read
@@ -33,17 +56,33 @@ jobs:
     outputs:
       files: ${{ steps.list.outputs.files }}
       flavors: ${{ steps.list.outputs.flavors }}
+      scope: ${{ steps.list.outputs.scope }}
       image_key: ${{ steps.list.outputs.image_key }}
+      image_key_fedora: ${{ steps.list.outputs.image_key_fedora }}
+      image_key_arch: ${{ steps.list.outputs.image_key_arch }}
     steps:
       - uses: actions/checkout@v4
       - id: list
+        env:
+          WANTED: ${{ inputs.scope || 'push' }}
+          LABELLED: ${{ contains(github.event.pull_request.labels.*.name, 'ci:all-flavors') }}
         run: |
           files=$(for f in tests/test_*.py; do basename "$f" .py; done | jq -R . | jq -sc .)
-          # the rig runs the flavors whose yaml says `# vmctl-ci: push`; `on-demand` ones (ISO installs,
-          # the foreign distros while their fetch rules land) are built by hand or by workflow_dispatch
-          flavors=$(for f in vm/flavors/*.yaml; do grep -q '^# vmctl-ci: push' "$f" && basename "$f" .yaml; done | jq -R . | jq -sc .)
+          # the rig runs the flavors whose yaml says `# vmctl-ci: push`; `on-demand` ones (ISO
+          # installs, the desktops with one measurement behind them) ride on scope=all or on the
+          # `ci:all-flavors` label of a pull request
+          push=$(for f in vm/flavors/*.yaml; do grep -q '^# vmctl-ci: push' "$f" && basename "$f" .yaml; done | jq -R . | jq -sc .)
+          all=$(for f in vm/flavors/*.yaml; do basename "$f" .yaml; done | jq -R . | jq -sc .)
+          # written as `if` and not `[ ... ] && x=y`: a run step is `bash -e`, and a test
+          # that is false at the head of an && list is the shape that reads like an error
+          scope=$WANTED
+          if [ "$LABELLED" = true ]; then scope=all; fi
+          if [ "$scope" = all ]; then flavors=$all; else flavors=$push; fi
           key=$(sha256sum .github/ci/Dockerfile | cut -c1-12)
-          { echo "files=$files"; echo "flavors=$flavors"; echo "image_key=$key"; } >> "$GITHUB_OUTPUT"
+          keyf=$(sha256sum .github/ci/Dockerfile.fedora | cut -c1-12)
+          keya=$(sha256sum .github/ci/Dockerfile.arch | cut -c1-12)
+          { echo "files=$files"; echo "flavors=$flavors"; echo "scope=$scope";
+            echo "image_key=$key"; echo "image_key_fedora=$keyf"; echo "image_key_arch=$keya"; } >> "$GITHUB_OUTPUT"
 
   image:
     needs: plan
@@ -51,7 +90,27 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        distro: ["24.04", "26.04", "26.10"]
+        include:
+          - distro: "24.04"
+            base: ubuntu:24.04
+            dockerfile: Dockerfile
+            key: ${{ needs.plan.outputs.image_key }}
+          - distro: "26.04"
+            base: ubuntu:26.04
+            dockerfile: Dockerfile
+            key: ${{ needs.plan.outputs.image_key }}
+          - distro: "26.10"
+            base: ubuntu:26.10
+            dockerfile: Dockerfile
+            key: ${{ needs.plan.outputs.image_key }}
+          - distro: fedora44
+            base: fedora:44
+            dockerfile: Dockerfile.fedora
+            key: ${{ needs.plan.outputs.image_key_fedora }}
+          - distro: arch
+            base: archlinux:base-devel
+            dockerfile: Dockerfile.arch
+            key: ${{ needs.plan.outputs.image_key_arch }}
     steps:
       - uses: actions/checkout@v4
       - uses: docker/login-action@v3
@@ -61,9 +120,9 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: build the image unless GHCR already has this Dockerfile's
         run: |
-          tag=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/fuckwayland-ci:${{ matrix.distro }}-${{ needs.plan.outputs.image_key }}
+          tag=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/fuckwayland-ci:${{ matrix.distro }}-${{ matrix.key }}
           if docker manifest inspect "$tag" >/dev/null 2>&1; then echo "have $tag"; exit 0; fi
-          docker build --build-arg BASE=ubuntu:${{ matrix.distro }} -t "$tag" -f .github/ci/Dockerfile .github/ci
+          docker build --build-arg BASE=${{ matrix.base }} -t "$tag" -f .github/ci/${{ matrix.dockerfile }} .github/ci
           docker push "$tag"
 
   lint:
@@ -73,7 +132,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       - run: uvx ruff check .
       - run: python3 scripts/check-docs.py
-      - run: for f in vm/*.sh vm/live-smoke.d/*.sh scripts/*.sh; do bash -n "$f" || exit 1; done; sh -n gnome/install-bridge.sh; sh -n gnome/install-overlap.sh; python3 -m py_compile vm/vmctl
+      - run: for f in vm/*.sh vm/live-smoke.d/*.sh scripts/*.sh; do bash -n "$f" || exit 1; done; sh -n gnome/install-bridge.sh; sh -n gnome/install-overlap.sh; sh -n packaging/common/enable-bridge; python3 -m py_compile vm/vmctl
 
   unit:
     needs: [plan, image]
@@ -100,6 +159,57 @@ jobs:
           runuser -u ci -- env HOME=/home/ci XDG_RUNTIME_DIR=/tmp/xdg-ci FUCKWAYLAND_PASSTHROUGH=never \
               dbus-run-session -- python3 tests/${{ matrix.file }}.py
 
+  # One job, the whole suite, on the two distros that are not Debian: the point here is the
+  # distro's python, dbus and originals under the same files. One JOB rather than one per
+  # file (105 files x 2 distros is not worth the runner minutes), but still one PROCESS per
+  # file, which is what `unit` does on every Ubuntu release and what the release gate does
+  # not: `python3 -m unittest discover -s tests` shares an interpreter across 105 files and
+  # this batch spent its last hours on two state leaks that only that sharing could produce
+  # (an `os.environ` replaced by a plain dict, a `gi` cleanup registered in the wrong LIFO
+  # order). Three more tests still flake under discover on the author's box and pass run
+  # alone; a red Fedora job for a leak in another file is a job nobody reads, and a leak is
+  # not what this job is here to measure. The recon measured discover at 234.6 s for the
+  # suite in an Arch chroot [recon2/pkg-arch.md]; the loop pays 105 interpreter startups on
+  # top of that, measured at 1.0 s in total on the author's box. Arch is rolling, so its
+  # job may fail without failing the run.
+  unit-distro:
+    needs: [plan, image]
+    runs-on: ubuntu-24.04
+    # 60 was the budget for a discover of a suite the recon timed at 234.6 s in a chroot
+    # with no compositor in it; these images have sway and Xvfb, so the live files run
+    # here and the whole thing is minutes, not seconds. 90 is room for a slow runner.
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - distro: fedora44
+            image: fedora44-${{ needs.plan.outputs.image_key_fedora }}
+          - distro: arch
+            image: arch-${{ needs.plan.outputs.image_key_arch }}
+    continue-on-error: ${{ matrix.distro == 'arch' }}
+    name: ${{ matrix.distro }} every test file
+    container:
+      image: ghcr.io/${{ github.repository_owner }}/fuckwayland-ci:${{ matrix.image }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+      options: --user root --init
+    steps:
+      - uses: actions/checkout@v4
+      - name: every tests/test_*.py, one process each, all of them before the verdict
+        run: |
+          chown -R ci "$PWD"
+          runuser -u ci -- env HOME=/home/ci XDG_RUNTIME_DIR=/tmp/xdg-ci FUCKWAYLAND_PASSTHROUGH=never \
+              dbus-run-session -- sh -c '
+                failed=
+                for f in tests/test_*.py; do
+                    echo "== $f"
+                    python3 "$f" || failed="$failed $f"
+                done
+                [ -z "$failed" ] || { echo "FAILED:$failed"; exit 1; }
+              '
+
   parity:
     needs: plan
     runs-on: ubuntu-24.04
@@ -113,6 +223,36 @@ jobs:
           nix build --no-link --print-out-paths --inputs-from . nixpkgs#xdotool nixpkgs#wmctrl > /tmp/oracles
           FW_ORACLE_PATH=$(sed 's|$|/bin|' /tmp/oracles | paste -sd:); export FW_ORACLE_PATH
           sh scripts/parity-oracle.sh
+
+  # The same comparison against a DISTRO's binary rather than a nix build. Arch is the only
+  # one shipping xdotool 4.20260303.1 and wmctrl 1.07, the two versions this project clones
+  # [recon2/pkg-arch.md]; Fedora's xdotool is 3.20211022.1, so test_cli_parity SKIPs there
+  # [recon2/fedora.md] and there is no fedora twin of this job.
+  #
+  # One thing here is NOT measured yet and this is the honest place for it:
+  # scripts/parity-oracle.sh gates on `wmctrl --help` being 6801 bytes, which is nixpkgs'
+  # plain 1.07 -- Ubuntu's 1.07+git20240228 is 7179 [scripts/parity-oracle.sh]. Arch ships
+  # 1.07-6 and nobody has counted its help. If this job dies at that gate the fix is a
+  # second accepted size in parity-oracle.sh, not a skip; continue-on-error is what keeps
+  # the first run from turning the push red while somebody counts it.
+  parity-arch:
+    needs: [plan, image]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    continue-on-error: true
+    container:
+      image: ghcr.io/${{ github.repository_owner }}/fuckwayland-ci:arch-${{ needs.plan.outputs.image_key_arch }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+      options: --user root --init
+    steps:
+      - uses: actions/checkout@v4
+      - name: FW_ORACLE_PATH=/usr/bin, then scripts/parity-oracle.sh
+        run: |
+          chown -R ci "$PWD"
+          runuser -u ci -- env HOME=/home/ci XDG_RUNTIME_DIR=/tmp/xdg-ci FUCKWAYLAND_PASSTHROUGH=never \
+              FW_ORACLE_PATH=/usr/bin dbus-run-session -- sh scripts/parity-oracle.sh
 
   deb:
     needs: [plan, image]
@@ -155,30 +295,187 @@ jobs:
           apt-get update -qq && apt-get install -y -qq --no-install-recommends ca-certificates >/dev/null
           apt-get install -y ./fuckwayland_*.deb
           for t in wdotool wwmctl wxprop wxrandr warandr wmirror; do printf '%s: ' $t; $t --version 2>&1 | head -1; done
-          ls /usr/share/gnome-shell/extensions/ /usr/lib/udev/rules.d/60-fuckwayland-uinput.rules /etc/xdg/autostart/fuckwayland-enable-bridge.desktop
+          ls /usr/share/gnome-shell/extensions/ /usr/lib/udev/rules.d/60-fuckwayland-uinput.rules \
+             /etc/xdg/autostart/fuckwayland-enable-bridge.desktop /usr/lib/fuckwayland/enable-bridge
           apt-get remove -y fuckwayland >/dev/null && ! command -v wdotool
 
+  # The rpm half of `deb`. Three noarch rpms out of one build, rpmlint against the checked-in
+  # rpmlintrc, and tests/test_release_rpm.py comparing the payload with the tree; the
+  # artifact is what the fedora44-* rig jobs install with --pkg.
+  rpm:
+    needs: [plan, image]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    container:
+      image: ghcr.io/${{ github.repository_owner }}/fuckwayland-ci:fedora44-${{ needs.plan.outputs.image_key_fedora }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+      options: --user root --init
+    steps:
+      - uses: actions/checkout@v4
+      - name: scripts/build-rpm.sh --no-deps --lint, then the payload against the tree
+        run: |
+          chown -R ci "$PWD"
+          runuser -u ci -- env HOME=/home/ci FUCKWAYLAND_PASSTHROUGH=never \
+              sh scripts/build-rpm.sh --no-deps --lint
+          runuser -u ci -- env HOME=/home/ci FUCKWAYLAND_PASSTHROUGH=never \
+              python3 tests/test_release_rpm.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rpms
+          path: dist/*.rpm
+
+  rpm-install:
+    needs: [plan, rpm]
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        tag: ["43", "44", "rawhide"]
+    continue-on-error: ${{ matrix.tag == 'rawhide' }}
+    name: dnf install on fedora ${{ matrix.tag }}
+    container:
+      image: fedora:${{ matrix.tag }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: rpms
+      - name: dnf install, then every tool answers
+        run: |
+          dnf -y install ./fuckwayland-*.noarch.rpm ./gnome-shell-extension-fuckwayland-*.noarch.rpm
+          for t in wdotool wwmctl wxprop wxrandr warandr wmirror; do printf '%s: ' $t; $t --version 2>&1 | head -1; done
+          ls /usr/share/gnome-shell/extensions/ /usr/lib/udev/rules.d/60-fuckwayland-uinput.rules \
+             /etc/xdg/autostart/fuckwayland-enable-bridge.desktop /usr/libexec/fuckwayland/enable-bridge
+          # what the package says it installed against what is on disk: mode, size, digest
+          # and mtime of every file of all three rpms. Silent and exit 0 when they agree;
+          # the %ghost stamp %post writes is skipped by rpm's own verification, which is
+          # why it is a %ghost. A scriptlet that edits a packaged file shows up here.
+          for p in fuckwayland gnome-shell-extension-fuckwayland-bridge gnome-shell-extension-fuckwayland-overlap; do
+              printf 'rpm -V %s: ' "$p"; rpm -V "$p" && echo ok
+          done
+          dnf -y remove fuckwayland >/dev/null && ! command -v wdotool
+
+  # Arch in one job -- build, namcap, install, every tool answers, remove -- because makepkg
+  # cannot run as root and the container already has the `ci` user that cannot either.
+  # continue-on-error for the reason the arch-* rig flavors are: `pacman -Syu` pins nothing.
+  pkgbuild:
+    needs: [plan, image]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    continue-on-error: true
+    container:
+      image: ghcr.io/${{ github.repository_owner }}/fuckwayland-ci:arch-${{ needs.plan.outputs.image_key_arch }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+      options: --user root --init
+    steps:
+      - uses: actions/checkout@v4
+      - name: scripts/build-pkgbuild.sh --no-deps --lint, then pacman -U and -R
+        run: |
+          chown -R ci "$PWD"
+          runuser -u ci -- env HOME=/home/ci FUCKWAYLAND_PASSTHROUGH=never \
+              sh scripts/build-pkgbuild.sh --no-deps --lint
+          runuser -u ci -- env HOME=/home/ci FUCKWAYLAND_PASSTHROUGH=never \
+              python3 tests/test_release_pkgbuild.py
+          pacman -U --noconfirm dist/fuckwayland-*.pkg.tar.zst
+          for t in wdotool wwmctl wxprop wxrandr warandr wmirror; do printf '%s: ' $t; $t --version 2>&1 | head -1; done
+          ls /usr/share/gnome-shell/extensions/ /usr/lib/udev/rules.d/60-fuckwayland-uinput.rules \
+             /etc/xdg/autostart/fuckwayland-enable-bridge.desktop /usr/lib/fuckwayland/enable-bridge
+          # the mtree of the installed package against what is on disk -- pacman's own
+          # `rpm -V`, and the same claim: `-Qkk` reads sizes and sha256s and not just
+          # presence. The stamp post_install writes lives outside the file list.
+          pacman -Qkk fuckwayland
+          pacman -R --noconfirm fuckwayland && ! command -v wdotool
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pkg
+          path: dist/*.pkg.tar.zst
+
+  # The flake, on a runner with nix: the five packages, `nix run`, the live half of
+  # tests/test_flake.py, and the three checks that do not boot a NixOS VM. The two that do
+  # are `nix-full`, because the recon measured the GNOME one at about fifty minutes of wall
+  # clock, nearly all of it substitution [recon2/pkg-nix.md].
+  nix:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      # the same extra-conf the vm job's installer passes: `nixos-sway` below is a NixOS VM
+      # test and wants the kvm feature to run at speed. nix adds kvm by itself when the
+      # daemon can open /dev/kvm, which an ubuntu-24.04 runner can today -- writing it down
+      # is what keeps the job from depending on that quietly [recon2/pkg-nix.md 4 measured
+      # the checks with these features set].
+      - uses: DeterminateSystems/nix-installer-action@main
+        with:
+          extra-conf: system-features = nixos-test benchmark big-parallel kvm
+      - name: tests/test_flake.py with FW_NIX_LIVE=1
+        run: FW_NIX_LIVE=1 FUCKWAYLAND_PASSTHROUGH=never python3 tests/test_flake.py
+      - name: the checks that boot nothing
+        run: nix build --no-link .#checks.x86_64-linux.module-eval .#checks.x86_64-linux.tools .#checks.x86_64-linux.nixos-sway
+
+  nix-full:
+    needs: plan
+    if: ${{ needs.plan.outputs.scope == 'all' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@main
+        with:
+          extra-conf: system-features = nixos-test benchmark big-parallel kvm
+      - name: the two NixOS VM checks
+        run: nix build --no-link .#checks.x86_64-linux.nixos-gnome .#checks.x86_64-linux.nixos-kde
+
   vm:
-    needs: [plan, deb]
+    needs: [plan, deb, rpm, pkgbuild]
+    # `needs` alone skips every dependant when a needed job FAILS, and that is exactly what
+    # a Fedora rpm build going wrong would do here: 25 Ubuntu rig jobs and 2 NixOS ones
+    # skipped over a package none of them installs. (`pkgbuild` and the arch flavors could
+    # not do that -- a continue-on-error job reports `success` to its dependants and merely
+    # leaves its artifact missing -- so `rpm` is the one this condition is written for; its
+    # own distro's rigs then fail at the download, which is where a missing rpm belongs.)
+    # The condition is the documented way to say "run anyway": plan and deb are the two
+    # every flavor really needs.
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.deb.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 150
     strategy:
       fail-fast: false
       matrix:
         flavor: ${{ fromJSON(needs.plan.outputs.flavors) }}
-    continue-on-error: ${{ startsWith(matrix.flavor, 'stonking-') }}
+    continue-on-error: ${{ startsWith(matrix.flavor, 'stonking-') || startsWith(matrix.flavor, 'arch-') }}
     name: rig ${{ matrix.flavor }}
     env:
       VMDATA: /mnt/vm-data
       VMIMAGES: /mnt/images
     steps:
       - uses: actions/checkout@v4
-      # the package the deb job just built from THIS tree replaces the committed one under
-      # release/, so the rig measures the push and not the last release
+      - id: flavor
+        name: what this flavor is built from and installs
+        run: |
+          y=vm/flavors/${{ matrix.flavor }}.yaml
+          hdr() { sed -n "s/^#[[:space:]]*$1:[[:space:]]*//p" "$y" | head -1; }
+          { echo "distro=$(hdr vmctl-distro)"; echo "nix=$(hdr vmctl-nix)"; } >> "$GITHUB_OUTPUT"
+      # the package THIS run built from THIS tree replaces the committed one under release/,
+      # so the rig measures the push and not the last release; the rpm and the pkg arrive the
+      # same way, into the directories vm/live-smoke.sh reads by default
       - uses: actions/download-artifact@v4
+        if: steps.flavor.outputs.distro == 'ubuntu'
         with:
           name: deb
           path: release
+      - uses: actions/download-artifact@v4
+        if: steps.flavor.outputs.distro == 'fedora'
+        with:
+          name: rpms
+          path: dist
+      - uses: actions/download-artifact@v4
+        if: steps.flavor.outputs.distro == 'arch'
+        with:
+          name: pkg
+          path: dist
       - name: the host vm/README.md asks for, KVM opened to the runner, /mnt for the images
         run: |
           sudo apt-get update -qq
@@ -190,10 +487,16 @@ jobs:
           sudo install -d -o "$USER" -g "$USER" /mnt/vm-data /mnt/images; df -h /mnt | tail -1
           curl -fsSL https://github.com/oras-project/oras/releases/download/v1.2.0/oras_1.2.0_linux_amd64.tar.gz | sudo tar -xz -C /usr/local/bin oras
           echo "${{ secrets.GITHUB_TOKEN }}" | oras login ghcr.io -u "${{ github.actor }}" --password-stdin
+      # only the `# vmctl-nix:` flavors: their golden is a nix build and nothing else here
+      # needs nix. A cache hit skips the build, so this is paid on a miss and on nothing else.
+      - uses: DeterminateSystems/nix-installer-action@main
+        if: steps.flavor.outputs.nix != ''
+        with:
+          extra-conf: system-features = nixos-test benchmark big-parallel kvm
       - name: the golden image, from the cache or built here
         run: scripts/ci-golden.sh ${{ matrix.flavor }}
-      - name: vm/live-smoke.sh --deb --remove
-        run: vm/live-smoke.sh ${{ matrix.flavor }} --deb --remove --heads 3 --cpus 2 --mem 3G
+      - name: vm/live-smoke.sh --pkg --remove
+        run: vm/live-smoke.sh ${{ matrix.flavor }} --pkg --remove --heads 3 --cpus 2 --mem 3G
       - uses: actions/upload-artifact@v4
         if: always()
         with:

@@ -1,0 +1,43 @@
+# The Arch unit-test, parity and PKGBUILD image, the second sibling of
+# .github/ci/Dockerfile.  Arch is the one distro whose own xdotool is the
+# version this project clones -- 4.20260303.1, the same build the nix-pinned
+# oracle is -- so tests/test_cli_parity.py compares real bytes here and the
+# `parity-arch` job of ci.yml exists for exactly that [recon2/pkg-arch.md].
+#
+# Rolling, so this image and every job that runs in it are continue-on-error in
+# ci.yml: `pacman -Syu` at build time pins nothing, and a package that moves
+# under an unchanged Dockerfile must not turn the run red on its own.
+# The recon measured `python3 -m unittest discover -s tests` at 234.6 s for
+# 3163 tests in an Arch chroot [recon2/pkg-arch.md].  The unit-distro job runs
+# the same files one process at a time rather than under discover, which costs
+# 105 interpreter startups (1.0 s in total, measured) and buys the isolation
+# `unit` has on every Ubuntu release; its budget is 90 minutes, because this
+# image has sway and Xvfb in it and the chroot had neither.
+#
+# labwc, wayfire, i3 and openbox stay out for the same reason as in
+# Dockerfile.fedora: the live compositor files run on the Ubuntu image, and there
+# only on the releases whose packages are the measured versions.
+ARG BASE=archlinux:base-devel
+FROM ${BASE}
+ARG NODE=v22.22.1
+ENV LANG=C.UTF-8
+RUN pacman-key --init && pacman -Syu --noconfirm --needed \
+        python python-gobject gtk3 gtk4 \
+        sway xorg-xwayland xterm foot xorg-server-xvfb xorg-xauth \
+        xorg-xprop xorg-xrandr xdotool wmctrl \
+        dbus glib2 gobject-introspection \
+        namcap python-build python-installer python-wheel python-setuptools acl \
+        curl xz zstd git procps-ng sudo \
+    && pacman -Scc --noconfirm
+# nodejs-lts-jod IS 22 today, but it is a rolling package name and
+# tests/test_bridge_js.py was written against one build; the tarball is the same
+# node on all three images and costs nothing to keep the same.
+RUN curl -fsSL "https://nodejs.org/dist/${NODE}/node-${NODE}-linux-x64.tar.xz" | tar -xJ -C /opt \
+    && ln -s "/opt/node-${NODE}-linux-x64/bin/node" /usr/local/bin/node && node --version
+# uid 1000 as on the other two images (SUDO_UID=1000 in the sudo fixtures), and
+# NOPASSWD sudo because makepkg REFUSES to run as root: the pkgbuild job is the
+# one job here that cannot be root even for a moment.
+RUN if getent passwd 1000 >/dev/null; then userdel -r "$(getent passwd 1000 | cut -d: -f1)"; fi \
+    && useradd -m -u 1000 -s /bin/bash ci \
+    && install -d -m 0700 -o ci -g ci /tmp/xdg-ci \
+    && echo 'ci ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/ci

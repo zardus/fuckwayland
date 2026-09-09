@@ -169,6 +169,68 @@ class TheTestCount(unittest.TestCase):
                                  % (counts[i], up, counts[i + 1]))
 
 
+class TheRigJobCount(unittest.TestCase):
+    """R26.  A `<n> jobs` sentence about a CI run is the size of the rig
+    matrix, and the rig matrix is `vm/flavors/*.yaml` filtered by one header.
+
+    Nothing in a document can be derived from the workflow by reading it: the
+    matrix is `${{ fromJSON(needs.plan.outputs.flavors) }}`, computed at run
+    time out of the directory.  So the directory is computed here instead, the
+    same way `plan` computes it, and any sentence that counts the jobs of a
+    push has to agree with it.  The per-push and on-demand counts themselves
+    are pinned once, in `tests/test_docs_matrix.py::TheRigImages`, and are
+    deliberately not pinned again here."""
+
+    #: paragraphs about a CI run rather than about anything else that has jobs
+    ABOUT_A_RUN = ("CI run", "rig ", "the rig", "smoke")
+    #: The lookbehind is not decoration: docs/Technical.md says "The 26.10 jobs
+    #: may fail without failing the run", and a plain `\b(\d+) jobs\b` reads
+    #: that as ten.
+    JOBS = re.compile(r"(?<![\d.])(\d+) jobs\b")
+
+    @classmethod
+    def setUpClass(cls):
+        cls.docs = support.documents()
+
+    def push_flavors(self):
+        """What `plan` emits for a push: `# vmctl-ci: push`, default push."""
+        out = []
+        for name in sorted(os.listdir(os.path.join(ROOT, "vm", "flavors"))):
+            if not name.endswith(".yaml"):
+                continue
+            with open(os.path.join(ROOT, "vm", "flavors", name),
+                      encoding="utf-8") as fh:
+                if "# vmctl-ci: push" in fh.read():
+                    out.append(name[:-5])
+        return out
+
+    def test_the_rig_matrix_is_the_push_flavors_of_the_directory(self):
+        """The premise, and the one line of the workflow this reads: a literal
+        list here would go stale the day a flavor lands."""
+        with open(os.path.join(ROOT, ".github", "workflows", "ci.yml"),
+                  encoding="utf-8") as fh:
+            workflow = fh.read()
+        self.assertIn("flavor: ${{ fromJSON(needs.plan.outputs.flavors) }}", workflow)
+        self.assertIn("grep -q '^# vmctl-ci: push'", workflow)
+        self.assertGreaterEqual(len(self.push_flavors()), 25)
+
+    def test_every_job_count_in_the_documents_is_that_number(self):
+        """README's whole-rig measurement says "of its 30 jobs"; 30 is what
+        the directory says today and the sentence moves with it."""
+        n = len(self.push_flavors())
+        found = []
+        for name, text in self.docs.items():
+            for para in text.split("\n\n"):
+                if not any(w in para for w in self.ABOUT_A_RUN):
+                    continue
+                for said in self.JOBS.findall(para):
+                    found.append((name, int(said)))
+        self.assertTrue(found, "no document counts the rig's jobs any more")
+        for name, said in found:
+            with self.subTest("%s: %d jobs" % (name, said)):
+                self.assertEqual(said, n)
+
+
 class TheDaemonsTwoTimeouts(unittest.TestCase):
     """The two numbers that decide when a forked daemon disappears."""
 
