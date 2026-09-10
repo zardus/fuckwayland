@@ -2,7 +2,7 @@
 """Session discovery under sudo / `ssh root@box`: which X socket and which
 Wayland socket the two finders answer with.
 
-`fwcommon/session.py` and `fwcommon/passthrough.py` answer different questions
+`w11common/session.py` and `w11common/passthrough.py` answer different questions
 (who the compositor is, versus what to hand the original tool) and each has
 its own copy of the search. This file pins the two rules they must agree on,
 both over temporary trees so the answers do not depend on the box the suite
@@ -30,14 +30,14 @@ sys.path.insert(0, ROOT)
 # repository root on sys.path (SuiteGuard in tests/test_passthrough.py).
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from fwcommon import passthrough
+from w11common import passthrough
 from support import env
-from fwcommon import session
+from w11common import session
 from wxrandr import cli as wxrandr_cli
 
 # The suite never hands a tool over to the real X11 one: see
 # tests/conftest.py (which covers pytest) and tests/test_passthrough.py.
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
 
 class Tree(unittest.TestCase):
@@ -48,7 +48,7 @@ class Tree(unittest.TestCase):
     OTHER = 125
 
     def setUp(self):
-        self.tmp = tempfile.mkdtemp(prefix="fw_sessdisc_")
+        self.tmp = tempfile.mkdtemp(prefix="w11_sessdisc_")
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         # the finders read the environment first: start from a session that
         # says nothing, so a developer's own DISPLAY cannot answer for them

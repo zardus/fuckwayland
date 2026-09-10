@@ -19,7 +19,7 @@ from unittest import mock
 
 # The suite never hands a tool over to the real X11 one: see
 # tests/conftest.py (which covers pytest) and tests/test_passthrough.py.
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
@@ -29,9 +29,9 @@ sys.path.insert(0, ROOT)
 # fails over a file that imports one of them without this line).
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from fwcommon.errors import CmdError
-from fwcommon import wayland_mini
-from fwcommon.wayland_mini import Cursor, WlConn
+from w11common.errors import CmdError
+from w11common import wayland_mini
+from w11common.wayland_mini import Cursor, WlConn
 from support import env as support_env
 from wl_fake import msg, wstr
 from wdotool import backend_sway
@@ -300,7 +300,7 @@ class WlrBackendGuards(unittest.TestCase):
                          WAYLAND_DISPLAY=os.path.basename(srv.path),
                          SWAYSOCK=None, I3SOCK=None, HYPRLAND_INSTANCE_SIGNATURE=None,
                          WAYFIRE_SOCKET=None, WDOTOOL_BACKEND=None,
-                         DBUS_SESSION_BUS_ADDRESS="unix:path=/nonexistent-fw-bus"):
+                         DBUS_SESSION_BUS_ADDRESS="unix:path=/nonexistent-w11-bus"):
             b = backend_detect.detect()
             self.assertEqual(b.name, "wlr")
             self.assertIs(b.c, backend_detect.session_conn())
@@ -715,7 +715,7 @@ def _eventually(pred, seconds=2.0):
 
 # -- D-Bus -----------------------------------------------------------------
 
-from fwcommon import dbus_mini as D
+from w11common import dbus_mini as D
 
 
 def _raw_bus():

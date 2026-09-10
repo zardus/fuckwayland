@@ -4,9 +4,9 @@ by side -- the two numbers _wayland_bbox() chooses between."""
 import os
 import sys
 
-sys.path.insert(0, os.environ.get("FW", "/root/fw"))
-from fwcommon import session                      # noqa: E402
-from fwcommon.wayland_mini import WlConn          # noqa: E402
+sys.path.insert(0, os.environ.get("W11", "/root/w11"))
+from w11common import session                      # noqa: E402
+from w11common.wayland_mini import WlConn          # noqa: E402
 
 hit = session.find_wayland_socket()
 conn = WlConn(hit[2])

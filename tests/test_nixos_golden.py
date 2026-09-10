@@ -37,7 +37,7 @@ import unittest
 # The suite never hands a tool over to the real X11 one: see tests/conftest.py
 # (which covers pytest) and tests/test_passthrough.py.  This line is what
 # covers `python3 tests/<file>.py`, where conftest is not loaded.
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
@@ -167,8 +167,8 @@ class StoreNames(unittest.TestCase):
     SAMPLE = """\
 /nix/store/1zpfzc9dhlnnpn9ba4zc4l6l3xxhvnnj-acl-2.3.2
 /nix/store/3nsm1mngr20mnb200sg6qyjncvxcr6bd-source
-/nix/store/81ij0n00byd8y1acw516bk70n0cmspix-fuckwayland-0.4.0
-/nix/store/na148lk31f9sc7s35myp7kvhlr9p9gvp-fuckwayland-udev-rules-0.4.0
+/nix/store/81ij0n00byd8y1acw516bk70n0cmspix-w11-0.4.0
+/nix/store/na148lk31f9sc7s35myp7kvhlr9p9gvp-w11-udev-rules-0.4.0
 /nix/store/x5v1n1gyni695jy7pqfc0l2br4kfm2ch-sway-1.12
 /nix/store/1zpfzc9dhlnnpn9ba4zc4l6l3xxhvnnj-acl-2.3.2
 """
@@ -183,8 +183,8 @@ class StoreNames(unittest.TestCase):
 
     def test_the_hash_and_the_prefix_go_and_the_rest_stays(self):
         self.assertEqual(self.names(self.SAMPLE),
-                         ["acl-2.3.2", "fuckwayland-0.4.0",
-                          "fuckwayland-udev-rules-0.4.0", "source", "sway-1.12"])
+                         ["acl-2.3.2", "source", "sway-1.12",
+                          "w11-0.4.0", "w11-udev-rules-0.4.0"])
 
     def test_a_duplicate_path_is_listed_once(self):
         """A closure lists the same store path once per reference; the file
@@ -336,7 +336,7 @@ class TheTwoFlavors(unittest.TestCase):
         with open(os.path.join(NIXOS, "flake.nix"), encoding="utf-8") as fh:
             flake = fh.read()
         self.assertIn("nixos-26.05", flake)
-        self.assertIn('inputs.fuckwayland.inputs.nixpkgs.follows = "nixpkgs"', flake)
+        self.assertIn('inputs.w11.inputs.nixpkgs.follows = "nixpkgs"', flake)
         for name in NIX_FLAVORS:
             with self.subTest(name):
                 self.assertIn('"%s"' % name, flake)
@@ -351,16 +351,16 @@ class TheTwoFlavors(unittest.TestCase):
         self.assertIn('"path": "../.."', lock)
 
     def test_both_specialisations_are_in_the_image(self):
-        """`switch-to-configuration test` into without-fuckwayland is the
+        """`switch-to-configuration test` into without-w11 is the
         offline analogue of `apt-get remove`: it reloads the udev rules and
         swaps the system path in one step, with no network and no rebuild.
         There is no other way to run the smoke's package axis on NixOS --
         the package is IN the image."""
         with open(os.path.join(NIXOS, "common.nix"), encoding="utf-8") as fh:
             common = fh.read()
-        self.assertIn("specialisation.without-fuckwayland.configuration", common)
-        self.assertIn("programs.fuckwayland.enable = lib.mkForce false", common)
-        self.assertIn("programs.fuckwayland = {", common)
+        self.assertIn("specialisation.without-w11.configuration", common)
+        self.assertIn("programs.w11.enable = lib.mkForce false", common)
+        self.assertIn("programs.w11 = {", common)
 
     def test_the_root_key_comes_from_the_environment_and_is_asserted(self):
         with open(os.path.join(NIXOS, "common.nix"), encoding="utf-8") as fh:

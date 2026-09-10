@@ -50,7 +50,7 @@ import time
 
 # org.gnome.Mutter.DisplayConfig.  `wxrandr/mutter.py` is the backend that speaks all
 # of this API and it is NOT imported here: the single-file `wdotool` zipapp bundles
-# fwcommon and wdotool only (scripts/build-pyz.sh), so a wxrandr import would make this
+# w11common and wdotool only (scripts/build-pyz.sh), so a wxrandr import would make this
 # work from the .deb and quietly not from the zipapp -- the worst shape a diagnostic can
 # have. What is needed of it instead is one arithmetic rule, `_logical_size` below, and a
 # test asserts the two copies agree
@@ -135,10 +135,10 @@ class MutterSource:
 
     def _connect(self):
         """A Bus on the graphical session's bus if DisplayConfig is on it, else None.
-        `wxrandr.mutter.probe()` in miniature, over fwcommon, for the reason at the
+        `wxrandr.mutter.probe()` in miniature, over w11common, for the reason at the
         top of the file."""
-        from fwcommon import session as wsession
-        from fwcommon.dbus_mini import Bus, DBusError
+        from w11common import session as wsession
+        from w11common.dbus_mini import Bus, DBusError
 
         hit = wsession.find_session_bus()
         if hit is None:

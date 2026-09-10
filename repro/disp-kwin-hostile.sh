@@ -3,7 +3,7 @@
 # repo's wire-level FakeKWin driven through the real Session.
 #   hostile_kwin.sh <tree>
 T=${1:-$HOME/work/sd-fix}
-export FUCKWAYLAND_PASSTHROUGH=never PYTHONPATH=$T
+export W11_PASSTHROUGH=never PYTHONPATH=$T
 cd "$T" || exit 1
 rm -f /tmp/kwin_path.txt
 setsid python3 "$(dirname "$0")/fake_kwin_server.py" "$T" two \

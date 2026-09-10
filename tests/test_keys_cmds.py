@@ -26,7 +26,7 @@ sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # Never hand this process over to the real X11 tools (see tests/conftest.py).
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
 from support import FakeEvdev, MOUSE_CAPS, env
 from wdotool import (cli, commands, daemon, keymap, keys_cmds,

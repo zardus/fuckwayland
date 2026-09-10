@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Unit tests for fwcommon.passthrough: session detection, finding the real
+"""Unit tests for w11common.passthrough: session detection, finding the real
 tool, the argv conventions of the four main()s, help/version, environment
 repair — and the guard that keeps this very test suite from exec'ing itself
 away on an X11 development box.
@@ -33,7 +33,7 @@ from unittest import mock
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-from fwcommon import distro, passthrough
+from w11common import distro, passthrough
 from wdotool import cli as wdotool_cli
 from wwmctl import cli as wwmctl_cli
 from wxprop import cli as wxprop_cli
@@ -43,10 +43,10 @@ from wxrandr import cli as wxrandr_cli
 # tests/conftest.py (which covers pytest) and tests/test_passthrough.py.
 # This line is what covers `python3 tests/<file>.py`, where conftest is
 # not loaded, and it reaches every subprocess a test spawns.
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
 FIXTURES = os.path.join(ROOT, "tests", "fixtures")
-SHIM = os.path.join(FIXTURES, "fw_shim.py")
+SHIM = os.path.join(FIXTURES, "w11_shim.py")
 FAKE = os.path.join(FIXTURES, "fake_real_tool.py")
 
 
@@ -66,7 +66,7 @@ class ExecCalled(BaseException):
 
 class Base(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.mkdtemp(prefix="fw_pt_")
+        self.tmp = tempfile.mkdtemp(prefix="w11_pt_")
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         self.uid = os.getuid()
         self.x11 = self.mkdir("x11")
@@ -292,10 +292,10 @@ class Detection(Base):
         self.wsock()
         wl = dict(XDG_RUNTIME_DIR=rd, WAYLAND_DISPLAY="wayland-0")
         self.assertEqual(self.kind(**wl), "wayland")
-        self.assertEqual(self.kind(FUCKWAYLAND_PASSTHROUGH="always", **wl), "x11")
+        self.assertEqual(self.kind(W11_PASSTHROUGH="always", **wl), "x11")
         self.assertEqual(self.kind(XDG_SESSION_TYPE="x11"), "x11")
         self.assertEqual(
-            self.kind(FUCKWAYLAND_PASSTHROUGH="never", XDG_SESSION_TYPE="x11"),
+            self.kind(W11_PASSTHROUGH="never", XDG_SESSION_TYPE="x11"),
             "wayland")
 
     def test_override_is_skippable_for_callers_that_never_hand_over(self):
@@ -304,7 +304,7 @@ class Detection(Base):
         for value, overridden in (("never", "wayland"), ("always", "x11")):
             passthrough.reset_cache()
             env = {"XDG_SESSION_TYPE": "x11", "DISPLAY": ":0",
-                   "FUCKWAYLAND_PASSTHROUGH": value}
+                   "W11_PASSTHROUGH": value}
             self.assertEqual(passthrough.session_kind(env=env), overridden)
             self.assertEqual(
                 passthrough.session_kind(env=env, respect_override=False),
@@ -319,7 +319,7 @@ class Detection(Base):
             passthrough.session_kind(env=env, respect_override=False), "x11")
 
     def test_per_tool_override_beats_the_global_one(self):
-        env = dict(FUCKWAYLAND_PASSTHROUGH="always", WDOTOOL_PASSTHROUGH="never",
+        env = dict(W11_PASSTHROUGH="always", WDOTOOL_PASSTHROUGH="never",
                    XDG_SESSION_TYPE="wayland")
         self.assertEqual(self.kind("xdotool", **env), "wayland")
         self.assertEqual(self.kind("wdotool", **env), "wayland")
@@ -329,7 +329,7 @@ class Detection(Base):
     def test_cache_is_keyed_on_the_environment(self):
         # ...and on respect_override, which asks a different question of the
         # same environment
-        env = {"XDG_SESSION_TYPE": "x11", "FUCKWAYLAND_PASSTHROUGH": "never"}
+        env = {"XDG_SESSION_TYPE": "x11", "W11_PASSTHROUGH": "never"}
         self.assertEqual(passthrough.session_kind(env=env), "wayland")
         self.assertEqual(passthrough.session_kind(env=env,
                                                   respect_override=False), "x11")
@@ -396,7 +396,7 @@ class RealTool(Base):
         except OSError as e:
             if e.errno != errno.EXDEV:
                 raise
-            near = tempfile.mkdtemp(prefix="fw_pt_link_", dir=os.path.dirname(SHIM))
+            near = tempfile.mkdtemp(prefix="w11_pt_link_", dir=os.path.dirname(SHIM))
             self.addCleanup(shutil.rmtree, near, True)
             link = os.path.join(near, "xdotool")
             os.link(SHIM, link)
@@ -411,12 +411,12 @@ class RealTool(Base):
             self.assertTrue(passthrough.is_us(alias))
             # 3: the head sniff (a pyz copy under a foreign name)
             pyz = self.touch(os.path.join(self.tmp, "d3", "xdotool"),
-                             "#!/usr/bin/env python3\n# fuckwayland-clone: wdotool\n")
+                             "#!/usr/bin/env python3\n# w11-clone: wdotool\n")
             os.chmod(pyz, 0o755)
             self.assertTrue(passthrough.is_us(pyz))
             # ...but the bare project word on its own is not the stamp
             near = self.touch(os.path.join(self.tmp, "d3b", "xdotool"),
-                              "#!/bin/sh\n# a fuckwayland-adjacent wrapper\n")
+                              "#!/bin/sh\n# a w11-adjacent wrapper\n")
             os.chmod(near, 0o755)
             self.assertFalse(passthrough.is_us(near))
             # a compiled binary is never us: we are pure Python
@@ -430,7 +430,7 @@ class RealTool(Base):
         install a package they already have."""
         d = self.mkdir("wrap")
         w = self.touch(os.path.join(d, "wmctrl"),
-                       "#!/bin/sh\n# fuckwayland fallback wrapper\n"
+                       "#!/bin/sh\n# w11 fallback wrapper\n"
                        'exec /usr/bin/wmctrl-real "$@"\n')
         os.chmod(w, 0o755)
         with mock.patch.object(sys, "argv", ["/nowhere/else"]):
@@ -481,7 +481,7 @@ class ArgvConventions(Base):
     has to hand the child the same command line the user typed."""
 
     def hook_env(self, **extra):
-        env = {"FUCKWAYLAND_PASSTHROUGH": "always", "PATH": "",
+        env = {"W11_PASSTHROUGH": "always", "PATH": "",
                "WDOTOOL_REAL_XDOTOOL": FAKE, "WWMCTL_REAL_WMCTRL": FAKE,
                "WXPROP_REAL_XPROP": FAKE, "WXRANDR_REAL_XRANDR": FAKE}
         env.update(extra)
@@ -553,7 +553,7 @@ class SuiteGuard(Base):
     belts; this class proves both are live."""
 
     def test_the_escape_hatch_is_in_effect_right_now(self):
-        self.assertEqual(os.environ.get("FUCKWAYLAND_PASSTHROUGH"), "never")
+        self.assertEqual(os.environ.get("W11_PASSTHROUGH"), "never")
         self.assertEqual(
             passthrough.session_kind("xdotool", os.environ), "wayland",
             "the suite's escape hatch is not in effect")
@@ -563,12 +563,12 @@ class SuiteGuard(Base):
         sets the hatch, not just this file's own line."""
         import importlib
         sys.path.insert(0, os.path.join(ROOT, "tests"))
-        self.addCleanup(os.environ.__setitem__, "FUCKWAYLAND_PASSTHROUGH",
-                        os.environ["FUCKWAYLAND_PASSTHROUGH"])
-        del os.environ["FUCKWAYLAND_PASSTHROUGH"]
+        self.addCleanup(os.environ.__setitem__, "W11_PASSTHROUGH",
+                        os.environ["W11_PASSTHROUGH"])
+        del os.environ["W11_PASSTHROUGH"]
         import conftest
         importlib.reload(conftest)
-        self.assertEqual(os.environ.get("FUCKWAYLAND_PASSTHROUGH"), "never")
+        self.assertEqual(os.environ.get("W11_PASSTHROUGH"), "never")
 
     def test_every_test_file_sets_the_escape_hatch(self):
         """The suite is run file by file (`python3 tests/test_foo.py`), where
@@ -581,7 +581,7 @@ class SuiteGuard(Base):
             if not (name.startswith("test_") and name.endswith(".py")):
                 continue
             with open(os.path.join(tests, name)) as f:
-                if 'FUCKWAYLAND_PASSTHROUGH"] = "never"' not in f.read():
+                if 'W11_PASSTHROUGH"] = "never"' not in f.read():
                     missing.append(name)
         self.assertEqual(missing, [])
 
@@ -750,7 +750,7 @@ class SuiteGuard(Base):
         p = subprocess.run([sys.executable, "-m", "unittest",
                             "tests/test_vkbd.py"],
                            cwd=ROOT, capture_output=True, text=True, timeout=300,
-                           env=dict(os.environ, FUCKWAYLAND_PASSTHROUGH="never"))
+                           env=dict(os.environ, W11_PASSTHROUGH="never"))
         self.assertNotIn("ModuleNotFoundError", p.stderr)
         self.assertNotIn("_FailedTest", p.stderr)
         ran = re.search(r"^Ran (\d+) tests? in ", p.stderr, re.M)
@@ -762,7 +762,7 @@ class SuiteGuard(Base):
         means we are a library, and a library never replaces its caller's
         process — even on a box that really is X11."""
         self.stub_execve()
-        env = {"FUCKWAYLAND_PASSTHROUGH": "always", "PATH": "",
+        env = {"W11_PASSTHROUGH": "always", "PATH": "",
                "WDOTOOL_REAL_XDOTOOL": FAKE, "WWMCTL_REAL_WMCTRL": FAKE,
                "WXPROP_REAL_XPROP": FAKE, "WXRANDR_REAL_XRANDR": FAKE,
                "DISPLAY": ":0", "XDG_SESSION_TYPE": "x11"}
@@ -803,7 +803,7 @@ class SuiteGuard(Base):
         with open(os.path.join(ROOT, "tests", "test_cli_parity.py")) as f:
             src = f.read()
         head = src.split("compare(")[0]
-        self.assertIn("FUCKWAYLAND_PASSTHROUGH", head)
+        self.assertIn("W11_PASSTHROUGH", head)
         self.assertIn("never", head)
 
 
@@ -985,7 +985,7 @@ class EnvRepair(Base):
         # with a target uid it is that user's dir and nobody else's (the
         # last-resort session.find_xauthority() reads the real box, so it is
         # stubbed out here rather than left to the machine the tests run on)
-        with mock.patch("fwcommon.session.find_xauthority", lambda *a, **k: None):
+        with mock.patch("w11common.session.find_xauthority", lambda *a, **k: None):
             self.assertIsNone(passthrough.find_xauthority({}, 126))
 
     def test_gdms_cookie_one_directory_down_beats_a_stale_home_one(self):
@@ -1087,7 +1087,7 @@ class WarandrBackend(Base):
         self.assertEqual(b.argv, ["xrandr"])
 
     def test_the_escape_hatch_does_not_reach_warandr(self):
-        """FUCKWAYLAND_PASSTHROUGH is about handing over to the original, and
+        """W11_PASSTHROUGH is about handing over to the original, and
         warandr never hands over. `never` — which the README documents and
         every tests/test_*.py exports — must not make an X11 box select
         wxrandr, whose every Apply would then say "Can't open display"."""
@@ -1096,7 +1096,7 @@ class WarandrBackend(Base):
             passthrough.reset_cache()
             b = randr.choose({"XDG_SESSION_TYPE": "x11", "DISPLAY": ":0",
                               "PATH": "/nonexistent",
-                              "FUCKWAYLAND_PASSTHROUGH": value})
+                              "W11_PASSTHROUGH": value})
             self.assertEqual(b.argv, ["xrandr"], value)
             self.assertFalse(b.wayland, value)
             self.assertEqual(b.word, "xrandr", value)
@@ -1108,7 +1108,7 @@ class WarandrBackend(Base):
             b = randr.choose({"XDG_RUNTIME_DIR": rd,
                               "WAYLAND_DISPLAY": "wayland-1",
                               "PATH": "/nonexistent",
-                              "FUCKWAYLAND_PASSTHROUGH": value})
+                              "W11_PASSTHROUGH": value})
             self.assertTrue(b.wayland, value)
             self.assertEqual(b.word, "wxrandr", value)
 
@@ -1242,7 +1242,7 @@ class RootWithNoSession(unittest.TestCase):
         # socket this uid owns and not what this test is about, so it is taken out of the picture.
         with mock.patch.object(passthrough.os, "getuid", lambda: 0), \
                 mock.patch.object(passthrough.os, "geteuid", lambda: 0), \
-                mock.patch("fwcommon.session.find_xauthority", lambda *a, **k: None):
+                mock.patch("w11common.session.find_xauthority", lambda *a, **k: None):
             env = passthrough.repair_x_env({})
         self.assertEqual(env.get("DISPLAY"), ":0")
         # the socket is ours (the victim uid is somebody else here), so no cookie
@@ -1275,7 +1275,7 @@ class MeasuredSessions(Base):
         names that select the Cinnamon window backend and the Muffin display backend.  Both are on the bus
         here, and the answer is still x11, because the bus is not consulted at all."""
         from test_dbus_mini import MockBus
-        from fwcommon.dbus_mini import Bus
+        from w11common.dbus_mini import Bus
         from wdotool import backend_detect
         self.x11_session()
         mock_bus = MockBus()
@@ -1300,7 +1300,7 @@ class MeasuredSessions(Base):
         compositor is running under an X server that owns the layout, the input and the property store, and
         the handover is settled before any of it is asked [M recon2/i3.md §2a: `WDOTOOL_BACKEND=sway
         getactivewindow` printed the X id, i.e. the real xdotool answered]."""
-        from fwcommon import session as wsession
+        from w11common import session as wsession
         self.x11_session()
         sockpath = os.path.join(self.runtime_dir(), "ipc-socket.4242")
         srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -1399,7 +1399,7 @@ class MissingOriginalPerDistro(Base):
     named on Fedora where the package is called `xprop` and `x11-utils` does not exist [M recon2/fedora.md],
     and `x11-xserver-utils` on Arch where it is `xorg-xrandr` [M recon2/arch.md].
 
-    The family comes from `fwcommon.distro`, whose seam is a module constant rather than an environment
+    The family comes from `w11common.distro`, whose seam is a module constant rather than an environment
     variable, so these plant os-release files and point the constant at them.  The subprocess half of the
     handover (a real exit 127 through a real PATH) is tests/test_passthrough_exec.py:NoOriginal, which runs
     on whatever family the box really is."""
@@ -1436,9 +1436,9 @@ class MissingOriginalPerDistro(Base):
         A context manager rather than an addCleanup: the table below plants twenty times inside one test, and
         the obvious way to undo a plant mid-test -- `self.doCleanups()` -- also runs setUp's cleanups, which
         deletes `self.tmp` (the next `touch()` silently recreates it and nothing removes it again: one
-        /tmp/fw_pt_* per run, 16 of them on this box) and drops the `_X11_SOCK_DIR`/`_LOGIND_DIR` patches for
+        /tmp/w11_pt_* per run, 16 of them on this box) and drops the `_X11_SOCK_DIR`/`_LOGIND_DIR` patches for
         every remaining subTest."""
-        from fwcommon import distro
+        from w11common import distro
         path = os.path.join(self.tmp, name)
         if body is None:
             path = os.path.join(self.tmp, "no-such-os-release")
@@ -1458,7 +1458,7 @@ class MissingOriginalPerDistro(Base):
                     with self.plant(body, name="os-release." + family):
                         self.assertEqual(
                             passthrough._missing_message(tool),
-                            "%s: this is fuckwayland's clone and this is an X11 session, but no real %s was "
+                            "%s: this is w11's clone and this is an X11 session, but no real %s was "
                             "found on PATH -- install it (%s) or set %s=/path/to/%s\n"
                             % (tool, tool, self.WANT[family][tool],
                                passthrough._OVERRIDE[tool], tool))
@@ -1490,7 +1490,7 @@ class WarandrGtkHintPerDistro(Base):
     `nixpkgs.python3Packages.pygobject3 nixpkgs.gtk3` [M recon2/nixos.md] -- and nix-env is per-user, so
     NixOS is the one family whose line carries no `sudo`.
 
-    Kept beside the exit-127 table above because it is the same table (`fwcommon.distro`) and the same claim;
+    Kept beside the exit-127 table above because it is the same table (`w11common.distro`) and the same claim;
     the `GTK_HINT` constant tests/test_warandr_model.py pins is the Debian rendering and does not move."""
 
     #: family -> the whole line, with the error text already in it
@@ -1539,7 +1539,7 @@ class WarandrGtkHintPerDistro(Base):
     @contextlib.contextmanager
     def plant_release(self, body):
         """`distro.OS_RELEASE` pointed at a planted file, or at nothing when `body` is None."""
-        from fwcommon import distro
+        from w11common import distro
         path = os.path.join(self.tmp, "os-release")
         if body is None:
             path = os.path.join(self.tmp, "no-such-os-release")

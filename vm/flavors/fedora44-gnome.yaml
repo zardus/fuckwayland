@@ -8,9 +8,9 @@
 # nobody here has ever run.  Three things are Ubuntu-shaped in the tree and are measured
 # against a second distribution for the first time here --
 #   * the bridge outside Debian packaging: the extension loaded and took
-#     org.fuckwayland.Bridge on Fedora's gnome-shell 50.4 in the recon, but only under a
+#     org.w11.Bridge on Fedora's gnome-shell 50.4 in the recon, but only under a
 #     headless shell; every window command through it is still unmeasured [recon2/fedora 3.2].
-#   * the overlap route's private struct size.  gnome/fuckwayland-overlap@fuckwayland/
+#   * the overlap route's private struct size.  gnome/w11-overlap@w11/
 #     generations.json records MetaMonitorsConfig at 80 bytes for Ubuntu's mutter 50.1 and
 #     has no row for Fedora's 50.4; the extension refuses unless its own read agrees, so
 #     `wxrandr --gnome-overlap-status` here is an `xwant` in gnome.sh until this builds once

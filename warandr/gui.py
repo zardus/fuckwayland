@@ -1221,7 +1221,7 @@ class Application:
             "%s.\n\n"
             "GNOME's Mutter refuses monitors that are not edge-adjacent, so this "
             "layout cannot be applied the way every other one is.\n\n"
-            "warandr can apply it anyway, through the fuckwayland-overlap GNOME "
+            "warandr can apply it anyway, through the w11-overlap GNOME "
             "Shell extension: it writes the two numbers that are a monitor's "
             "position inside gnome-shell -- 8 bytes per monitor -- and then asks "
             "Mutter to apply the result.\n\n"
@@ -1344,7 +1344,7 @@ class Application:
     def _overlap_applied_message(self, layout, agreed):
         """What the status bar says after warandr has done the unusual thing:
         that it was unusual, that it is temporary, and what became of the box."""
-        text = ("applied through the fuckwayland-overlap extension a layout GNOME "
+        text = ("applied through the w11-overlap extension a layout GNOME "
                 "refuses (%s); not saved, gone at the next login"
                 % "; ".join(self.overlap_shared(layout)))
         if agreed is None:
@@ -1394,7 +1394,7 @@ class Application:
                        "X11 through xrandr.\nA drop-in arandr clone; layout "
                        "scripts are interchangeable.\n\n"
                        + self.backend.detail())
-        d.set_website("https://github.com/zardus/fuckwayland")
+        d.set_website("https://github.com/zardus/w11")
         d.set_logo_icon_name("video-display")
         d.run()
         d.destroy()

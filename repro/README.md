@@ -79,7 +79,7 @@ head.
 
 | script | what it is |
 |---|---|
-| `scale-probe.py` | guest side, run as **root** against a repo tree at `$FW` (default `/root/fw`): takes the four readings for a list of targets and prints JSON. A target is `[x, y]`, or `{"frac": [fx, fy]}` of the layout box, or `{"mon": i, "off": [dx, dy]}` from one monitor's own origin |
+| `scale-probe.py` | guest side, run as **root** against a repo tree at `$W11` (default `/root/w11`): takes the four readings for a list of targets and prints JSON. A target is `[x, y]`, or `{"frac": [fx, fy]}` of the layout box, or `{"mon": i, "off": [dx, dy]}` from one monitor's own origin |
 | `scale-runmatrix.py` | host side: `scale-runmatrix.py <vm> <outdir> <configs.json>` applies each layout (heads, scales) and runs the probe in the guest |
 | `scale-spaces.py` | scores every reading against BOTH candidate maps — `dev = (asked - origin) * scale` and `dev = asked - origin` — and reports the one whose residual is *constant*. It determines the pixel space rather than assuming one: the constant is the cursor hotspot, the spread is the error |
 | `scale-summary.py` | one line per config: the worst error each reading showed |

@@ -195,8 +195,8 @@ def _pinned_group(forced=None):
 
 def _fetch_wayland(timeout: float, mods_wait: float):
     """(keymap text, active group or None, modifiers event seen?)."""
-    from fwcommon import session
-    from fwcommon.wayland_mini import WlConn
+    from w11common import session
+    from w11common.wayland_mini import WlConn
 
     hit = session.find_wayland_socket()
     if hit is None:
@@ -1055,7 +1055,7 @@ class KwinLayouts:
         auth through a forked child owning the socket (measured at 3 ms)."""
         if self.bus is not None:
             return self.bus
-        from fwcommon.dbus_mini import Bus
+        from w11common.dbus_mini import Bus
         try:
             bus = Bus(self.address, timeout=KWIN_TIMEOUT)
         except Exception:
@@ -1153,7 +1153,7 @@ def kwin_group(text: str):
 #   * dconf itself is not readable over the bus at all: `ca.desrt.dconf`
 #     publishes `Init`, `Change` and the `Notify` signal and no read method.
 #     The portal is the only route, and it needs nothing installed and no new
-#     dependency -- `fwcommon/dbus_mini.py` speaks it as it stands.
+#     dependency -- `w11common/dbus_mini.py` speaks it as it stands.
 #
 # Turning the source's index into a keymap group is one rule with one wrinkle.
 # Mutter compiles the sources in order and ALWAYS appends its own `us` group
@@ -1264,7 +1264,7 @@ class GnomeInputSources:
         """(uid, bus address) of the graphical session, or None."""
         if self.address is not None:
             return self.uid, self.address
-        from fwcommon import session
+        from w11common import session
         hit = session.find_user_bus()
         if hit is None:
             return None
@@ -1279,7 +1279,7 @@ class GnomeInputSources:
         hit = self._target()
         if hit is None:
             return None
-        from fwcommon.dbus_mini import Bus
+        from w11common.dbus_mini import Bus
         try:
             bus = Bus(hit[1], timeout=GNOME_TIMEOUT)
         except Exception:
@@ -1349,7 +1349,7 @@ def _read_all_as(uid: int, addr: str, timeout: float):
     process that is not dumpable has a `/proc/self` only root may open --
     which is precisely what the portal is not."""
     import json
-    from fwcommon.dbus_mini import Bus, DBusError, ERR
+    from w11common.dbus_mini import Bus, DBusError, ERR
     r, w = os.pipe()
     with warnings.catch_warnings():
         # 3.12 warns about fork() in a threaded process; the child does socket
@@ -1371,7 +1371,7 @@ def _read_all_as(uid: int, addr: str, timeout: float):
             # past its death. It needs its pipe and nothing else.
             os.closerange(3, w)
             os.closerange(w + 1, _fd_bound())
-            from fwcommon.dbus_mini import _drop_privileges
+            from w11common.dbus_mini import _drop_privileges
             _drop_privileges(uid)
             _set_dumpable()
             with Bus(addr, timeout=timeout) as bus:
@@ -1699,7 +1699,7 @@ class HyprLayouts(_IpcLayouts):
         super().__init__()
 
     def _index(self):
-        from fwcommon import session
+        from w11common import session
         from wdotool.hypr_ipc import HyprIPC
 
         path = self.sockpath or session.find_hypr_socket()
@@ -1750,8 +1750,8 @@ class WayfireLayouts(_IpcLayouts):
         super().__init__()
 
     def _index(self):
-        from fwcommon import session
-        from fwcommon.errors import CmdError
+        from w11common import session
+        from w11common.errors import CmdError
         from wdotool.backend_wayfire import _WayfireIPC
 
         path = self.sockpath or session.find_wayfire_socket()
@@ -1851,7 +1851,7 @@ class CinnamonInputSources(_IpcLayouts):
         """The session bus, with Cinnamon on it, or None."""
         if self.bus is not None:
             return self.bus
-        from fwcommon.dbus_mini import Bus
+        from w11common.dbus_mini import Bus
         try:
             bus = Bus(self.address, timeout=CINNAMON_TIMEOUT)
         except Exception:
@@ -1868,7 +1868,7 @@ class CinnamonInputSources(_IpcLayouts):
         return bus
 
     def _index(self):
-        from fwcommon.dbus_mini import DBusError
+        from w11common.dbus_mini import DBusError
 
         bus = self._connect()
         if bus is None:

@@ -4,7 +4,7 @@
 # on NixOS; it printed everything and asserted nothing, and it passed in
 # 46.98 s of test script [recon2/pkg-nix §2c, recon2/pkg-nix/nixostest.nix].
 # Here the prints become assertions and the machine gains
-# `programs.fuckwayland.enable`, which is the difference that matters: the
+# `programs.w11.enable`, which is the difference that matters: the
 # recon's guest had /dev/uinput at `crw------- root root` and `wdotool key a`
 # printed its fallback notice and typed through zwp_virtual_keyboard_v1.  With
 # the module's udev rule the same command must take the device instead, and
@@ -12,7 +12,7 @@
 { self, pkgs }:
 
 pkgs.testers.runNixOSTest {
-  name = "fuckwayland-nixos-sway";
+  name = "w11-nixos-sway";
 
   nodes.machine = { lib, ... }: {
     imports = [ self.nixosModules.default ];
@@ -31,7 +31,7 @@ pkgs.testers.runNixOSTest {
     services.getty.autologinUser = "alice";
 
     programs.sway.enable = true;
-    programs.fuckwayland = {
+    programs.w11 = {
       enable = true;
       # The GUI is a package of its own and `warandr --command` is one of the
       # claims under test, so the option that installs it is under test too --

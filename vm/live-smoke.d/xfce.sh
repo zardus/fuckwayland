@@ -17,7 +17,7 @@
 # below are Debian's: the packages that carry the originals are x11-utils and
 # x11-xserver-utils here, `xprop`/`xrandr` on Fedora and `xorg-xprop`/
 # `xorg-xrandr` on Arch [recon2/fedora 4, recon2/arch 2].  Nothing in this file
-# says a package name -- the tools do, out of fwcommon's own distro table -- so
+# says a package name -- the tools do, out of w11common's own distro table -- so
 # the day an X11 session exists on a non-Ubuntu flavor these checks port with
 # no edit.
 
@@ -31,17 +31,17 @@
 # from the seated session, asserting the handover.
 SMOKE_PHASES="install passthrough"
 EDITOR_CLASS=xterm
-ARGV_LOG=/tmp/fw-argv.log
+ARGV_LOG=/tmp/w11-argv.log
 
-# `-e`, and not a bare `xterm -T fwsmoke`: an interactive bash retitles the window on its first prompt
+# `-e`, and not a bare `xterm -T w11smoke`: an interactive bash retitles the window on its first prompt
 # (Ubuntu's /etc/skel/.bashrc, the `xterm*|rxvt*)` case, which prepends `\[\e]0;\u@\h: \w\a\]` to PS1 --
 # not /etc/bash.bashrc, whose PROMPT_COMMAND for the same case is commented out on Ubuntu).  Measured on
 # the resolute-i3 golden on 2026-09-09: about a second after the window appeared `wmctrl -l` said
-# `test@resolute-i3-smoke: ~` and `wdotool search --name fwsmoke` matched nothing, and the first live i3
-# run died at `no fwsmoke xterm to work on`.  With `-e` there is no interactive shell, so the title xterm
+# `test@resolute-i3-smoke: ~` and `wdotool search --name w11smoke` matched nothing, and the first live i3
+# run died at `no w11smoke xterm to work on`.  With `-e` there is no interactive shell, so the title xterm
 # is given is the title it keeps.  Every X11 step file inherits this one [requests-batch-11.md item 1].
 editor_start() {
-    guest "setsid nohup xterm -T fwsmoke -e sh -c 'while :; do sleep 3600; done' \
+    guest "setsid nohup xterm -T w11smoke -e sh -c 'while :; do sleep 3600; done' \
            >/dev/null 2>&1 </dev/null & sleep 2; true" >/dev/null || true
 }
 editor_save()  { :; }
@@ -52,11 +52,11 @@ editor_save()  { :; }
 install_shims() {
     # Written by the guest's own shell, one heredoc-free line at a time: `$t`
     # expands here, `\$*` and `\$@` are left for the shim itself to expand when
-    # the tool under test execs it.  /tmp/fw-argv.log is $ARGV_LOG below.
+    # the tool under test execs it.  /tmp/w11-argv.log is $ARGV_LOG below.
     root 'for t in xdotool wmctrl xprop xrandr; do
             [ -x /usr/bin/$t ] || continue
             { echo "#!/bin/sh"
-              echo "echo \"$t:\$*\" >> /tmp/fw-argv.log"
+              echo "echo \"$t:\$*\" >> /tmp/w11-argv.log"
               echo "exec /usr/bin/$t \"\$@\""
             } > /usr/local/bin/$t
             chmod 0755 /usr/local/bin/$t
@@ -72,8 +72,8 @@ phase_passthrough() {
     editor_start
     local out
     # 1. argv untouched, tool by tool.
-    guest "wdotool search --name fwsmoke" >/dev/null 2>&1 || true
-    want "wdotool handed its argv to the real xdotool untouched" "^xdotool:search --name fwsmoke$" \
+    guest "wdotool search --name w11smoke" >/dev/null 2>&1 || true
+    want "wdotool handed its argv to the real xdotool untouched" "^xdotool:search --name w11smoke$" \
          "$(guest "cat $ARGV_LOG" || true)"
     guest "wwmctl -l -G" >/dev/null 2>&1 || true
     want "wwmctl handed its argv to the real wmctrl untouched" "^wmctrl:-l -G$" "$(guest "cat $ARGV_LOG" || true)"

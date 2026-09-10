@@ -12,7 +12,7 @@
 #     PAINT_SCRIPT's gnome branch are comm matches.  vm/vmctl's pg() builds
 #     that name from the plain one and matches either [recon2/nixos §6.1].
 #
-# The bridge is not named here on purpose: programs.fuckwayland.gnomeBridge
+# The bridge is not named here on purpose: programs.w11.gnomeBridge
 # defaults to services.desktopManager.gnome.enable, so this flavor is also the
 # rig's test of that default.
 { pkgs, lib, ... }:

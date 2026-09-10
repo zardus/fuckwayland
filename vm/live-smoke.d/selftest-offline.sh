@@ -132,10 +132,10 @@ cat > "$WORK/busrec-ok.txt" <<'REC'
 ### pgrep -x dbus-monitor
 4242
 ### rc=0
-### wc -l < $HOME/fw-bus.log || echo 0
+### wc -l < $HOME/w11-bus.log || echo 0
 12
 ### rc=0
-### wc -l < $HOME/fw-bus.log || echo 0
+### wc -l < $HOME/w11-bus.log || echo 0
 57
 ### rc=0
 REC
@@ -144,10 +144,10 @@ REC
 cat > "$WORK/busrec-none.txt" <<'REC'
 ### pgrep -x dbus-monitor
 ### rc=1
-### wc -l < $HOME/fw-bus.log || echo 0
+### wc -l < $HOME/w11-bus.log || echo 0
 0
 ### rc=0
-### wc -l < $HOME/fw-bus.log || echo 0
+### wc -l < $HOME/w11-bus.log || echo 0
 0
 ### rc=0
 REC

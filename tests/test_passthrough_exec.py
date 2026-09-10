@@ -3,7 +3,7 @@
 
 The tree mirrors what the README tells people to build:
 
-    <tmp>/local/{xdotool,wmctrl,xprop,xrandr}  -> tests/fixtures/fw_shim.py
+    <tmp>/local/{xdotool,wmctrl,xprop,xrandr}  -> tests/fixtures/w11_shim.py
                                                   (us, "installed over")
     <tmp>/bin/{xdotool,wmctrl,xprop,xrandr}    -> tests/fixtures/fake_real_tool.py
                                                   (the distribution's)
@@ -11,7 +11,7 @@ The tree mirrors what the README tells people to build:
 
 with `PATH=<tmp>/local:<tmp>/bin:<tmp>/pybin` and nothing else, so no real
 xdotool on the developer's box can take part. The session is described
-entirely by the seam directories (`$FW_SHIM_SEAMS`) and the environment.
+entirely by the seam directories (`$W11_SHIM_SEAMS`) and the environment.
 
 The crisp assertion that this is an `execve` and not a `subprocess` is that
 the *fake's own pid, logged from inside it, equals the pid we started*.
@@ -30,14 +30,14 @@ import unittest
 # tests/conftest.py (which covers pytest) and tests/test_passthrough.py.
 # This line is what covers `python3 tests/<file>.py`, where conftest is
 # not loaded, and it reaches every subprocess a test spawns.
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
-from fwcommon import distro  # noqa: E402
+from w11common import distro  # noqa: E402
 
 FIXTURES = os.path.join(ROOT, "tests", "fixtures")
-SHIM = os.path.join(FIXTURES, "fw_shim.py")
+SHIM = os.path.join(FIXTURES, "w11_shim.py")
 FAKE = os.path.join(FIXTURES, "fake_real_tool.py")
 TOOLS = ("xdotool", "wmctrl", "xprop", "xrandr")
 HAVE_BASH = shutil.which("bash")
@@ -47,7 +47,7 @@ HEAD = shutil.which("head")
 
 class Tree(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.mkdtemp(prefix="fw_exec_")
+        self.tmp = tempfile.mkdtemp(prefix="w11_exec_")
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         self.local = self.mkdir("local")
         self.bin = self.mkdir("bin")
@@ -77,7 +77,7 @@ class Tree(unittest.TestCase):
             "XDG_SESSION_TYPE": "x11",
             "DISPLAY": ":0",
             "FAKE_REAL_LOG": self.log,
-            "FW_SHIM_SEAMS": json.dumps({
+            "W11_SHIM_SEAMS": json.dumps({
                 "_X11_SOCK_DIR": self.x11, "_LOGIND_DIR": self.logind,
                 "_RUN_USER_DIR": os.path.dirname(self.runuser)}),
         }
@@ -278,7 +278,7 @@ class Environment(Tree):
 
     def test_guard_variable_is_set_for_the_child(self):
         p, out, err = self.run_tool("xdotool", "key", "a")
-        self.assertEqual(self.records()[0]["env"]["_FUCKWAYLAND_PASSTHROUGH"],
+        self.assertEqual(self.records()[0]["env"]["_W11_PASSTHROUGH"],
                          os.path.realpath(FAKE))
 
     def test_wayland_session_never_hands_over(self):
@@ -293,10 +293,10 @@ class Environment(Tree):
         self.assertEqual(self.records(), [])
 
     def test_escape_hatch_keeps_our_own_code(self):
-        """`FUCKWAYLAND_PASSTHROUGH=never` — what the test suite and the
+        """`W11_PASSTHROUGH=never` — what the test suite and the
         parity oracle rely on, on an X11 box with the real tools installed."""
         p, out, err = self.run_tool("xdotool", "version",
-                               env=self.env(FUCKWAYLAND_PASSTHROUGH="never"))
+                               env=self.env(W11_PASSTHROUGH="never"))
         self.assertEqual(p.returncode, 0)
         self.assertIn("xdotool version 4.", out)
         self.assertEqual(self.records(), [])
@@ -308,7 +308,7 @@ class Environment(Tree):
         open(os.path.join(self.runuser, "wayland-0"), "w").close()
         env = self.env(XDG_SESSION_TYPE="wayland", XDG_RUNTIME_DIR=self.runuser,
                        WAYLAND_DISPLAY="wayland-0",
-                       FUCKWAYLAND_PASSTHROUGH="always")
+                       W11_PASSTHROUGH="always")
         p, out, err = self.run_tool("xdotool", "key", "a", env=env)
         self.assertEqual(len(self.records()), 1)
 
@@ -320,13 +320,13 @@ class NoOriginal(Tree):
 
         The line said `apt install ...` everywhere, on every distribution: a NixOS box with no apt on it was
         told to run apt, and Fedora and Arch were named packages that do not exist there [M recon2/nixos.md,
-        fedora.md, arch.md].  The expected text comes from `fwcommon.distro`, whose seam is a module constant
+        fedora.md, arch.md].  The expected text comes from `w11common.distro`, whose seam is a module constant
         no subprocess can be handed, so what this pins is the whole path -- PATH walk, refusal, exit status --
         on whatever family the runner is; the byte-exact table for the other four families is
         tests/test_passthrough.py:MissingOriginalPerDistro.
 
         xprop is not here: it has an X11 client of its own and never exits 127 (the test below)."""
-        from fwcommon import distro
+        from w11common import distro
         for tool in ("xdotool", "wmctrl", "xrandr"):
             with self.subTest(tool=tool):
                 args = {"xdotool": ("key", "a"), "wmctrl": ("-l",), "xrandr": ("--query",)}[tool]
@@ -345,7 +345,7 @@ class NoOriginal(Tree):
     def test_the_reason_named_at_127_is_the_one_that_applies(self):
         """The line says why the original is wanted, and a forced handover is not an X11 session.
 
-        Reached with FUCKWAYLAND_PASSTHROUGH=always (and by `wxrandr --backend x11`) on a Wayland
+        Reached with W11_PASSTHROUGH=always (and by `wxrandr --backend x11`) on a Wayland
         desktop, where "this is an X11 session" would simply be false."""
         p, out, err = self.run_tool("xdotool", "key", "a", env=self.env(real=False))
         self.assertEqual(p.returncode, 127)
@@ -354,7 +354,7 @@ class NoOriginal(Tree):
         open(os.path.join(self.runuser, "wayland-0"), "w").close()
         env = self.env(real=False, XDG_SESSION_TYPE="wayland",
                        XDG_RUNTIME_DIR=self.runuser, WAYLAND_DISPLAY="wayland-0",
-                       FUCKWAYLAND_PASSTHROUGH="always")
+                       W11_PASSTHROUGH="always")
         p, out, err = self.run_tool("xdotool", "key", "a", env=env)
         self.assertEqual(p.returncode, 127)
         self.assertNotIn("this is an X11 session", err)
@@ -438,7 +438,7 @@ class Recursion(Tree):
         p, out, err = self.run_tool("xdotool", "key", "a")
         self.assertLess(time.time() - t0, 10)
         self.assertNotEqual(p.returncode, 0)
-        self.assertIn("_FUCKWAYLAND_PASSTHROUGH", err)
+        self.assertIn("_W11_PASSTHROUGH", err)
         self.assertIn("loop", err)
         with open(counter) as f:
             self.assertEqual(len(f.read()), 2)           # exactly two

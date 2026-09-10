@@ -319,9 +319,9 @@ Run it *inside* a guest and it does not pass, by construction. Measured on the
 over `vmctl ssh` with `env -i`:
 
 ```console
-$ git archive HEAD | vm/vmctl ssh noble-gnome-t -- 'mkdir -p /home/test/fw && tar -x -C /home/test/fw && chown -R test:test /home/test/fw'
+$ git archive HEAD | vm/vmctl ssh noble-gnome-t -- 'mkdir -p /home/test/w11 && tar -x -C /home/test/w11 && chown -R test:test /home/test/w11'
 $ vm/vmctl ssh noble-gnome-t -- apt-get install -y python3-pytest        # the goldens have no pytest
-$ vm/vmctl user noble-gnome-t -- sh -c 'cd /home/test/fw && python3 -m pytest tests -q -p no:cacheprovider --ignore=tests/test_cli_parity.py'
+$ vm/vmctl user noble-gnome-t -- sh -c 'cd /home/test/w11 && python3 -m pytest tests -q -p no:cacheprovider --ignore=tests/test_cli_parity.py'
 ...
 164 failed, 1822 passed, 98 skipped, 40 warnings in 106.66s (0:01:46)
 ```

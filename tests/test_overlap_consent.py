@@ -41,7 +41,7 @@ from warandr import randr as wrandr
 from wxrandr import cli, gnome_overlap
 from wxrandr.core import Fatal
 
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
 FLAG = gnome_overlap.FLAG
 ALLOW = gnome_overlap.ALLOW_FLAG
@@ -110,17 +110,17 @@ class ConsentCase(Case):
 class Recording(ConsentCase):
     def test_it_lands_where_xdg_says_and_nowhere_else(self):
         self.assertEqual(self.path(),
-                         os.path.join(self.tmp, "fuckwayland", "overlap-consent.json"))
+                         os.path.join(self.tmp, "w11", "overlap-consent.json"))
         self.agree()
         self.assertTrue(os.path.exists(self.path()))
 
     def test_the_default_is_under_dot_config(self):
         self.assertEqual(gnome_overlap.consent_path({"HOME": "/home/u"}),
-                         "/home/u/.config/fuckwayland/overlap-consent.json")
+                         "/home/u/.config/w11/overlap-consent.json")
         # the spec's rule, the same one monitors_xml.default_path follows
         self.assertEqual(gnome_overlap.consent_path({"XDG_CONFIG_HOME": "rel",
                                                      "HOME": "/home/u"}),
-                         "/home/u/.config/fuckwayland/overlap-consent.json")
+                         "/home/u/.config/w11/overlap-consent.json")
 
     def test_what_it_records_is_what_the_checks_measured(self):
         """Not a constant in this tree: the three numbers come out of the
@@ -581,7 +581,7 @@ class RootsAgreementIsNotTheUsers(ConsentCase):
     own session that a wrong offset ends, so root's answer must not stand in
     for anybody else's."
 
-    What the fix pins: when `os.geteuid()` and `fwcommon.session.session_uid()`
+    What the fix pins: when `os.geteuid()` and `w11common.session.session_uid()`
     disagree, the agreement is keyed on the *session* user's home
     (`pwd.getpwuid(session_uid()).pw_dir`), and if that cannot be worked out
     the paragraph is printed regardless.  The control below is the same run
@@ -595,7 +595,7 @@ class RootsAgreementIsNotTheUsers(ConsentCase):
     @unittest.expectedFailure
     def test_roots_run_does_not_spend_the_session_users_agreement(self):
         with mock.patch("os.geteuid", return_value=0), \
-                mock.patch("fwcommon.session.session_uid", return_value=1000):
+                mock.patch("w11common.session.session_uid", return_value=1000):
             code, out, err = self.run_cli(FLAG, *MOVE)
         self.assertEqual(code, 0, err)
         self.assertNotIn("as agreed on", err)
@@ -604,7 +604,7 @@ class RootsAgreementIsNotTheUsers(ConsentCase):
     @unittest.expectedFailure
     def test_the_status_root_reads_is_not_the_session_users(self):
         with mock.patch("os.geteuid", return_value=0), \
-                mock.patch("fwcommon.session.session_uid", return_value=1000):
+                mock.patch("w11common.session.session_uid", return_value=1000):
             code, out, err = self.run_cli(STATUS)
         self.assertEqual(code, 0, err)
         self.assertEqual([ln for ln in out.splitlines() if ln.strip()][0], "available")
@@ -613,7 +613,7 @@ class RootsAgreementIsNotTheUsers(ConsentCase):
         """The control: two uids that agree are the ordinary case, and nothing
         about it may change."""
         with mock.patch("os.geteuid", return_value=1000), \
-                mock.patch("fwcommon.session.session_uid", return_value=1000):
+                mock.patch("w11common.session.session_uid", return_value=1000):
             code, out, err = self.run_cli(FLAG, *MOVE)
         self.assertEqual(code, 0, err)
         self.assertIn("as agreed on 2026-01-02", err)
@@ -974,7 +974,7 @@ class WarandrSide(unittest.TestCase):
         for state in ("available", "agreed"):
             b = self.backend("mutter", state)
             self.assertIsNone(b.overlap_refusal(), state)
-            self.assertIn("fuckwayland-overlap extension", b.overlap_note())
+            self.assertIn("w11-overlap extension", b.overlap_note())
             self.assertIn("gone at the next login", b.overlap_note())
 
     def test_one_sentence_for_both_states(self):
@@ -1103,21 +1103,21 @@ class OnXorg(ConsentCase):
 
     def session_env(self, kind):
         """A session that says what it is the way pam_systemd says it (`XDG_SESSION_TYPE`, step 3 of
-        fwcommon/passthrough.py) -- and with the suite's `FUCKWAYLAND_PASSTHROUGH=never` lifted, since that
+        w11common/passthrough.py) -- and with the suite's `W11_PASSTHROUGH=never` lifted, since that
         variable's whole job is to answer this question first (step 1) and leaving it in would make every
         session below `wayland` whatever the type said.
 
         `WAYLAND_DISPLAY` is dropped for both kinds: step 2 wants a socket that exists, and this box has a
         dozen other agents' sockets in it. So the type is read from the one variable that differs, which is
         what makes the x11 and wayland cases a real pair."""
-        from fwcommon import passthrough
+        from w11common import passthrough
         passthrough.reset_cache()
         self.addCleanup(passthrough.reset_cache)
         env = dict(os.environ)
         env.pop("WAYLAND_DISPLAY", None)
         env.pop("SUDO_UID", None)
         env.pop("PKEXEC_UID", None)
-        env["FUCKWAYLAND_PASSTHROUGH"] = ""
+        env["W11_PASSTHROUGH"] = ""
         env["XDG_SESSION_TYPE"] = kind
         return mock.patch.dict(os.environ, env, clear=True)
 
@@ -1158,7 +1158,7 @@ class OnXorg(ConsentCase):
 
     def test_a_wayland_session_is_untouched(self):
         """The control, and it is built through the same recipe with one variable changed: same bus, same
-        extension, same recorded nothing, `FUCKWAYLAND_PASSTHROUGH` lifted here too. Keeping the suite's
+        extension, same recorded nothing, `W11_PASSTHROUGH` lifted here too. Keeping the suite's
         override in would have had `session_kind()` answer `wayland` without ever reading
         `XDG_SESSION_TYPE`, and an implementation that ignored that variable entirely would have passed
         both halves of this pair."""

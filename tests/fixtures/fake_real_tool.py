@@ -4,7 +4,7 @@
 Appends one JSON line per invocation to ``$FAKE_REAL_LOG``::
 
     {"argv0": ..., "argv": [...], "pid": ..., "ppid": ..., "cwd": ...,
-     "env": {"DISPLAY": ..., "XAUTHORITY": ..., "_FUCKWAYLAND_PASSTHROUGH": ...}}
+     "env": {"DISPLAY": ..., "XAUTHORITY": ..., "_W11_PASSTHROUGH": ...}}
 
 then prints a marker on stdout and exits ``$FAKE_REAL_RC`` (default 0).
 
@@ -38,7 +38,7 @@ def main():
         "ppid": os.getppid(),
         "cwd": os.getcwd(),
         "env": {k: os.environ.get(k) for k in
-                ("DISPLAY", "XAUTHORITY", "_FUCKWAYLAND_PASSTHROUGH",
+                ("DISPLAY", "XAUTHORITY", "_W11_PASSTHROUGH",
                  "WAYLAND_DISPLAY", "XDG_SESSION_TYPE")},
     }
     log = os.environ.get("FAKE_REAL_LOG")

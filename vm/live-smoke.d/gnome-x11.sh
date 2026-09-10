@@ -4,7 +4,7 @@
 # The handover body is Xfce's, unchanged, for the reason kde-x11.sh gives: handing our argv to the real
 # xdotool/wmctrl/xprop/xrandr is a property of the SESSION TYPE and not of the desktop.  Here that is
 # the whole product claim under its hardest condition: org.gnome.Shell, org.gnome.Mutter.DisplayConfig
-# AND org.fuckwayland.Bridge are all on this session's bus, every one of them a route this toolbox
+# AND org.w11.Bridge are all on this session's bus, every one of them a route this toolbox
 # knows, and the answer is still the X server's -- because passthrough.session_kind() is asked before
 # any backend is detected [M recon2/gnome-xorg.md 2, against a simulated bus owning all three].
 #
@@ -38,7 +38,7 @@
 # id (`org.gnome.TextEditor`, gnome.sh's EDITOR_CLASS), while the SAME binary on this Xorg session is a
 # plain X client and carries the X11 pair -- measured on the live session, 2026-09-09:
 #
-#     wmctrl -l -x  ->  0x00a00004  0 gnome-text-editor.gnome-text-editor  ... fw-smoke.txt (~/) - Text Editor
+#     wmctrl -l -x  ->  0x00a00004  0 gnome-text-editor.gnome-text-editor  ... w11-smoke.txt (~/) - Text Editor
 #
 # so `search --class TextEditor` (an extended regex, handed to the REAL xdotool here) matches nothing --
 # `TextEditor` has no hyphen in it -- and both checks that look for the editor failed with an empty
@@ -52,8 +52,8 @@
 
 SMOKE_PHASES="install passthrough bridge display root uinput"
 EDITOR_CLASS=gnome-text-editor
-BRIDGE_UUID=fuckwayland-bridge@fuckwayland
-BR='--session -d org.fuckwayland.Bridge -o /org/fuckwayland/Bridge -m org.fuckwayland.Bridge1'
+BRIDGE_UUID=w11-bridge@w11
+BR='--session -d org.w11.Bridge -o /org/w11/Bridge -m org.w11.Bridge1'
 
 # xfce.sh's editor is an xterm, which this image does not carry.  A GUI started in the foreground over
 # ssh never returns: detach it.
@@ -71,11 +71,11 @@ editor_save() { guest "wdotool key ctrl+s" >/dev/null || true; }
 install_extra() {
     "$VM" scp "$NAME" "$REPO/gnome/$BRIDGE_UUID/extension.js"                "$NAME:/tmp/b-extension.js" >/dev/null
     "$VM" scp "$NAME" "$REPO/gnome/$BRIDGE_UUID/metadata.json"               "$NAME:/tmp/b-metadata.json" >/dev/null
-    "$VM" scp "$NAME" "$REPO/gnome/$BRIDGE_UUID/org.fuckwayland.Bridge1.xml" "$NAME:/tmp/b-iface.xml" >/dev/null
+    "$VM" scp "$NAME" "$REPO/gnome/$BRIDGE_UUID/org.w11.Bridge1.xml" "$NAME:/tmp/b-iface.xml" >/dev/null
     root "d=/usr/share/gnome-shell/extensions/$BRIDGE_UUID; mkdir -p \$d;
           install -m 644 /tmp/b-extension.js \$d/extension.js;
           install -m 644 /tmp/b-metadata.json \$d/metadata.json;
-          install -m 644 /tmp/b-iface.xml \$d/org.fuckwayland.Bridge1.xml; true" >/dev/null
+          install -m 644 /tmp/b-iface.xml \$d/org.w11.Bridge1.xml; true" >/dev/null
     pass "the tree's $BRIDGE_UUID is installed over the package's copy"
 }
 
@@ -85,7 +85,7 @@ editor_xid() {
     guest "wmctrl -l -x | awk '/TextEditor|Text Editor/ { print \$1; exit }'" | tr -d ' \r\n'
 }
 
-# `NameHasOwner org.fuckwayland.Bridge` -- `(true,)` or `(false,)`, the bus's own answer to "is the
+# `NameHasOwner org.w11.Bridge` -- `(true,)` or `(false,)`, the bus's own answer to "is the
 # extension's code running in there right now".  It is the only honest oracle for the off/on move below:
 # `gnome-extensions info` reports what the shell's ExtensionManager thinks, and the name is what every
 # tool of ours actually needs.
@@ -98,7 +98,7 @@ editor_xid() {
 # agrees, so the `same` below stays byte-equal and the timing drops out of it.
 bridge_owned() {
     await 30 "${1:-.}" "gdbus call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus \
-           --method org.freedesktop.DBus.NameHasOwner org.fuckwayland.Bridge 2>&1" | tr -d ' \r\n'
+           --method org.freedesktop.DBus.NameHasOwner org.w11.Bridge 2>&1" | tr -d ' \r\n'
 }
 
 # The bridge, taken out of a running shell and put back, with nobody logged out -- plus the one that
@@ -118,7 +118,7 @@ bridge_owned() {
 #   * OnFailure is `ExecStart=gsettings set org.gnome.shell disable-user-extensions true`, a PERSISTENT
 #     dconf key, plus the three `gnome-session-failed` windows both CI logs show in `wmctrl -l -x`.
 #   * From then on that user has no extensions in any session: the bridge reads `Enabled: No / State:
-#     INITIALIZED`, `org.fuckwayland.Bridge` is unowned, and our own backend says (correctly) "installed
+#     INITIALIZED`, `org.w11.Bridge` is unowned, and our own backend says (correctly) "installed
 #     but not enabled (state 2)".  It does not come back on a reboot, or on `gnome-extensions enable`, or
 #     on deleting /run/user/1000/gnome-shell-disable-extensions -- all three tried.  One thing recovers it,
 #     live and with no logout: `gsettings set org.gnome.shell disable-user-extensions false`, after which
@@ -145,18 +145,18 @@ phase_bridge() {
     want "the bridge is ACTIVE in this Xorg session, with nobody logged out since the install" \
          "State: ACTIVE" "$info"
     owned=$(guest "gdbus call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus \
-                   --method org.freedesktop.DBus.ListNames 2>&1 | tr ',' '\n' | grep fuckwayland" || true)
-    want "org.fuckwayland.Bridge is owned on this Xorg session" "org.fuckwayland.Bridge" "$owned"
+                   --method org.freedesktop.DBus.ListNames 2>&1 | tr ',' '\n' | grep w11" || true)
+    want "org.w11.Bridge is owned on this Xorg session" "org.w11.Bridge" "$owned"
     # Owned by WHICH process: the name has to be held by the session's own gnome-shell and not by
     # something else that took the name.  `GetConnectionUnixProcessID` is the bus's own answer.
     ownerpid=$(guest "gdbus call --session --dest org.freedesktop.DBus \
                       --object-path /org/freedesktop/DBus \
-                      --method org.freedesktop.DBus.GetConnectionUnixProcessID org.fuckwayland.Bridge \
+                      --method org.freedesktop.DBus.GetConnectionUnixProcessID org.w11.Bridge \
                       2>&1 | sed -n 's/.*uint32 \([0-9]*\).*/\1/p'" | tr -d ' \r\n' || true)
     if [ -n "$pid0" ] && [ -n "$ownerpid" ]; then
         same "...and the name is held by this session's own gnome-shell" "$pid0" "$ownerpid"
     else
-        fail "nothing holds org.fuckwayland.Bridge [shell '$pid0', owner '$ownerpid']"
+        fail "nothing holds org.w11.Bridge [shell '$pid0', owner '$ownerpid']"
     fi
     want "the bridge answers GetVersion" "uint32|[0-9]" "$(guest "gdbus call $BR.GetVersion 2>&1" || true)"
     # The no-logout move, in the bus's own words.  Measured live on this rig: `(false,)` about three
@@ -201,8 +201,8 @@ Restart=always/RestartSec=0ms)" "^\(\)$" \
     want "...and wxrandr still says x11, not mutter" "^x11$" \
          "$(guest 'wxrandr --print-backend' | tr -d ' \r' || true)"
     # The route the bridge exists for is reachable when it is asked for by name, which is what
-    # `FUCKWAYLAND_PASSTHROUGH=never` means: a GNOME backend over a session whose windows are X windows.
-    ours=$(guest 'FUCKWAYLAND_PASSTHROUGH=never wwmctl -l -x 2>&1' || true)
+    # `W11_PASSTHROUGH=never` means: a GNOME backend over a session whose windows are X windows.
+    ours=$(guest 'W11_PASSTHROUGH=never wwmctl -l -x 2>&1' || true)
     want "forced onto our own code, the bridge lists this session's windows" "^0x[0-9a-f]+ " "$ours"
     # The same window on both planes, by the number both of them print.  The bridge hands out X ids on an
     # Xorg session [M recon2/gnome-xorg.md 2]; the real wmctrl is the oracle for what that id is, and the
@@ -339,7 +339,7 @@ phase_uinput() {
     local out win
     editor_start
     # --onlyvisible, and it is not a nicety: on this Xorg session gnome-text-editor owns TWO windows of
-    # that class -- 0x00a00002 `gnome-text-editor` (never mapped) and 0x00a00004 `fw-smoke.txt (~/) - Text
+    # that class -- 0x00a00002 `gnome-text-editor` (never mapped) and 0x00a00004 `w11-smoke.txt (~/) - Text
     # Editor`, measured live on 2026-09-09 -- and `search --class` prints both, lowest first.  Activating
     # the unmapped one focuses nothing, and every keystroke below then lands wherever the pointer left the
     # focus.  Under Wayland this does not arise: the bridge lists toplevels and there is only one.
@@ -350,7 +350,7 @@ phase_uinput() {
     guest "rm -f $SMOKE_FILE; touch $SMOKE_FILE" >/dev/null || true
     # Forced onto our own code, because the handover would type this with XTEST and prove nothing about
     # uinput.  No sudo anywhere in the line: the whole point of the rule is that there is none.
-    out=$(guest "FUCKWAYLAND_PASSTHROUGH=never wdotool type --delay 30 -- 'x11 uinput' 2>&1" || true)
+    out=$(guest "W11_PASSTHROUGH=never wdotool type --delay 30 -- 'x11 uinput' 2>&1" || true)
     wantnot "wdotool creates its uinput devices without sudo" "cannot create uinput devices" "$out"
     sleep 1
     editor_save

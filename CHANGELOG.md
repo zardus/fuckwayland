@@ -6,10 +6,32 @@ form.
 
 ## Unreleased
 
-The version in `fwcommon.VERSION` is still 0.4.0 and nothing below has been released.
+The version in `w11common.VERSION` is still 0.4.0 and nothing below has been released.
 Everything here was measured on the rig or on a real desktop, and the flavor, the run
 and the bytes are named wherever a number is.
 
+- **The project is called w11 now.** It was written under the name `fuckwayland`; the
+  repository, the Python packages (`fwcommon` is `w11common`), the .deb/.rpm/PKGBUILD and
+  the flake outputs all carry the new one, and so does everything they install: the GNOME
+  extension UUIDs `w11-bridge@w11` and `w11-overlap@w11` with their GIR namespaces
+  `W11Overlap14`/`18`/`51`, the bus names `org.w11.Bridge1`, `org.w11.Overlap1` and
+  `org.w11.KWin1` on `/org/w11/...`, `60-w11-uinput.rules`, `w11-uinput.conf`,
+  `w11-enable-bridge.desktop`, `/usr/lib/w11/`, `/var/lib/w11/installed`, `~/.config/w11/`,
+  and every environment variable the tools read (`W11_PASSTHROUGH`, `W11_SYSTEM_STAMP`,
+  and the rig's `W11_ORACLE_PATH`, `W11_NIX_LIVE`, `W11_SHIM_SEAMS`, `W11_PARITY_DISPLAY`,
+  `W11_ROOT`). No behaviour moved with the name and no test lost a claim. There is no
+  compatibility shim and nothing reads the old names; what the rename does owe an
+  installed 0.4 is the hand-over, and the packages declare it: both names claim the same 75
+  files (the six commands in `/usr/bin`, every module under `dist-packages/`,
+  `warandr.desktop`; measured on 2026-09-10 with dpkg 1.23.7, 0.4.0's own .deb unpacked into
+  a `dpkg --root` sandbox and `release/w11_0.4.0_all.deb` put on top of it, which without a
+  declaration is `trying to overwrite '/usr/bin/warandr', which is also in package
+  fuckwayland (0.4.0)`, exit 1), so `debian/control` carries `Conflicts: fuckwayland` and
+  `Replaces: fuckwayland`, the spec `Obsoletes: fuckwayland < 0.4.1`, the PKGBUILD
+  `conflicts=` and `replaces=`, and apt, dnf and pacman take the old package off as they
+  put the new one on. The flake is the one side that can hold both at once: drop the old
+  input. The pre-1.0 version number is 0.4.0 on both sides and it is not going to sort
+  that out for you.
 - **Hyprland gets a first-class backend on both sides.** `wdotool/backend_hypr.py` and
   `wxrandr/hypr.py` speak Hyprland's own request socket, one connection per request,
   where the generic wlroots floor had reported the whole output as every window's
@@ -103,7 +125,7 @@ and the bytes are named wherever a number is.
   the flavor's own package — the `.deb` on Ubuntu, the rpms on Fedora, the
   `.pkg.tar.zst` on Arch — and on NixOS nothing at all, because the package is in the
   image; `--remove` is the mirror, and on NixOS it is a `switch-to-configuration test`
-  into a `without-fuckwayland` specialisation. Two phases belong to a distribution
+  into a `without-w11` specialisation. Two phases belong to a distribution
   rather than to a desktop and the driver appends them itself: `selinux` on Fedora and
   `pkgverify` (`rpm -V`, `pacman -Qkk`) on both.
 - **4302 tests**, up from 4146, the new ones being the four new window and display
@@ -214,7 +236,7 @@ by using the tools on one rather than by reading them.
   that differs per GNOME generation, the soname to match, the Meta typelib version,
   the namespace of the type description, the size `MetaMonitorsConfig` must report and
   the tail slots the description is built from, is one record in
-  `gnome/fuckwayland-overlap@fuckwayland/generations.json`, with the extension, the
+  `gnome/w11-overlap@w11/generations.json`, with the extension, the
   installer, the generator and `wxrandr` reading it instead of computing it. That
   matters because mutter 51 renumbered its library to the GNOME major, so GNOME 51
   ships `libmutter-51.so.0` where the old arithmetic said `libmutter-19`.
@@ -252,7 +274,7 @@ by using the tools on one rather than by reading them.
   both and said nothing on stderr.
 - **The exit 127 line names the reason that applies.** Handing over to a real tool that
   is not installed said "this is an X11 session" whoever asked, including the two ways
-  of asking for the handover on a Wayland desktop (`FUCKWAYLAND_PASSTHROUGH=always` and
+  of asking for the handover on a Wayland desktop (`W11_PASSTHROUGH=always` and
   `wxrandr --backend x11`), where it is not one. It now says a handover was asked for
   instead. Found by running the release package on the 26.04 default install.
 - **The one method nothing had ever exercised is exercised now.**
@@ -302,7 +324,7 @@ A subtraction release. Nothing here is a new tool: the same six do the same thin
 with 602 production lines fewer behind them, one package shape instead of two, and a
 documentation set that no longer disagrees with itself.
 
-- **`fwcommon/`, a package for what every tool shares.** Session discovery, the X11
+- **`w11common/`, a package for what every tool shares.** Session discovery, the X11
   handover, the D-Bus and Wayland wire clients, the exception every command raises,
   the exit-status rule for an output that never arrived, and detached children. It
   imports nothing outside the standard library and nothing of `wdotool`, which is
@@ -317,7 +339,7 @@ documentation set that no longer disagrees with itself.
   getopt wrappers became one. One pointer hit-test that had been written three times,
   over three tables of which window layers to look through, became one function over
   one table. The detach protocol both the gamma holder and the mirror supervisor
-  needed became `fwcommon/procs.py`. Two Wayland-to-RandR transform tables became one.
+  needed became `w11common/procs.py`. Two Wayland-to-RandR transform tables became one.
   Four display backends grew the same six methods, so a session now holds one backend
   instead of four handles and six name tests.
 - **Nine bugs in error paths**, all found by challenging the tree rather than by using
@@ -331,7 +353,7 @@ documentation set that no longer disagrees with itself.
   found the other half of that still open — `tool >/dev/full 2>&1`, where the one-line
   diagnostic about the lost output cannot land either — tracebacking in all six and
   exiting 120 in five, with apport filing crash reports for two of them. Every last
-  word a tool writes now goes through `fwcommon/stdio.py`'s `warn()`, which closes
+  word a tool writes now goes through `w11common/stdio.py`'s `warn()`, which closes
   stderr when it cannot write to it. The same run found one more, in a diagnostic
   rather than in a tool: `gnome/install-bridge.sh --check` looked for the udev rule
   under `/etc` only, so on a machine installed from the package, which ships it in

@@ -37,7 +37,7 @@ from wdotool import daemon
 # tests/conftest.py (which covers pytest) and tests/test_passthrough.py.
 # This line is what covers `python3 tests/<file>.py`, where conftest is
 # not loaded, and it reaches every subprocess a test spawns.
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
 IDLE = 0.5          # WDOTOOL_DAEMON_IDLE for these tests
 CHECK = 0.1         # ...and WDOTOOL_DAEMON_CHECK: five ticks per period

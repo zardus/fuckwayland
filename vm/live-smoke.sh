@@ -22,13 +22,13 @@
 #                     packaging axis).  Which package is decided by the flavor's
 #                     `# vmctl-distro:` header, never by this script's own idea
 #                     of what the guest is:
-#                       ubuntu  release/fuckwayland_<ver>_all.deb
+#                       ubuntu  release/w11_<ver>_all.deb
 #                       fedora  $LIVE_SMOKE_RPMS/*.rpm -- default dist/, where
 #                               scripts/build-rpm.sh leaves the three noarch
 #                               rpms, and where the CI `rpm` job's artifact is
 #                               unpacked
 #                       arch    $LIVE_SMOKE_PKG -- default
-#                               dist/fuckwayland-<ver>-1-any.pkg.tar.zst
+#                               dist/w11-<ver>-1-any.pkg.tar.zst
 #                       nixos   nothing is copied in: the package IS the image,
 #                               and phase install asserts the store path and the
 #                               specialisation instead
@@ -55,7 +55,7 @@
 #
 # The default mode (neither --pkg nor --deb) deploys the WORKING TREE over the
 # package: scripts/build-pyz.sh into /usr/local/bin the way repro/deploy-to-vm.sh
-# does, plus gnome/fuckwayland-bridge@fuckwayland over the package's copy,
+# does, plus gnome/w11-bridge@w11 over the package's copy,
 # because the tree carries fixes the shipped package does not (b7a60f0's
 # maximize pair among them).
 #
@@ -69,15 +69,15 @@ REPO=$(dirname "$HERE")
 # exercise these phases with no VM at all.  Nothing but that self-test may set it.
 VM=${LIVE_SMOKE_VMCTL:-$HERE/vmctl}
 STEPS=$HERE/live-smoke.d
-# One version, read where fwcommon keeps it, so that the .deb name and the
+# One version, read where w11common keeps it, so that the .deb name and the
 # NixOS store-path assertion cannot drift from the tree they are measuring.
-VERSION=$(sed -n 's/^VERSION = "\(.*\)"$/\1/p' "$REPO/fwcommon/__init__.py" | head -1)
-DEB=$REPO/release/fuckwayland_${VERSION}_all.deb
+VERSION=$(sed -n 's/^VERSION = "\(.*\)"$/\1/p' "$REPO/w11common/__init__.py" | head -1)
+DEB=$REPO/release/w11_${VERSION}_all.deb
 #: The two directories the non-Debian packages come out of.  dist/ is where
 #: scripts/build-rpm.sh and scripts/build-pkgbuild.sh put them (their own
 #: --help says so) and where CI's artifacts are unpacked.
 LIVE_SMOKE_RPMS=${LIVE_SMOKE_RPMS:-$REPO/dist}
-LIVE_SMOKE_PKG=${LIVE_SMOKE_PKG:-$REPO/dist/fuckwayland-${VERSION}-1-any.pkg.tar.zst}
+LIVE_SMOKE_PKG=${LIVE_SMOKE_PKG:-$REPO/dist/w11-${VERSION}-1-any.pkg.tar.zst}
 
 # The usage block is the comment above, printed without its `# `.  Read by line
 # CONTENT and not by line NUMBER: every previous edit to this header moved the
@@ -158,14 +158,14 @@ pkg_files() {
 # The root command that installs what pkg_files copied into /tmp.
 pkg_install_cmd() {
     case "$DISTRO" in
-    ubuntu) echo "cd /tmp && DEBIAN_FRONTEND=noninteractive apt-get install -y ./fw.deb 2>&1" ;;
+    ubuntu) echo "cd /tmp && DEBIAN_FRONTEND=noninteractive apt-get install -y ./w11.deb 2>&1" ;;
     # The bridge subpackage is named EXPLICITLY: its `Supplements: gnome-shell`
     # fires only where gnome-shell is installed, and fedora44-sway has none
-    # [packaging/rpm/fuckwayland.spec].  The overlap subpackage rides along the
+    # [packaging/rpm/w11.spec].  The overlap subpackage rides along the
     # same way.
-    fedora) echo "cd /tmp && dnf install -y ./fuckwayland-*.rpm \
-./gnome-shell-extension-fuckwayland-bridge-*.rpm ./gnome-shell-extension-fuckwayland-overlap-*.rpm 2>&1" ;;
-    arch)   echo "cd /tmp && pacman -U --noconfirm ./fuckwayland-*.pkg.tar.zst 2>&1" ;;
+    fedora) echo "cd /tmp && dnf install -y ./w11-*.rpm \
+./gnome-shell-extension-w11-bridge-*.rpm ./gnome-shell-extension-w11-overlap-*.rpm 2>&1" ;;
+    arch)   echo "cd /tmp && pacman -U --noconfirm ./w11-*.pkg.tar.zst 2>&1" ;;
     # Nothing is installed on NixOS: switching INTO the default specialisation
     # is the install, and the image boots into it already.
     nixos)  echo "" ;;
@@ -175,15 +175,15 @@ pkg_install_cmd() {
 # The root command that takes it away again.
 pkg_remove_cmd() {
     case "$DISTRO" in
-    ubuntu) echo "DEBIAN_FRONTEND=noninteractive apt-get remove -y fuckwayland 2>&1" ;;
-    # The subpackages go with it through their `Requires: fuckwayland = %{version}`.
-    fedora) echo "dnf remove -y fuckwayland 2>&1" ;;
-    arch)   echo "pacman -R --noconfirm fuckwayland 2>&1" ;;
+    ubuntu) echo "DEBIAN_FRONTEND=noninteractive apt-get remove -y w11 2>&1" ;;
+    # The subpackages go with it through their `Requires: w11 = %{version}`.
+    fedora) echo "dnf remove -y w11 2>&1" ;;
+    arch)   echo "pacman -R --noconfirm w11 2>&1" ;;
     # The offline, in-guest analogue of a removal: the other specialisation is
-    # the same system with programs.fuckwayland off, and switch-to-configuration
+    # the same system with programs.w11 off, and switch-to-configuration
     # reloads the udev rules and swaps the system path in one step -- no
     # network, no rebuild [vm/nixos/common.nix, plan B 1.4].
-    nixos)  echo "/run/current-system/specialisation/without-fuckwayland/bin/switch-to-configuration test 2>&1" ;;
+    nixos)  echo "/run/current-system/specialisation/without-w11/bin/switch-to-configuration test 2>&1" ;;
     esac
 }
 
@@ -194,17 +194,17 @@ pkg_remove_cmd() {
 pkg_left_behind() {
     local ext=/usr/share/gnome-shell/extensions
     case "$DISTRO" in
-    ubuntu|arch) echo "/usr/lib/fuckwayland" ;;
-    fedora)      echo "/usr/libexec/fuckwayland" ;;
+    ubuntu|arch) echo "/usr/lib/w11" ;;
+    fedora)      echo "/usr/libexec/w11" ;;
     nixos)       ext=/run/current-system/sw/share/gnome-shell/extensions ;;
     esac
     case "$DISTRO" in
     nixos) : ;;
-    *) echo "/var/lib/fuckwayland"
-       echo "/etc/xdg/autostart/fuckwayland-enable-bridge.desktop" ;;
+    *) echo "/var/lib/w11"
+       echo "/etc/xdg/autostart/w11-enable-bridge.desktop" ;;
     esac
-    echo "$ext/fuckwayland-bridge@fuckwayland"
-    echo "$ext/fuckwayland-overlap@fuckwayland"
+    echo "$ext/w11-bridge@w11"
+    echo "$ext/w11-overlap@w11"
 }
 
 # Copy what pkg_files names into the guest's /tmp, under the names the install
@@ -216,7 +216,7 @@ pkg_deploy() {
         [ -f "$f" ] || { fail "no package at $f (scripts/build-deb.sh, build-rpm.sh or build-pkgbuild.sh first)"
                          return 1; }
         case "$f" in
-        *.deb) "$VM" scp "$NAME" "$f" "$NAME:/tmp/fw.deb" >/dev/null ;;
+        *.deb) "$VM" scp "$NAME" "$f" "$NAME:/tmp/w11.deb" >/dev/null ;;
         *)     "$VM" scp "$NAME" "$f" "$NAME:/tmp/$(basename "$f")" >/dev/null ;;
         esac
         n=$((n + 1))
@@ -233,7 +233,7 @@ pkg_deploy() {
 # same paragraph, byte for byte, and its loudest line is this one; the rpm
 # carries no banner at all -- Fedora discourages chatty scriptlets and the spec
 # ships README.Fedora in %doc instead [recon2/pkg-rpm 292, packaging/rpm/
-# fuckwayland.spec], so phase_install checks for that file there.
+# w11.spec], so phase_install checks for that file there.
 pkg_banner_re() {
     case "$DISTRO" in
     ubuntu|arch) echo "LOG OUT AND BACK IN ONCE" ;;
@@ -400,15 +400,15 @@ PHASE=-
 # Removing the package is the other half of the packaging claim and the half
 # nobody ever runs: README.Debian says removing it puts /dev/uinput back to
 # root:root 0600 with no ACL, and until this existed that sentence had been
-# checked by reading debian/fuckwayland.postrm.  It runs after every phase
+# checked by reading debian/w11.postrm.  It runs after every phase
 # because it destroys the installation the phases measure, and only under
 # --pkg: the default mode puts the tree's zipapps in /usr/local/bin, which no
 # package manager owns and none will take away, so a removal there would report
 # files left behind that were never the package's.
 #
 # What it asserts is what the hand smoke measured on resolute-gnome after
-# `apt-get remove -y fuckwayland`: nothing of ours under the packaging's own
-# libexec directory, no autostart entry, no /var/lib/fuckwayland stamp, neither
+# `apt-get remove -y w11`: nothing of ours under the packaging's own
+# libexec directory, no autostart entry, no /var/lib/w11 stamp, neither
 # extension directory, /dev/uinput back to root:root 0600 with no ACL entry and
 # no uaccess tag -- and, because the remove drops the stamp, a re-install
 # printing the first-install banner all over again.  The four packagings differ
@@ -424,7 +424,7 @@ phase_remove() {
     # /run/current-system` and runs that line for `test` exactly as for `switch`
     # [nixpkgs nixos/modules/system/activation/activation-script.nix:79, read in
     # the local store 2026-09-08], so the moment the switch into
-    # without-fuckwayland lands, /run/current-system IS that child -- and a
+    # without-w11 lands, /run/current-system IS that child -- and a
     # child carries no `specialisation/` of its own, which is the very fact
     # phase_install asserts.  Switching "back" through /run/current-system would
     # re-activate the child and leave the tools off PATH.  /run/booted-system is

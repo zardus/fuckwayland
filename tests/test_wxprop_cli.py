@@ -32,7 +32,7 @@ from wxprop import cli, core
 # tests/conftest.py (which covers pytest) and tests/test_passthrough.py.
 # This line is what covers `python3 tests/<file>.py`, where conftest is
 # not loaded, and it reaches every subprocess a test spawns.
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
 USAGE_FIRST = "usage:  xprop [-options ...] [[format [dformat]] atom] ...\n"
 
@@ -149,7 +149,7 @@ class BackendOnAnX11SessionTest(unittest.TestCase):
     the X root has the real one."""
 
     def setUp(self):
-        from fwcommon import passthrough
+        from w11common import passthrough
         passthrough.reset_cache()
         self.addCleanup(passthrough.reset_cache)
 
@@ -165,23 +165,23 @@ class BackendOnAnX11SessionTest(unittest.TestCase):
             return core._detect_backend(), called
 
     def test_x11_session_never_detects(self):
-        got, called = self._detect({"FUCKWAYLAND_PASSTHROUGH": "auto",
+        got, called = self._detect({"W11_PASSTHROUGH": "auto",
                                     "XDG_SESSION_TYPE": "x11",
                                     "DISPLAY": ":0"})
         self.assertIsNone(got)
         self.assertEqual(called, [])
 
     def test_wayland_session_detects_as_before(self):
-        got, called = self._detect({"FUCKWAYLAND_PASSTHROUGH": "auto",
+        got, called = self._detect({"W11_PASSTHROUGH": "auto",
                                     "XDG_SESSION_TYPE": "wayland"})
         self.assertEqual(got, "a backend")
         self.assertEqual(called, [True])
 
     def test_the_escape_hatch_still_runs_our_own_code(self):
-        """FUCKWAYLAND_PASSTHROUGH=never means "our own code whatever the
+        """W11_PASSTHROUGH=never means "our own code whatever the
         session" -- including the compositor backends, on an X11 box. It is
         what the whole suite runs under."""
-        got, called = self._detect({"FUCKWAYLAND_PASSTHROUGH": "never",
+        got, called = self._detect({"W11_PASSTHROUGH": "never",
                                     "XDG_SESSION_TYPE": "x11",
                                     "DISPLAY": ":0"})
         self.assertEqual(got, "a backend")
@@ -207,7 +207,7 @@ class BackendOnAnX11SessionTest(unittest.TestCase):
         on. Returns (x11 dir, run-user dir)."""
         import shutil
         import tempfile as _tempfile
-        from fwcommon import passthrough
+        from w11common import passthrough
         d = _tempfile.mkdtemp(prefix="wxprop_sess_")
         self.addCleanup(shutil.rmtree, d, ignore_errors=True)
         x11 = os.path.join(d, "X11-unix")
@@ -229,22 +229,22 @@ class BackendOnAnX11SessionTest(unittest.TestCase):
         org.kde.KWin, and a GNOME-on-Xorg session owns org.gnome.Shell. So
         the guard cannot be "is a compositor there": it is the session kind,
         checked before backend_detect is imported at all."""
-        from fwcommon import passthrough
+        from w11common import passthrough
         with mock.patch.object(passthrough, "session_kind",
                                lambda tool=None, **kw: "x11"):
-            got, called = self._detect({"FUCKWAYLAND_PASSTHROUGH": "auto"})
+            got, called = self._detect({"W11_PASSTHROUGH": "auto"})
         self.assertIsNone(got)
         self.assertEqual(called, [])
         with mock.patch.object(passthrough, "session_kind",
                                lambda tool=None, **kw: "wayland"):
-            got, called = self._detect({"FUCKWAYLAND_PASSTHROUGH": "auto"})
+            got, called = self._detect({"W11_PASSTHROUGH": "auto"})
         self.assertEqual((got, called), ("a backend", [True]))
 
     def test_a_wayland_session_with_a_display_set_still_detects(self):
         """DISPLAY is set on every Wayland session that runs Xwayland, which
         is nearly all of them -- it says nothing about the session kind."""
         self._seams()
-        got, called = self._detect({"FUCKWAYLAND_PASSTHROUGH": "auto",
+        got, called = self._detect({"W11_PASSTHROUGH": "auto",
                                     "XDG_SESSION_TYPE": "wayland",
                                     "DISPLAY": ":1"})
         self.assertEqual((got, called), ("a backend", [True]))
@@ -254,7 +254,7 @@ class BackendOnAnX11SessionTest(unittest.TestCase):
         `_detect_without()` would use. `_detect_backend()` only *refuses* on
         "x11", so it cannot be asked which of "wayland" and None it saw --
         and the difference is the whole claim of the two tests below."""
-        from fwcommon import passthrough
+        from w11common import passthrough
         e = {k: v for k, v in os.environ.items() if k not in drop}
         e.update(env)
         passthrough.reset_cache()
@@ -274,7 +274,7 @@ class BackendOnAnX11SessionTest(unittest.TestCase):
         os.makedirs(os.path.join(run, "1000"))
         sock = os.path.join(run, "1000", "wayland-0")
         open(sock, "w").close()
-        env = {"FUCKWAYLAND_PASSTHROUGH": "auto", "SUDO_UID": "1000",
+        env = {"W11_PASSTHROUGH": "auto", "SUDO_UID": "1000",
                "XDG_SESSION_TYPE": "tty"}
         drop = ("DISPLAY", "WAYLAND_DISPLAY", "XDG_RUNTIME_DIR")
         self.assertEqual(self._kind(env, drop), "wayland")
@@ -292,7 +292,7 @@ class BackendOnAnX11SessionTest(unittest.TestCase):
         os.makedirs(os.path.join(run, "1000"))
         open(os.path.join(x11, "X0"), "w").close()
         got, called = self._detect_without(
-            {"FUCKWAYLAND_PASSTHROUGH": "auto", "SUDO_UID": "1000",
+            {"W11_PASSTHROUGH": "auto", "SUDO_UID": "1000",
              "XDG_SESSION_TYPE": "tty"},
             drop=("DISPLAY", "WAYLAND_DISPLAY", "XDG_RUNTIME_DIR"))
         self.assertIsNone(got)
@@ -334,8 +334,8 @@ class NoSessionErrorTest(CliTestBase):
         with "wdotool" here, as a previous in-process main() would leave it.
         Session.backend() swallows the exception into `backend_error`, and
         core.root_target() reports it as "cannot examine the root window"."""
-        from fwcommon.errors import CmdError
-        from fwcommon import session
+        from w11common.errors import CmdError
+        from w11common import session
         from wdotool import backend, backend_detect
         bus = MockBus()
         self.addCleanup(bus.close)

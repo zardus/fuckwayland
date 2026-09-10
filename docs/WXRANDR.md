@@ -7,7 +7,7 @@ the point, not an afterthought. House rules per Technical.md.
 
 ## Planes / backends
 
-- **sway/i3-compatible (flagship)**: query from `GET_OUTPUTS` (+ `fwcommon.wayland_mini`
+- **sway/i3-compatible (flagship)**: query from `GET_OUTPUTS` (+ `w11common.wayland_mini`
   wl_output for physical mm sizes); mutate via `output ...` IPC commands
   (mode/--custom, position, transform, scale, enable/disable, dpms).
 - **Generic wlroots**: `zwlr_output_management_unstable_v1` over `wayland_mini` —
@@ -40,7 +40,7 @@ the point, not an afterthought. House rules per Technical.md.
   headless session. A typo'd `--output NAME --brightness` prints only the bare
   not-found warning and exits 0, like real xrandr (no holder is spawned).
 - **GNOME / Mutter**: `org.gnome.Mutter.DisplayConfig` on the session bus over the
-  pure-stdlib `fwcommon.dbus_mini` — see "Mutter backend" below. Stock Ubuntu 24.04
+  pure-stdlib `w11common.dbus_mini` — see "Mutter backend" below. Stock Ubuntu 24.04
   (GNOME 46) and 26.04 (GNOME 50), no extension, no root.
 - **KDE Plasma / KWin**: the plasma-wayland-protocols pair `kde_output_device_v2`
   (read) + `kde_output_management_v2` (write) over `wayland_mini` — see "KWin
@@ -348,8 +348,8 @@ skips nothing: what it can record is this agreement, and this agreement decides
 what is printed. [WARANDR.md § Overlapping monitors on
 GNOME](WARANDR.md#overlapping-monitors-on-gnome).
 
-**4. The write.** `fuckwayland-overlap@fuckwayland`
-([gnome/README.md](../gnome/README.md#the-other-extension-fuckwayland-overlap))
+**4. The write.** `w11-overlap@w11`
+([gnome/README.md](../gnome/README.md#the-other-extension-w11-overlap))
 loads a type description of its own for symbols libmutter *exports but does not
 publish* — they are in `nm -D` and absent from the introspection data — reads
 the configuration object the session is running, and writes two 32-bit words
@@ -391,7 +391,7 @@ deliberately, once, and *for one build*:
 ```console
 $ wxrandr --gnome-overlap-allow
 check shell-version: GNOME Shell 50.1, libmutter-18.so.0 (build 25d36850030c)
-check typelib: FwOverlap18, MetaMonitorsConfig 80 bytes as declared
+check typelib: W11Overlap18, MetaMonitorsConfig 80 bytes as declared
 check sentinel: switch_config round-tripped at the declared offset
 check pending-dialog: nothing holds a modal grab, so GNOME is not asking "Keep changes?"
 check bounded-read: 2 logical monitors, every address range-checked
@@ -410,7 +410,7 @@ Agreeing to --unsafe-gnome-overlap on GNOME Shell 50.1 (libmutter-18 build 25d36
                         not recognise is refused however old the agreement is.
   To withdraw:          wxrandr --gnome-overlap-forget
   ...
-recorded in /home/test/.config/fuckwayland/overlap-consent.json
+recorded in /home/test/.config/w11/overlap-consent.json
 ```
 
 **The probe comes first and the record second**, never the other way round:
@@ -446,8 +446,8 @@ library in memory is the one all six checks just ran against, so a new build is
 news, not danger. It is read from the ELF note of the file the mapping came from,
 and never read at all when that file is no longer the mapped one (below).
 
-**Where it lives.** `$XDG_CONFIG_HOME/fuckwayland/overlap-consent.json`, else
-`~/.config/fuckwayland/overlap-consent.json`. Per user, because it is the user's
+**Where it lives.** `$XDG_CONFIG_HOME/w11/overlap-consent.json`, else
+`~/.config/w11/overlap-consent.json`. Per user, because it is the user's
 own session a wrong offset ends and root's answer must not stand in for anybody
 else's. A plain file rather than GSettings or dconf, because `wxrandr` has to be
 able to read it with no GLib bindings and no schema installed, because you should
@@ -519,7 +519,7 @@ extension: running
 agreed on: 2026-09-06T09:12:44Z
 agreed for: GNOME Shell 50.1 (libmutter-18 build 25d36850030c, MetaMonitorsConfig 80 bytes)
 agreed by: wxrandr --gnome-overlap-allow
-file: /home/test/.config/fuckwayland/overlap-consent.json
+file: /home/test/.config/w11/overlap-consent.json
 ```
 
 None of the three turns the flag on. `--unsafe-gnome-overlap` is still typed on
@@ -576,8 +576,8 @@ has to be exactly a shipped description's, and a size nothing here describes is 
 refusal saying so — forcing cannot invent a description. Two shipped descriptions
 *can* be the same size: GNOME 50 and GNOME 51 are both 80 bytes with the same
 three tail slots, and where descriptions of one size agree on their shape like
-that the newest is picked and the message names the others (`the size FwOverlap51
-describes … and the same bytes as FwOverlap18`). Two that disagreed on their
+that the newest is picked and the message names the others (`the size W11Overlap51
+describes … and the same bytes as W11Overlap18`). Two that disagreed on their
 shape would be a refusal rather than a coin toss, because then the size cannot
 say which one this build is.
 
@@ -613,8 +613,8 @@ xrandr: --unsafe-gnome-overlap-unmeasured 52: forcing past the one check that sa
                         measured, and with it that the libmutter mapped into gnome-shell is
                         the one this GNOME is supposed to carry ...
                         MetaMonitorsConfig is 80 bytes here, which is the size
-                        FwOverlap51 describes (measured on GNOME 51, and the
-                        same bytes as FwOverlap18)
+                        W11Overlap51 describes (measured on GNOME 51, and the
+                        same bytes as W11Overlap18)
   What is not skipped:  everything else, and none of it can be forced: exactly one libmutter
                         mapped, the Meta typelib agreeing with it, the struct size equal to
                         the description's, every symbol callable, the sentinel through
@@ -902,7 +902,7 @@ It should not come to this. The extension does nothing at login: `enable()`
 exports one D-Bus object and stops, so an enabled extension that is never
 called cannot hurt anything, which was measured over about ten logins on GNOME 50
 and five on GNOME 46: the only journal line either of them ever wrote was
-`fuckwayland-overlap: enabled (idle; it acts only when called)`. The route back
+`w11-overlap: enabled (idle; it acts only when called)`. The route back
 is printed in the warning anyway:
 
 1. **Log in again.** A `gnome-shell` that dies drops you at the login screen,
@@ -911,14 +911,14 @@ is printed in the warning anyway:
    with `org.gnome.shell disable-user-extensions` set to `true` on its own, so
    the next session had this extension, and every other, inert.
 2. **If no session will start**, Ctrl+Alt+F3 to a text console, log in, and
-   `gnome-extensions disable fuckwayland-overlap@fuckwayland`, then Ctrl+Alt+F1
+   `gnome-extensions disable w11-overlap@w11`, then Ctrl+Alt+F1
    back. This works from a real text login, which has `XDG_RUNTIME_DIR` set.
    **It does not always work from a bare shell with no session bus at all**: it
    prints `dconf-WARNING … failed to commit` and exits **0** having changed
    nothing, which is a `gnome-extensions` behaviour and not something this
    project can fix.
 3. **The route that always works** is deleting the directory:
-   `rm -rf ~/.local/share/gnome-shell/extensions/fuckwayland-overlap@fuckwayland`.
+   `rm -rf ~/.local/share/gnome-shell/extensions/w11-overlap@w11`.
    It is printed in the warning for that reason.
 
 #### `--dryrun`, and unrecognised builds
@@ -930,7 +930,7 @@ to a dry run is refused too: [above](#forcing-past-a-refusal-on-a-gnome-nobody-h
 
 ```console
 xrandr: overlap check shell-version: GNOME Shell 46.0, libmutter-14.so.0 (build 9e23feb34618)
-xrandr: overlap check typelib: FwOverlap14, MetaMonitorsConfig 72 bytes as declared
+xrandr: overlap check typelib: W11Overlap14, MetaMonitorsConfig 72 bytes as declared
 xrandr: overlap check sentinel: switch_config round-tripped at the declared offset
 xrandr: overlap check pending-dialog: nothing holds a modal grab, so GNOME is not asking "Keep changes?"
 xrandr: overlap check bounded-read: 3 logical monitors, every address range-checked
@@ -954,12 +954,12 @@ xrandr: --unsafe-gnome-overlap: GNOME Shell 52.0 is not a build this has been me
                         libmutter-51.so.0
                         Meta typelib 51
                         MetaMonitorsConfig 80 bytes, from this build's GType registry
-  What is shipped:      GNOME 46 -> libmutter-14.so.0, FwOverlap14, Meta typelib 14, MetaMonitorsConfig 72 bytes
-                        GNOME 50 -> libmutter-18.so.0, FwOverlap18, Meta typelib 18, MetaMonitorsConfig 80 bytes
-                        GNOME 51 -> libmutter-51.so.0, FwOverlap51, Meta typelib 51, MetaMonitorsConfig 80 bytes
+  What is shipped:      GNOME 46 -> libmutter-14.so.0, W11Overlap14, Meta typelib 14, MetaMonitorsConfig 72 bytes
+                        GNOME 50 -> libmutter-18.so.0, W11Overlap18, Meta typelib 18, MetaMonitorsConfig 80 bytes
+                        GNOME 51 -> libmutter-51.so.0, W11Overlap51, Meta typelib 51, MetaMonitorsConfig 80 bytes
   To add this build:    one record in each of these two, keyed by the GNOME major, and
                         nothing else anywhere:
-                            gnome/fuckwayland-overlap@fuckwayland/generations.json
+                            gnome/w11-overlap@w11/generations.json
                             wxrandr/gnome_overlap.py  (GENERATIONS)
                         then
                             python3 gnome/overlap-typelib/gen-gir.py --from-header \
@@ -1016,7 +1016,7 @@ of it needs a debugger:
    not know the size of rather than guessing, and refuses outright if the head
    of the struct has moved, because then the description's *shape* is wrong and
    not just its numbers. Adding a generation is one record in
-   `gnome/fuckwayland-overlap@fuckwayland/generations.json`, the same record in
+   `gnome/w11-overlap@w11/generations.json`, the same record in
    `GENERATIONS` in `wxrandr/gnome_overlap.py`, one run of the script above —
    which writes the `.gir`, the `.typelib` and `metadata.json`'s `shell-version`
    out of the table — and then the three-head measurement.
@@ -1193,7 +1193,7 @@ the route is a validating call in Hyprland's IPC (route 6).
 backend.
 
 **`wxrandr/hypr.py` carries a second copy of `wdotool/hypr_ipc.py`'s reader on purpose.**
-`scripts/build-pyz.sh` builds `dist/wxrandr` out of `fwcommon` and `wxrandr` alone, so a
+`scripts/build-pyz.sh` builds `dist/wxrandr` out of `w11common` and `wxrandr` alone, so a
 `from wdotool...` there would work from the .deb and quietly not from the zipapp — and on
 Hyprland "quietly" means falling back to a wlr path that cannot apply. This is the same
 trade `wdotool/layoutbox.py` already makes with Mutter's logical-size rule, and it is

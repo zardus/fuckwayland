@@ -11,7 +11,7 @@ a replay of a measurement, not an invention.  What was measured, and how:
 `tests/fixtures/scaling/`.
 
 The oracle in the guest was the KMS cursor plane (`/sys/kernel/debug/dri/
-*/state`, device pixels on the scanout, which nothing in fuckwayland
+*/state`, device pixels on the scanout, which nothing in w11
 produces) and, where the compositor draws its own cursor instead of using
 that plane, a QMP screendump differenced against a parked one.
 
@@ -40,7 +40,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # tests/conftest.py (which covers pytest) and tests/test_passthrough.py.
 # This line is what covers `python3 tests/<file>.py`, where conftest is
 # not loaded, and it reaches every subprocess a test spawns.
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
 import test_wxrandr_mutter as twm                         # noqa: E402
 import wl_fake                                            # noqa: E402
@@ -86,7 +86,7 @@ class OutputCompositor(wl_fake.Server):
             h = self.heads[self.names[name][1]]
             state["outputs"][new_id] = h
             body = (struct.pack("<iiiii", h["lx"], h["ly"], 480, 270, 0)
-                    + wl_fake.wstr("fuckwayland") + wl_fake.wstr("Virtual")
+                    + wl_fake.wstr("w11") + wl_fake.wstr("Virtual")
                     + struct.pack("<i", 0))
             self._send(conn, new_id, 0, body)                        # geometry
             self._send(conn, new_id, 1,
@@ -426,7 +426,7 @@ class DisplayConfigSource(BboxCase):
 
     def test_the_rounding_rule_is_the_backends_own(self):
         """layoutbox does not import wxrandr -- the single-file wdotool zipapp
-        bundles fwcommon and wdotool only, so a fix that needed wxrandr would
+        bundles w11common and wdotool only, so a fix that needed wxrandr would
         work from the .deb and quietly not from the zipapp.  The price is a
         second copy of Mutter's logical-size rule, and this is what keeps the
         two from drifting: every size, scale, transform and layout mode, both

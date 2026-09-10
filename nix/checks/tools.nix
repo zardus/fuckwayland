@@ -12,7 +12,7 @@
 # for warandr, Xvfb, xterm and foot for the compositor tests,
 # g-ir-compiler for the typelib tests, dbus-run-session for the RealBus tests,
 # node for tests/test_bridge_js.py.  The distro's own xdotool/wmctrl/xprop/
-# xrandr are deliberately NOT here: FUCKWAYLAND_PASSTHROUGH=never is set for
+# xrandr are deliberately NOT here: W11_PASSTHROUGH=never is set for
 # the whole run, the parity files are a job of their own against the pinned
 # oracles (scripts/parity-oracle.sh), and a real xdotool on PATH inside a
 # check would only make the handover tests answer differently than they do in
@@ -20,7 +20,7 @@
 { pkgs, src, version }:
 
 pkgs.stdenv.mkDerivation {
-  pname = "fuckwayland-tests";
+  pname = "w11-tests";
   inherit version src;
 
   # gobject-introspection is the setup HOOK that collects every input's
@@ -80,7 +80,7 @@ pkgs.stdenv.mkDerivation {
     export HOME=$TMPDIR/home
     export XDG_RUNTIME_DIR=$TMPDIR/run
     install -d -m 0700 "$HOME" "$XDG_RUNTIME_DIR"
-    export FUCKWAYLAND_PASSTHROUGH=never
+    export W11_PASSTHROUGH=never
     # the rig's scripts and the fixtures' fake tools say #!/usr/bin/env, and the
     # sandbox has no /usr/bin; nothing the packages ship lives in these three trees
     patchShebangs vm scripts tests/fixtures

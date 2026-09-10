@@ -67,7 +67,7 @@ in
   # The tools under test, plus the X11 originals the handover hands to and the
   # oracles vm/selftest.sh reads: swaymsg/gdbus come with their desktops,
   # wlr-randr is the independent reader for the wlroots family.
-  programs.fuckwayland = {
+  programs.w11 = {
     enable = true;
     x11Tools.enable = true;
     wlMirror.enable = true;
@@ -83,12 +83,12 @@ in
   # Two specialisations, and this is what they buy: the smoke's package axis
   # on every other distro is `apt-get remove` / `dnf remove` / `pacman -R` and
   # a re-install, which has no meaning on NixOS -- the package is IN the image.
-  # `switch-to-configuration test` into without-fuckwayland reloads the udev
+  # `switch-to-configuration test` into without-w11 reloads the udev
   # rules and swaps the system path in one step, offline, with no rebuild, and
   # switching back is the re-install.  inheritParentConfig defaults true, so
   # the only difference is the option below.
-  specialisation.without-fuckwayland.configuration = {
-    programs.fuckwayland.enable = lib.mkForce false;
+  specialisation.without-w11.configuration = {
+    programs.w11.enable = lib.mkForce false;
   };
 
   system.stateVersion = "26.05";

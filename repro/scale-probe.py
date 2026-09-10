@@ -2,7 +2,7 @@
 """Which pixel space does wdotool's pointer live in?  Guest-side probe.
 
 Runs in the guest **as root** (it reads /sys/kernel/debug and needs
-/dev/uinput), against a repo tree unpacked at $FW (default /root/fw).
+/dev/uinput), against a repo tree unpacked at $W11 (default /root/w11).
 
 For every target it asks for, four readings are taken, in this order,
 because the later ones disturb the earlier ones:
@@ -13,7 +13,7 @@ because the later ones disturb the earlier ones:
           seeds it from the compositor and would overwrite it)
   hw      the KMS cursor plane's crtc-pos, per CRTC, from
           /sys/kernel/debug/dri/0/state -- device pixels on the scanout,
-          the only reading no part of fuckwayland produces (vm/README.md
+          the only reading no part of w11 produces (vm/README.md
           "The mouse cursor is not in a screendump")
   comp    the compositor's own statement: Mutter's global.get_pointer()
           through the bridge, or KWin's workspace.cursorPos
@@ -29,9 +29,9 @@ import subprocess
 import sys
 import time
 
-FW = os.environ.get("FW", "/root/fw")
-sys.path.insert(0, FW)
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+W11 = os.environ.get("W11", "/root/w11")
+sys.path.insert(0, W11)
+os.environ["W11_PASSTHROUGH"] = "never"
 
 def drm_state_path():
     """The atomic-state dump of the card that is actually driving the heads.

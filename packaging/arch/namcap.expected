@@ -1,6 +1,6 @@
 # Every namcap finding this package accepts, one Python regular expression per
 # line, `#` comments and blank lines ignored.  The analogue of
-# debian/fuckwayland.lintian-overrides and packaging/rpm/fuckwayland.rpmlintrc.
+# debian/w11.lintian-overrides and packaging/rpm/w11.rpmlintrc.
 #
 # tests/test_release_pkgbuild.py runs namcap over the built package in CI and
 # fails on any line no pattern here matches; tests/test_pkgbuild.py checks
@@ -13,7 +13,7 @@
 # There was a fourth line here until HEAD 375d815: while the tree had no
 # LICENSE the recipe said license=('LicenseRef-none') and namcap answered
 # "Uncommon license identifiers such as 'LicenseRef-none' require license files
-# below /usr/share/licenses/fuckwayland/ ... Found 0/1" (measured verbatim).
+# below /usr/share/licenses/w11/ ... Found 0/1" (measured verbatim).
 # BSD-2-Clause with the file installed answers it, so the pattern went rather
 # than staying on as a filter nobody needs.
 
@@ -23,11 +23,11 @@
 # optional GUI, which is exactly the trade the .deb gets wrong (its GTK stack
 # is a Depends; tests/test_release_deb.py carries that as an expectedFailure).
 # So python-gobject and gtk3 stay optdepends and this finding is accepted.
-^fuckwayland E: Dependency glib2 detected and not included
+^w11 E: Dependency glib2 detected and not included
 
 # packaging/common/enable-bridge is a /bin/sh script; namcap reads the
 # interpreter as a "referenced library".  bash and sh are in base.
-^fuckwayland W: Referenced library 'sh'
+^w11 W: Referenced library 'sh'
 
 # namcap resolves the package's OWN modules against installed packages, so
 # every module one of the six console scripts imports is reported as an
@@ -35,26 +35,26 @@
 # real makepkg build still produces them is what the first CI run answers; the
 # pattern is here so that the answer is a green job either way, and it is
 # deliberately narrow -- only our own seven top-level names match.
-^fuckwayland W: Referenced python module '(fwcommon|wdotool|wwmctl|wxprop|wxrandr|warandr|wmirror)[.']
+^w11 W: Referenced python module '(w11common|wdotool|wwmctl|wxprop|wxrandr|warandr|wmirror)[.']
 
 # The console scripts' interpreter.  namcap 3.5 reads `#!/usr/bin/python` and
 # reports the `python` it resolves to as an uninstalled dependency even though
 # depends=('python') names it and the package is installed on the box running
 # namcap (measured in the CI pkgbuild job, run 34364127816, after the shebang
 # was fixed from /usr/sbin/python).  A namcap reading, not a packaging one.
-^fuckwayland W: Referenced library 'python' is an uninstalled dependency
+^w11 W: Referenced library 'python' is an uninstalled dependency
 
 # warandr's GUI imports gi at run time and nowhere else, which is exactly what
 # optdepends=('python-gobject: the warandr GUI') says: namcap reports the
 # optional dependency it found the modules of, and that is the intended shape.
-^fuckwayland W: Dependency python-gobject detected but optional
+^w11 W: Dependency python-gobject detected but optional
 
 # The same import, seen through gi.repository.Gtk and Gdk: GTK 3 is what the
 # GUI draws with and is pulled in by python-gobject's own optdepends chain, so
 # it stays optional here too (a headless box never loads warandr/gui.py).
-^fuckwayland W: Dependency gtk3 detected but optional
+^w11 W: Dependency gtk3 detected but optional
 
 # pango and glib2 are the C libraries behind gi.repository.Pango, GLib and
 # GObject; namcap calls them "implicitly satisfied" because every GTK 3
 # install carries them, and "optional" for the reason python-gobject is.
-^fuckwayland W: Dependency (pango|glib2) detected and implicitly satisfied but optional
+^w11 W: Dependency (pango|glib2) detected and implicitly satisfied but optional

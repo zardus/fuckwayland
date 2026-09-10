@@ -28,7 +28,7 @@ import threading
 import time
 import traceback
 
-from fwcommon.errors import CmdError
+from w11common.errors import CmdError
 from wdotool import keymap, keystate, layoutbox, uinput, vkbd, vptr, xkbmap
 
 # Per-euid log path: /tmp is shared, and a root-owned log must not break (or
@@ -144,7 +144,7 @@ def socket_path() -> str:
     quietly moved somewhere else."""
     if os.geteuid() == 0:
         return "/run/wdotool.sock"
-    from fwcommon import session
+    from w11common import session
 
     rd = os.environ.get("XDG_RUNTIME_DIR")
     return os.path.join(rd or session.runtime_dir(), "wdotool.sock")
@@ -228,8 +228,8 @@ def _wayland_bbox(detail: bool = False):
 
     With detail=True, returns (box, outs) -- the per-head wire state as well, which
     is what says whether the box is in an ambiguous pixel space (wdotool/layoutbox.py)."""
-    from fwcommon import session
-    from fwcommon.wayland_mini import WlConn
+    from w11common import session
+    from w11common.wayland_mini import WlConn
 
     hit = session.find_wayland_socket()
     if hit is None:
@@ -1155,7 +1155,7 @@ class _Daemon:
         if virtual:
             return False
         if self._rel_abs is None:
-            from fwcommon import session
+            from w11common import session
             self._rel_abs = not bool(session.find_sway_socket())
         return self._rel_abs
 

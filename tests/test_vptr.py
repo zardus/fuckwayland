@@ -2,7 +2,7 @@
 
 Everything here runs against a **real Wayland socket** served by a fake
 compositor that speaks the wire format (`PointerCompositor` below): the client is
-`fwcommon/wayland_mini.py` unmodified, and every assertion is about the bytes
+`w11common/wayland_mini.py` unmodified, and every assertion is about the bytes
 the compositor received. A mock of our own client would have proved only that
 we can call our own methods.
 
@@ -33,12 +33,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # every test file carries this itself: the suite is run file by file, where
 # conftest.py never loads, and a tool that hands itself over would not be
 # the code under test
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 os.environ.setdefault("WDOTOOL_LAYOUT", "us")
 
 import wl_fake
 from support import RecorderDev, abs_report
-from fwcommon.wayland_mini import WlConn
+from w11common.wayland_mini import WlConn
 from wdotool import daemon, uinput, vptr
 
 
@@ -984,7 +984,7 @@ class TheQueryThatComesBeforeTheMove(unittest.TestCase):
     1 and moved nothing, every time, however well the protocol worked."""
 
     def _ctx(self, calls):
-        from fwcommon.errors import CmdError
+        from w11common.errors import CmdError
 
         class Ctx:
             stack: list = []
@@ -1030,7 +1030,7 @@ class TheQueryThatComesBeforeTheMove(unittest.TestCase):
 
     def test_restore_says_so_rather_than_moving_to_nowhere(self):
         from wdotool import input_cmds
-        from fwcommon.errors import CmdError
+        from w11common.errors import CmdError
         calls = []
         ctx = self._ctx(calls)
         input_cmds.cmd_mousemove(ctx, ["100", "200"])

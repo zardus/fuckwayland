@@ -1,8 +1,8 @@
 ### true
 ### rc=0
-### cp /tmp/fw-oracle.py $HOME/fw-oracle.py && chmod 0755 $HOME/fw-oracle.py
+### cp /tmp/w11-oracle.py $HOME/w11-oracle.py && chmod 0755 $HOME/w11-oracle.py
 ### rc=0
-### cd /tmp && DEBIAN_FRONTEND=noninteractive apt-get install -y ./fw.deb 2>&1
+### cd /tmp && DEBIAN_FRONTEND=noninteractive apt-get install -y ./w11.deb 2>&1
 Reading package lists...
 Building dependency tree...
 Reading state information...
@@ -11,13 +11,13 @@ The following additional packages will be installed:
   gir1.2-atk-1.0 gir1.2-freedesktop gir1.2-gdkpixbuf-2.0 gir1.2-gtk-3.0
   gir1.2-harfbuzz-0.0 gir1.2-pango-1.0 libharfbuzz-gobject0 libpangoxft-1.0-0
 The following NEW packages will be installed:
-  fuckwayland gir1.2-atk-1.0 gir1.2-freedesktop gir1.2-gdkpixbuf-2.0
+  w11 gir1.2-atk-1.0 gir1.2-freedesktop gir1.2-gdkpixbuf-2.0
   gir1.2-gtk-3.0 gir1.2-harfbuzz-0.0 gir1.2-pango-1.0 libharfbuzz-gobject0
   libpangoxft-1.0-0
 0 upgraded, 9 newly installed, 0 to remove and 92 not upgraded.
 Need to get 472 kB/979 kB of archives.
 After this operation, 4127 kB of additional disk space will be used.
-Get:1 /tmp/fw.deb fuckwayland all 0.4.0 [507 kB]
+Get:1 /tmp/w11.deb w11 all 0.4.0 [507 kB]
 Get:2 http://archive.ubuntu.com/ubuntu resolute-updates/main amd64 gir1.2-atk-1.0 amd64 2.60.4-0ubuntu0.1 [23.2 kB]
 Get:3 http://archive.ubuntu.com/ubuntu resolute/main amd64 gir1.2-freedesktop amd64 1.86.0-6build1 [66.0 kB]
 Get:4 http://archive.ubuntu.com/ubuntu resolute/main amd64 gir1.2-gdkpixbuf-2.0 amd64 2.44.5+dfsg-4ubuntu1 [9312 B]
@@ -73,9 +73,9 @@ Unpacking gir1.2-pango-1.0:amd64 (1.57.0-1) ...
 Selecting previously unselected package gir1.2-gtk-3.0:amd64.
 Preparing to unpack .../7-gir1.2-gtk-3.0_3.24.52-0ubuntu1_amd64.deb ...
 Unpacking gir1.2-gtk-3.0:amd64 (3.24.52-0ubuntu1) ...
-Selecting previously unselected package fuckwayland.
-Preparing to unpack .../8-fw.deb ...
-Unpacking fuckwayland (0.4.0) ...
+Selecting previously unselected package w11.
+Preparing to unpack .../8-w11.deb ...
+Unpacking w11 (0.4.0) ...
 Setting up gir1.2-freedesktop:amd64 (1.86.0-6build1) ...
 Setting up libpangoxft-1.0-0:amd64 (1.57.0-1) ...
 Setting up gir1.2-gdkpixbuf-2.0:amd64 (2.44.5+dfsg-4ubuntu1) ...
@@ -84,9 +84,9 @@ Setting up libharfbuzz-gobject0:amd64 (12.3.2-2) ...
 Setting up gir1.2-harfbuzz-0.0:amd64 (12.3.2-2) ...
 Setting up gir1.2-pango-1.0:amd64 (1.57.0-1) ...
 Setting up gir1.2-gtk-3.0:amd64 (3.24.52-0ubuntu1) ...
-Setting up fuckwayland (0.4.0) ...
+Setting up w11 (0.4.0) ...
 
-fuckwayland: wdotool, wwmctl, wxprop, wxrandr, warandr and wmirror are on PATH.
+w11: wdotool, wwmctl, wxprop, wxrandr, warandr and wmirror are on PATH.
 
   * On GNOME, the window commands need the bridge extension, and gnome-shell
     only scans extension directories at login: LOG OUT AND BACK IN ONCE.  The
@@ -95,9 +95,9 @@ fuckwayland: wdotool, wwmctl, wxprop, wxrandr, warandr and wmirror are on PATH.
     commands say the bridge is not running and name gnome/install-bridge.sh,
     which is the from-a-clone route -- this package has done that part.
   * /dev/uinput is now open to the user at the active seat (udev rule
-    60-fuckwayland-uinput.rules), which is what lets wdotool type and click
+    60-w11-uinput.rules), which is what lets wdotool type and click
     without root.  Anyone who can open it can type as you -- see the threat
-    model in /usr/share/doc/fuckwayland/README.md.gz.
+    model in /usr/share/doc/w11/README.md.gz.
   * On an X11 session the tools hand over to the real ones; install those
     with: apt install xdotool wmctrl
 
@@ -120,13 +120,13 @@ No VM guests are running outdated hypervisor (qemu) binaries on this host.
 ### rc=0
 ### ( sleep 1; reboot ) >/dev/null 2>&1 &
 ### rc=0
-### cp /tmp/fw-oracle.py $HOME/fw-oracle.py && chmod 0755 $HOME/fw-oracle.py
+### cp /tmp/w11-oracle.py $HOME/w11-oracle.py && chmod 0755 $HOME/w11-oracle.py
 ### rc=0
-### setsid nohup dbus-monitor --session >> $HOME/fw-bus.log 2>&1 </dev/null & sleep 1; true
+### setsid nohup dbus-monitor --session >> $HOME/w11-bus.log 2>&1 </dev/null & sleep 1; true
 ### rc=0
-### rm -f $HOME/fw-smoke.txt; touch $HOME/fw-smoke.txt
+### rm -f $HOME/w11-smoke.txt; touch $HOME/w11-smoke.txt
 ### rc=0
-### rm -f $HOME/fw-smoke.txt; setsid nohup foot -- sh -c 'cat >> $HOME/fw-smoke.txt' >/dev/null 2>&1 </dev/null &            sleep 3; true
+### rm -f $HOME/w11-smoke.txt; setsid nohup foot -- sh -c 'cat >> $HOME/w11-smoke.txt' >/dev/null 2>&1 </dev/null &            sleep 3; true
 ### rc=0
 ### wdotool search --class foot | head -1
 1073743984
@@ -442,7 +442,7 @@ alterZOrder: no window
 ### rc=0
 ### kill 6610; true
 ### rc=0
-### rm -f $HOME/fw-smoke.txt; setsid nohup foot -- sh -c 'cat >> $HOME/fw-smoke.txt' >/dev/null 2>&1 </dev/null &            sleep 3; true
+### rm -f $HOME/w11-smoke.txt; setsid nohup foot -- sh -c 'cat >> $HOME/w11-smoke.txt' >/dev/null 2>&1 </dev/null &            sleep 3; true
 ### rc=0
 ### wdotool search --class foot | head -1
 1532647471

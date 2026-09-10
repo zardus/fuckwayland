@@ -3,13 +3,13 @@
 
 The Arch package was assembled, `pacman -U`'d and `pacman -R`'d for real in an
 Arch bootstrap root on this guest -- 238 files, 7.1 MB, the six tools ran, and
-the removal took /var/lib/fuckwayland with it [recon2/pkg-arch.md 2].  What
+the removal took /var/lib/w11 with it [recon2/pkg-arch.md 2].  What
 could not run there is makepkg itself: it needs /proc for bash process
 substitution (`/dev/fd/63: No such file or directory`, then fakeroot "nested
 operation not yet supported"), and dsb refuses every mount.  So the first real
 makepkg is the CI `pkgbuild` job in archlinux:base-devel and
 tests/test_release_pkgbuild.py, and everything that can be held without makepkg
-is held here: the recipe as text against debian/fuckwayland.install and
+is held here: the recipe as text against debian/w11.install and
 pyproject.toml, and the .install's three scriptlets RUN as processes against a
 fake root, the way tests/test_debian_scripts.py runs dpkg's.
 
@@ -36,7 +36,7 @@ import unittest
 # The suite never hands a tool over to the real X11 one: see tests/conftest.py
 # (which covers pytest) and tests/test_passthrough.py.  This line is what
 # covers `python3 tests/<file>.py`, where conftest is not loaded.
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
@@ -46,28 +46,28 @@ sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import support                                                    # noqa: E402
-from fwcommon import VERSION                                      # noqa: E402
+from w11common import VERSION                                     # noqa: E402
 
 PKGBUILD = os.path.join(ROOT, "packaging", "arch", "PKGBUILD")
-INSTALL = os.path.join(ROOT, "packaging", "arch", "fuckwayland.install")
+INSTALL = os.path.join(ROOT, "packaging", "arch", "w11.install")
 NAMCAP_EXPECTED = os.path.join(ROOT, "packaging", "arch", "namcap.expected")
 BUILD_PKGBUILD = os.path.join(ROOT, "scripts", "build-pkgbuild.sh")
-DEB_INSTALL = os.path.join(ROOT, "debian", "fuckwayland.install")
+DEB_INSTALL = os.path.join(ROOT, "debian", "w11.install")
 DEB_RULES = os.path.join(ROOT, "debian", "rules")
-DEB_LINKS = os.path.join(ROOT, "debian", "fuckwayland.links")
-POSTINST = os.path.join(ROOT, "debian", "fuckwayland.postinst")
-POSTRM = os.path.join(ROOT, "debian", "fuckwayland.postrm")
-GENERATIONS = os.path.join(ROOT, "gnome", "fuckwayland-overlap@fuckwayland",
+DEB_LINKS = os.path.join(ROOT, "debian", "w11.links")
+POSTINST = os.path.join(ROOT, "debian", "w11.postinst")
+POSTRM = os.path.join(ROOT, "debian", "w11.postrm")
+GENERATIONS = os.path.join(ROOT, "gnome", "w11-overlap@w11",
                            "generations.json")
 
-OVERLAP_UUID = "fuckwayland-overlap@fuckwayland"
-BRIDGE_UUID = "fuckwayland-bridge@fuckwayland"
+OVERLAP_UUID = "w11-overlap@w11"
+BRIDGE_UUID = "w11-bridge@w11"
 
 #: The shell variables package() uses, and what they stand for.  Expanding them
 #: is what lets a dpkg-side path be compared with an Arch-side one as a string.
 VARS = {
     "$pkgdir/$ext/": "$pkgdir/usr/share/gnome-shell/extensions/",
-    "$pkgname": "fuckwayland",
+    "$pkgname": "w11",
 }
 
 #: One deb source whose recipe counterpart is spelled differently on purpose:
@@ -92,7 +92,7 @@ UDEVADM = (
 #: The three absolute paths the scriptlet cannot be talked out of, redirected
 #: into the fake root so the udev half really runs here.  Without this the
 #: guards decide the test by what the machine running it happens to have.
-ROOTED = ("/var/lib/fuckwayland", "/run/udev", "/dev/uinput")
+ROOTED = ("/var/lib/w11", "/run/udev", "/dev/uinput")
 
 #: The same list tests/test_rpm_scripts.py compares by.  Duplicated rather than
 #: imported: a test file is not a shared double (tests/support.py is), and this
@@ -161,7 +161,7 @@ def function(name):
 
 
 def deb_install_lines():
-    """debian/fuckwayland.install as [(source, destination directory)].
+    """debian/w11.install as [(source, destination directory)].
 
     The same three-line parser is in tests/test_rpm_spec.py; both files read
     dpkg's list because dpkg's is the one a release is built from today."""
@@ -186,12 +186,12 @@ def deb_rules_installs():
         text = fh.read().replace("\\\n", " ")
     out = []
     for m in re.finditer(r"^\tinstall -D -m \d+\s+(\S+)\s+(\S+)\s*$", text, re.M):
-        out.append((m.group(1), re.sub(r"^debian/fuckwayland/", "", m.group(2))))
+        out.append((m.group(1), re.sub(r"^debian/w11/", "", m.group(2))))
     return out
 
 
 def deb_links():
-    """debian/fuckwayland.links as {installed path: the symlink over it}.
+    """debian/w11.links as {installed path: the symlink over it}.
 
     The .deb installs the autostart entry under /usr/lib and links it into
     /etc/xdg/autostart because debhelper makes every regular file under /etc a
@@ -213,7 +213,7 @@ def deb_links():
 class TheRecipe(unittest.TestCase):
     """The PKGBUILD as text."""
 
-    def test_pkgver_is_fwcommons_version(self):
+    def test_pkgver_is_w11commons_version(self):
         """The seventh place this release's version is written.
         scripts/build-pkgbuild.sh refuses the build over it; this is the same
         check from the other end."""
@@ -223,7 +223,7 @@ class TheRecipe(unittest.TestCase):
     def test_the_source_line_matches_the_tag_policy(self):
         """Upstream's tags are two-component -- v0.4 and v0.3 -- while
         pyproject.toml says 0.4.0, and archive/refs/tags/v0.4.tar.gz unpacks to
-        fuckwayland-0.4/ (measured, 3,952,338 bytes).  So the recipe carries
+        w11-0.4/ (measured, 3,952,338 bytes).  So the recipe carries
         _tag and _srcdir; `source=("...v$pkgver.tar.gz")` would 404 today.  The
         day upstream tags the three-component string, both lines simplify and
         this test is what says so out loud."""
@@ -308,7 +308,7 @@ class EveryPathTheDebShips(unittest.TestCase):
         self.package = function("package")
 
     def test_every_source_file_the_deb_installs_has_an_install_line(self):
-        """A data file added to debian/fuckwayland.install and not here is an
+        """A data file added to debian/w11.install and not here is an
         Arch package missing it, and nothing else would say so."""
         self.maxDiff = None
         srcs = [s for s, _d in deb_install_lines()] + [s for s, _d in deb_rules_installs()]
@@ -324,7 +324,7 @@ class EveryPathTheDebShips(unittest.TestCase):
         pairs = deb_rules_installs()
         self.assertGreaterEqual(len(pairs), 3, pairs)
         self.assertIn(("packaging/common/enable-bridge",
-                       "usr/lib/fuckwayland/enable-bridge"), pairs)
+                       "usr/lib/w11/enable-bridge"), pairs)
 
     def test_every_destination_directory_is_under_pkgdir(self):
         self.maxDiff = None
@@ -354,7 +354,7 @@ class EveryPathTheDebShips(unittest.TestCase):
         so the .desktop is a plain file that goes in and comes out again with
         the package (measured).  The .deb's symlink round debhelper's conffile
         rule has no reason to exist here, and there is no backup=() array."""
-        self.assertIn('"$pkgdir/etc/xdg/autostart/fuckwayland-enable-bridge.desktop"',
+        self.assertIn('"$pkgdir/etc/xdg/autostart/w11-enable-bridge.desktop"',
                       self.package)
         code = strip_comments(pkgbuild_text())
         self.assertNotIn("backup=", code, "a backup=() entry would outlive `pacman -R`")
@@ -376,7 +376,7 @@ class TheLicence(unittest.TestCase):
     relicence moves the recipe and not this file."""
 
     def setUp(self):
-        self.tmp = tempfile.mkdtemp(prefix="fw-spdx-arch-")
+        self.tmp = tempfile.mkdtemp(prefix="w11-spdx-arch-")
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
 
     def test_the_recipe_tag_is_the_id_the_license_file_states(self):
@@ -396,7 +396,7 @@ class TheLicence(unittest.TestCase):
         `if [ -f LICENSE ]` this had while there was no file would now hide a
         deleted LICENSE behind a green build."""
         package = function("package")
-        self.assertIn('install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/fuckwayland/"',
+        self.assertIn('install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/w11/"',
                       package)
         self.assertNotIn("if [ -f LICENSE ]", package)
 
@@ -471,8 +471,8 @@ class TheNamcapFilter(unittest.TestCase):
                 self.assertGreaterEqual(len(reason), 2, line)
 
     def test_the_licence_finding_went_with_the_placeholder(self):
-        """The rule packaging/rpm/fuckwayland.rpmlintrc and
-        debian/fuckwayland.lintian-overrides are held to, from the other side:
+        """The rule packaging/rpm/w11.rpmlintrc and
+        debian/w11.lintian-overrides are held to, from the other side:
         a filter nobody needs any more is a finding of its own.  namcap's
         "Uncommon license identifiers such as 'LicenseRef-none'" was accepted
         here while the tree had no LICENSE; BSD-2-Clause with the text
@@ -490,7 +490,7 @@ class ScriptletCase(unittest.TestCase):
     what pacman reports."""
 
     def setUp(self):
-        self.tmp = tempfile.mkdtemp(prefix="fw-arch-scripts-")
+        self.tmp = tempfile.mkdtemp(prefix="w11-arch-scripts-")
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         self.root = os.path.join(self.tmp, "root")
         self.bin = os.path.join(self.tmp, "bin")
@@ -539,7 +539,7 @@ class ScriptletCase(unittest.TestCase):
                               timeout=60)
 
     def stamp(self):
-        return os.path.join(self.root, "var", "lib", "fuckwayland", "installed")
+        return os.path.join(self.root, "var", "lib", "w11", "installed")
 
     def calls(self):
         if not os.path.exists(self.log):
@@ -719,7 +719,7 @@ class TheThreePackagingsAgree(unittest.TestCase):
         with open(os.path.join(ROOT, "pyproject.toml"), "rb") as fh:
             project = tomllib.load(fh)["project"]
         mine = {v.split(":")[0].split(".")[0] for v in project["scripts"].values()}
-        mine.add("fwcommon")
+        mine.add("w11common")
         with open(NAMCAP_EXPECTED, encoding="utf-8") as fh:
             text = fh.read()
         m = re.search(r"Referenced python module '\(([^)]*)\)", text)

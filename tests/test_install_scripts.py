@@ -46,7 +46,7 @@ import unittest
 # The suite never hands a tool over to the real X11 one: see tests/conftest.py
 # (which covers pytest) and tests/test_passthrough.py.  This line is what
 # covers `python3 tests/<file>.py`, where conftest is not loaded.
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
@@ -69,8 +69,8 @@ ENABLE_BRIDGE_DESKTOP = os.path.join(ROOT, "packaging", "common",
 INSTALL_BRIDGE = os.path.join(ROOT, "gnome", "install-bridge.sh")
 INSTALL_OVERLAP = os.path.join(ROOT, "gnome", "install-overlap.sh")
 
-BRIDGE_UUID = "fuckwayland-bridge@fuckwayland"
-OVERLAP_UUID = "fuckwayland-overlap@fuckwayland"
+BRIDGE_UUID = "w11-bridge@w11"
+OVERLAP_UUID = "w11-overlap@w11"
 ENABLED = "org.gnome.shell/enabled-extensions"
 DISABLED = "org.gnome.shell/disabled-extensions"
 
@@ -84,7 +84,7 @@ class ShellCase(unittest.TestCase):
     """A temporary HOME, a fake GNOME command line, and a log of every call."""
 
     def setUp(self):
-        self.tmp = tempfile.mkdtemp(prefix="fw-sh-")
+        self.tmp = tempfile.mkdtemp(prefix="w11-sh-")
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         self.home = self.p("home")
         self.bin = self.p("bin")
@@ -148,7 +148,7 @@ class EnableBridge(ShellCase):
     def go(self, env=None, **extra):
         e = self.base_env(
             XDG_CONFIG_HOME=self.p("config"),
-            FUCKWAYLAND_SYSTEM_STAMP=self.p("installed"),
+            W11_SYSTEM_STAMP=self.p("installed"),
             **extra)
         if env:
             e.update(env)
@@ -163,7 +163,7 @@ class EnableBridge(ShellCase):
         return path
 
     def user_stamp(self, when=None):
-        path = self.p("config", "fuckwayland", "bridge-enabled")
+        path = self.p("config", "w11", "bridge-enabled")
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w"):
             pass
@@ -211,7 +211,7 @@ class EnableBridge(ShellCase):
         got = self.go()
         self.assertEqual(got.returncode, 0, got.stderr)
         self.assertEqual(self.calls("gsettings set"), [])
-        self.assertTrue(os.path.exists(self.p("config", "fuckwayland", "bridge-enabled")))
+        self.assertTrue(os.path.exists(self.p("config", "w11", "bridge-enabled")))
 
     def test_the_running_shell_is_asked_first_and_the_fallback_is_skipped(self):
         """`gnome-extensions enable` is the supported front end and is tried
@@ -234,7 +234,7 @@ class EnableBridge(ShellCase):
         self.system_stamp()
         got = self.go()
         self.assertEqual(got.returncode, 0, got.stderr)
-        self.assertFalse(os.path.exists(self.p("config", "fuckwayland", "bridge-enabled")))
+        self.assertFalse(os.path.exists(self.p("config", "w11", "bridge-enabled")))
         self.assertEqual(self.calls("gsettings set"), [])
 
     def test_a_failing_gsettings_set_says_so_and_leaves_no_stamp(self):
@@ -247,7 +247,7 @@ class EnableBridge(ShellCase):
         got = self.go(FAKE_GSETTINGS_SET_FAILS="failed to commit changes to dconf")
         self.assertEqual(got.returncode, 1, (got.returncode, got.stdout, got.stderr))
         self.assertIn("enable-bridge: gsettings set failed", got.stderr)
-        self.assertFalse(os.path.exists(self.p("config", "fuckwayland", "bridge-enabled")))
+        self.assertFalse(os.path.exists(self.p("config", "w11", "bridge-enabled")))
 
     def test_a_user_stamp_newer_than_the_installation_stops_the_script_dead(self):
         """"Once per user per installation": after a run the user is in charge
@@ -281,7 +281,7 @@ class EnableBridge(ShellCase):
         got = self.go(XDG_SESSION_CLASS="greeter")
         self.assertEqual(got.returncode, 0, got.stderr)
         self.assertEqual(self.calls(), [])
-        self.assertFalse(os.path.exists(self.p("config", "fuckwayland", "bridge-enabled")))
+        self.assertFalse(os.path.exists(self.p("config", "w11", "bridge-enabled")))
 
     def test_the_greeter_session_is_left_alone_by_desktop_component(self):
         """The other marker gdm sets, and the only one on a session where
@@ -293,7 +293,7 @@ class EnableBridge(ShellCase):
         got = self.go(XDG_CURRENT_DESKTOP="GNOME-Greeter:GNOME")
         self.assertEqual(got.returncode, 0, got.stderr)
         self.assertEqual(self.calls(), [])
-        self.assertFalse(os.path.exists(self.p("config", "fuckwayland", "bridge-enabled")))
+        self.assertFalse(os.path.exists(self.p("config", "w11", "bridge-enabled")))
 
     def test_an_ordinary_gnome_desktop_component_is_not_the_greeter(self):
         """The premise of the two above: `ubuntu:GNOME`, which is what a real
@@ -385,7 +385,7 @@ class EnableFallbacksAgree(ShellCase):
             pass
         got = self.run_sh([ENABLE_BRIDGE], env=self.base_env(
             XDG_CONFIG_HOME=self.p("config"),
-            FUCKWAYLAND_SYSTEM_STAMP=self.p("installed"),
+            W11_SYSTEM_STAMP=self.p("installed"),
             FAKE_GNOME_EXTENSIONS_FAILS="1"))
         self.assertEqual(got.returncode, 0, got.stderr)
         self.assertEqual(self.enabled(), ("other@x", BRIDGE_UUID))
@@ -421,7 +421,7 @@ class InstallOverlapWhole(ShellCase):
         got = self.go(FAKE_SHELL_VERSION="50.1")
         self.assertEqual(got.returncode, 1, (got.stdout, got.stderr))
         self.assertTrue(os.path.exists(self.dest("extension.js")))
-        self.assertTrue(os.path.exists(self.dest("typelib", "FwOverlap18-1.0.typelib")))
+        self.assertTrue(os.path.exists(self.dest("typelib", "W11Overlap18-1.0.typelib")))
         with open(self.dest("metadata.json"), encoding="utf-8") as fh:
             packaged = fh.read()
         with open(os.path.join(ROOT, "gnome", OVERLAP_UUID, "metadata.json"),
@@ -457,7 +457,7 @@ class InstallOverlapWhole(ShellCase):
         self.seed(settings={ENABLED: "@as []"})
         got = self.go(FAKE_SHELL_VERSION="50.1", FAKE_NAME_OWNED="true")
         self.assertEqual(got.returncode, 0, (got.stdout, got.stderr))
-        self.assertIn("org.fuckwayland.Overlap is up", got.stdout)
+        self.assertIn("org.w11.Overlap is up", got.stdout)
 
     def test_no_enable_copies_the_files_and_touches_no_setting(self):
         self.seed(settings={ENABLED: "@as []"})
@@ -553,7 +553,7 @@ class TypelibByRename(ShellCase):
         got = self.copy_files()
         self.assertEqual(got.returncode, 0, got.stderr)
         for name in ("metadata.json", "extension.js", "rules.js",
-                     "generations.json", "org.fuckwayland.Overlap1.xml"):
+                     "generations.json", "org.w11.Overlap1.xml"):
             self.assertTrue(os.path.exists(os.path.join(self.dst, name)), name)
 
 
@@ -564,10 +564,10 @@ class SystemRefusesDpkg(ShellCase):
     @unittest.expectedFailure
     def test_installing_over_the_packages_files_is_refused(self):
         """Fix 8 (deferred: the author's call), finding F7.0.  `--system`
-        overwrites the fuckwayland package's own files, so dpkg's database and
-        the disk disagree from then on and `apt remove fuckwayland` takes the
+        overwrites the w11 package's own files, so dpkg's database and
+        the disk disagree from then on and `apt remove w11` takes the
         replacements away.  The check is one `dpkg -S "$DEST/extension.js"`:
-        when it names a package, refuse and say `apt remove fuckwayland`."""
+        when it names a package, refuse and say `apt remove w11`."""
         self.seed(settings={ENABLED: "@as []"})
         src = self.p("src")
         dst = self.p("sysdest")
@@ -582,21 +582,21 @@ class SystemRefusesDpkg(ShellCase):
                 + support.sh_function(INSTALL_OVERLAP, "copy_files")
                 + "copy_files\n")
         got = self.run_sh([self.script(body)],
-                          env=self.base_env(FAKE_DPKG_S="fuckwayland"))
+                          env=self.base_env(FAKE_DPKG_S="w11"))
         self.assertNotEqual(got.returncode, 0, got.stdout)
-        self.assertIn("apt remove fuckwayland", got.stdout + got.stderr)
+        self.assertIn("apt remove w11", got.stdout + got.stderr)
         with open(os.path.join(dst, "extension.js"), encoding="utf-8") as fh:
             self.assertEqual(fh.read(), "// dpkg put this here\n")
 
     def test_the_uninstall_message_names_the_package_route_today(self):
         """The premise of the test above, and the half that is already right:
         a per-user `--uninstall` that finds the package's copy in
-        $SYSTEM_DIR says so and names `apt remove fuckwayland` rather than
+        $SYSTEM_DIR says so and names `apt remove w11` rather than
         deleting another package's files."""
         with open(INSTALL_OVERLAP, encoding="utf-8") as fh:
             sh = fh.read()
         self.assertIn("this script does not delete another package's payload", sh)
-        self.assertIn("sudo apt remove fuckwayland", sh)
+        self.assertIn("sudo apt remove w11", sh)
 
 
 class BothInstallersPickTheSameUser(ShellCase):
@@ -671,7 +671,7 @@ class InstallBridgeUdev(ShellCase):
                "node_has_acl() { return 1; }\n"
                "seat_user() { :; }\n"
                "can_write_uinput() { return 2; }\n"
-               "UDEV_RULE='60-fuckwayland-uinput.rules'\n")
+               "UDEV_RULE='60-w11-uinput.rules'\n")
 
     def status(self, etc_rule=False, etc_mod=False, pkg_rule=False, pkg_mod=False):
         etc = self.p("etc")
@@ -679,10 +679,10 @@ class InstallBridgeUdev(ShellCase):
         for d in (etc, usr):
             os.makedirs(d, exist_ok=True)
         made = {}
-        for key, base, name in (("UDEV_DEST", etc, "60-fuckwayland-uinput.rules"),
-                                ("MODLOAD_DEST", etc, "fuckwayland-uinput.conf"),
-                                ("UDEV_PKG", usr, "60-fuckwayland-uinput.rules"),
-                                ("MODLOAD_PKG", usr, "fuckwayland-uinput.conf")):
+        for key, base, name in (("UDEV_DEST", etc, "60-w11-uinput.rules"),
+                                ("MODLOAD_DEST", etc, "w11-uinput.conf"),
+                                ("UDEV_PKG", usr, "60-w11-uinput.rules"),
+                                ("MODLOAD_PKG", usr, "w11-uinput.conf")):
             made[key] = os.path.join(base, name)
         for key, want in (("UDEV_DEST", etc_rule), ("MODLOAD_DEST", etc_mod),
                           ("UDEV_PKG", pkg_rule), ("MODLOAD_PKG", pkg_mod)):
@@ -709,14 +709,14 @@ class InstallBridgeUdev(ShellCase):
         on a machine where the rule is already in force."""
         got = self.status(pkg_rule=True, pkg_mod=True)
         self.assertEqual(got["udev rule"],
-                         "yes (%s, from the package)" % self.p("usr", "60-fuckwayland-uinput.rules"))
+                         "yes (%s, from the package)" % self.p("usr", "60-w11-uinput.rules"))
         self.assertEqual(got["modules-load"],
-                         "yes (%s, from the package)" % self.p("usr", "fuckwayland-uinput.conf"))
+                         "yes (%s, from the package)" % self.p("usr", "w11-uinput.conf"))
 
     def test_the_by_hand_pair_is_reported_without_the_package(self):
         got = self.status(etc_rule=True, etc_mod=True)
         self.assertEqual(got["udev rule"],
-                         "yes (%s)" % self.p("etc", "60-fuckwayland-uinput.rules"))
+                         "yes (%s)" % self.p("etc", "60-w11-uinput.rules"))
         self.assertNotIn("from the package", got["modules-load"])
 
     def test_etc_wins_when_both_are_there(self):
@@ -725,13 +725,13 @@ class InstallBridgeUdev(ShellCase):
         the one whose contents are in force."""
         got = self.status(etc_rule=True, etc_mod=True, pkg_rule=True, pkg_mod=True)
         self.assertEqual(got["udev rule"],
-                         "yes (%s)" % self.p("etc", "60-fuckwayland-uinput.rules"))
+                         "yes (%s)" % self.p("etc", "60-w11-uinput.rules"))
 
     def test_neither_is_no(self):
         got = self.status()
-        self.assertEqual(got["udev rule"], "no (%s)" % self.p("etc", "60-fuckwayland-uinput.rules"))
+        self.assertEqual(got["udev rule"], "no (%s)" % self.p("etc", "60-w11-uinput.rules"))
         self.assertEqual(got["modules-load"],
-                         "no (%s)" % self.p("etc", "fuckwayland-uinput.conf"))
+                         "no (%s)" % self.p("etc", "w11-uinput.conf"))
 
     def test_a_half_installed_pair_is_reported_per_file(self):
         """The rule from the package, the modules-load file from nowhere: two
@@ -743,16 +743,16 @@ class InstallBridgeUdev(ShellCase):
     @unittest.expectedFailure
     def test_the_uninstall_branch_tells_the_truth_about_the_packages_rule(self):
         """Fix 9 (deferred: the author's call), finding F0.6.  `--udev
-        --uninstall` removes /etc/udev/rules.d/60-fuckwayland-uinput.rules and
+        --uninstall` removes /etc/udev/rules.d/60-w11-uinput.rules and
         prints "removed ... ACL cleared" -- but on a machine that has the .deb
         the package's own copy in /usr/lib/udev/rules.d is still there, so the
         rule re-applies at the node's next udev event and the ACL comes back.
-        The branch has to look at $UDEV_PKG and name `apt remove fuckwayland`.
+        The branch has to look at $UDEV_PKG and name `apt remove w11`.
         Read out of the source: running it needs root and real udev."""
         src = support.sh_function(INSTALL_BRIDGE, "do_udev")
         uninstall = src.split('if [ "$MODE" = uninstall ]; then')[1].split("fi\n")[0]
         self.assertIn("UDEV_PKG", uninstall)
-        self.assertIn("apt remove fuckwayland", uninstall)
+        self.assertIn("apt remove w11", uninstall)
 
 
 # -- the enabler's home ------------------------------------------------------
@@ -791,14 +791,14 @@ class ThePackagingsShareTheEnabler(unittest.TestCase):
         self.assertNotIn("debian/enable-bridge", rules)
 
     def test_the_autostart_entry_still_points_at_the_dpkg_path(self):
-        """The .desktop's Exec= is /usr/lib/fuckwayland/enable-bridge, which is
+        """The .desktop's Exec= is /usr/lib/w11/enable-bridge, which is
         where the .deb and the PKGBUILD put the helper.  The rpm rewrites the
-        line to %{_libexecdir}/fuckwayland/enable-bridge at build time, because
+        line to %{_libexecdir}/w11/enable-bridge at build time, because
         /usr/libexec is Fedora's place for it -- one file, one sed, and no
         second copy of a .desktop to keep in step."""
         with open(ENABLE_BRIDGE_DESKTOP, encoding="utf-8") as fh:
             entry = fh.read()
-        self.assertIn("Exec=/usr/lib/fuckwayland/enable-bridge", entry)
+        self.assertIn("Exec=/usr/lib/w11/enable-bridge", entry)
         self.assertIn("OnlyShowIn=GNOME;", entry)
 
 

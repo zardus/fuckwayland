@@ -2,7 +2,7 @@
 //
 // The GNOME 45+ base class both extensions extend.  `uuid` and `path` are
 // getters onto the metadata, as they are in the shell, so
-// `new FwOverlap({uuid, path: <the real extension directory>})` gives the
+// `new W11Overlap({uuid, path: <the real extension directory>})` gives the
 // extension the tree it will read generations.json and typelib/ out of.
 
 import {record} from './harness.mjs';

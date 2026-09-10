@@ -1,6 +1,6 @@
 ### true
 ### rc=0
-### cp /tmp/fw-oracle.py $HOME/fw-oracle.py && chmod 0755 $HOME/fw-oracle.py
+### cp /tmp/w11-oracle.py $HOME/w11-oracle.py && chmod 0755 $HOME/w11-oracle.py
 ### rc=0
 ### gnome-shell --version
 GNOME Shell 46.0
@@ -8,7 +8,7 @@ GNOME Shell 46.0
 ### echo $XDG_SESSION_TYPE
 x11
 ### rc=0
-### setsid nohup gnome-text-editor $HOME/fw-smoke.txt >/dev/null 2>&1 </dev/null & sleep 3; true
+### setsid nohup gnome-text-editor $HOME/w11-smoke.txt >/dev/null 2>&1 </dev/null & sleep 3; true
 ### rc=0
 ### gsettings get org.gnome.shell disable-user-extensions
 false
@@ -16,39 +16,39 @@ false
 ### pgrep -x gnome-shell | head -1
 2255
 ### rc=0
-### gnome-extensions info fuckwayland-bridge@fuckwayland
-fuckwayland-bridge@fuckwayland
-  Name: fuckwayland bridge
-  Description: Exports Mutter window, workspace and monitor control over D-Bus (org.fuckwayland.Bridge) so wdotool, wwmctl and wxprop can drive a GNOME Wayland session. wxrandr and warandr do not need it: monitors go through Mutter's own DisplayConfig.
-  Path: /usr/share/gnome-shell/extensions/fuckwayland-bridge@fuckwayland
-  URL: https://github.com/antoniobianchi333/fuckwayland
+### gnome-extensions info w11-bridge@w11
+w11-bridge@w11
+  Name: w11 bridge
+  Description: Exports Mutter window, workspace and monitor control over D-Bus (org.w11.Bridge) so wdotool, wwmctl and wxprop can drive a GNOME Wayland session. wxrandr and warandr do not need it: monitors go through Mutter's own DisplayConfig.
+  Path: /usr/share/gnome-shell/extensions/w11-bridge@w11
+  URL: https://github.com/zardus/w11
   Version: 3
   Enabled: Yes
   State: ACTIVE
 ### rc=0
-### gdbus call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus                    --method org.freedesktop.DBus.ListNames 2>&1 | tr ',' '\n' | grep fuckwayland
- 'org.fuckwayland.Bridge'
+### gdbus call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus                    --method org.freedesktop.DBus.ListNames 2>&1 | tr ',' '\n' | grep w11
+ 'org.w11.Bridge'
 ### rc=0
-### gdbus call --session --dest org.freedesktop.DBus                       --object-path /org/freedesktop/DBus                       --method org.freedesktop.DBus.GetConnectionUnixProcessID org.fuckwayland.Bridge                       2>&1 | sed -n 's/.*uint32 \([0-9]*\).*/\1/p'
+### gdbus call --session --dest org.freedesktop.DBus                       --object-path /org/freedesktop/DBus                       --method org.freedesktop.DBus.GetConnectionUnixProcessID org.w11.Bridge                       2>&1 | sed -n 's/.*uint32 \([0-9]*\).*/\1/p'
 2255
 ### rc=0
-### gdbus call --session -d org.fuckwayland.Bridge -o /org/fuckwayland/Bridge -m org.fuckwayland.Bridge1.GetVersion 2>&1
+### gdbus call --session -d org.w11.Bridge -o /org/w11/Bridge -m org.w11.Bridge1.GetVersion 2>&1
 (uint32 3,)
 ### rc=0
-### gnome-extensions disable fuckwayland-bridge@fuckwayland
+### gnome-extensions disable w11-bridge@w11
 ### rc=0
-### gdbus call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus            --method org.freedesktop.DBus.NameHasOwner org.fuckwayland.Bridge 2>&1
+### gdbus call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus            --method org.freedesktop.DBus.NameHasOwner org.w11.Bridge 2>&1
 (false,)
 ### rc=0
-### gnome-extensions enable fuckwayland-bridge@fuckwayland
+### gnome-extensions enable w11-bridge@w11
 ### rc=0
-### gdbus call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus            --method org.freedesktop.DBus.NameHasOwner org.fuckwayland.Bridge 2>&1
+### gdbus call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus            --method org.freedesktop.DBus.NameHasOwner org.w11.Bridge 2>&1
 (true,)
 ### rc=0
 ### pgrep -x gnome-shell | head -1
 2255
 ### rc=0
-### gdbus call --session --dest org.gnome.Shell --object-path /org/gnome/Shell                     --method org.gnome.Shell.Extensions.ReloadExtension fuckwayland-bridge@fuckwayland 2>&1
+### gdbus call --session --dest org.gnome.Shell --object-path /org/gnome/Shell                     --method org.gnome.Shell.Extensions.ReloadExtension w11-bridge@w11 2>&1
 Error: GDBus.Error:org.freedesktop.DBus.Error.NotSupported: ReloadExtension is deprecated and does not work
 ### rc=1
 ### wdotool --version
@@ -57,11 +57,11 @@ xdotool version 3.20160805.1
 ### wxrandr --print-backend
 x11
 ### rc=0
-### FUCKWAYLAND_PASSTHROUGH=never wwmctl -l -x 2>&1
+### W11_PASSTHROUGH=never wwmctl -l -x 2>&1
 0x02200118 -1 gjs.Gjs               noble-gnome-x11-smoke Desktop Icons 1
 0x0220011c -1 gjs.Gjs               noble-gnome-x11-smoke Desktop Icons 2
 0x02200120 -1 gjs.Gjs               noble-gnome-x11-smoke Desktop Icons 3
-0x02400004  0 gnome-text-editor.gnome-text-editor  noble-gnome-x11-smoke fw-smoke.txt (~/) - Text Editor
+0x02400004  0 gnome-text-editor.gnome-text-editor  noble-gnome-x11-smoke w11-smoke.txt (~/) - Text Editor
 ### rc=0
 ### wmctrl -l -x | awk '/TextEditor|Text Editor/ { print $1; exit }'
 0x02400004
@@ -70,14 +70,14 @@ x11
 0x02200118 -1 gjs.Gjs               noble-gnome-x11-smoke Desktop Icons 1
 0x0220011c -1 gjs.Gjs               noble-gnome-x11-smoke Desktop Icons 2
 0x02200120 -1 gjs.Gjs               noble-gnome-x11-smoke Desktop Icons 3
-0x02400004  0 gnome-text-editor.gnome-text-editor  noble-gnome-x11-smoke fw-smoke.txt (~/) - Text Editor
+0x02400004  0 gnome-text-editor.gnome-text-editor  noble-gnome-x11-smoke w11-smoke.txt (~/) - Text Editor
 ### rc=0
-### python3 $HOME/fw-oracle.py gnome-x11
+### python3 $HOME/w11-oracle.py gnome-x11
 Virtual-1 0,0
 Virtual-2 1920,0
 Virtual-3 3840,0
 ### rc=0
-### python3 $HOME/fw-oracle.py gnome-x11
+### python3 $HOME/w11-oracle.py gnome-x11
 Virtual-1 0,0
 Virtual-2 1920,0
 Virtual-3 3840,0
@@ -90,37 +90,37 @@ Monitors: 3
 ### rc=0
 ### wxrandr --output Virtual-3 --off
 ### rc=0
-### python3 $HOME/fw-oracle.py gnome-x11
+### python3 $HOME/w11-oracle.py gnome-x11
 Virtual-1 0,0
 Virtual-2 1920,0
 ### rc=0
 ### wxrandr --output Virtual-3 --auto
 ### rc=0
-### python3 $HOME/fw-oracle.py gnome-x11
+### python3 $HOME/w11-oracle.py gnome-x11
 Virtual-1 0,0
 Virtual-2 1920,0
 Virtual-3 0,0
 ### rc=0
 ### wxrandr --output Virtual-3 --right-of Virtual-2
 ### rc=0
-### python3 $HOME/fw-oracle.py gnome-x11
+### python3 $HOME/w11-oracle.py gnome-x11
 Virtual-1 0,0
 Virtual-2 1920,0
 Virtual-3 3840,0
 ### rc=0
-### python3 $HOME/fw-oracle.py gnome-x11
+### python3 $HOME/w11-oracle.py gnome-x11
 Virtual-1 0,0
 Virtual-2 1920,0
 Virtual-3 3840,0
 ### rc=0
 ### wxrandr --output Virtual-3 --below Virtual-2
 ### rc=0
-### python3 $HOME/fw-oracle.py gnome-x11
+### python3 $HOME/w11-oracle.py gnome-x11
 Virtual-1 0,0
 Virtual-2 1920,0
 Virtual-3 1920,1080
 ### rc=0
-### python3 $HOME/fw-oracle.py gnome-x11
+### python3 $HOME/w11-oracle.py gnome-x11
 Virtual-1 0,0
 Virtual-2 1920,0
 Virtual-3 1920,1080
@@ -136,39 +136,39 @@ Virtual-3 1920,1080
   wlr       unavailable  no wayland socket
 * x11       available    /usr/bin/xrandr
 ### rc=0
-### python3 $HOME/fw-oracle.py gnome-x11
+### python3 $HOME/w11-oracle.py gnome-x11
 Virtual-1 0,0
 Virtual-2 1920,0
 Virtual-3 3840,0
 ### rc=0
-### python3 $HOME/fw-oracle.py gnome
+### python3 $HOME/w11-oracle.py gnome
 Virtual-1 0,0
 Virtual-2 1920,0
 Virtual-3 3840,0
 ### rc=0
-### python3 $HOME/fw-oracle.py gnome-x11
+### python3 $HOME/w11-oracle.py gnome-x11
 Virtual-1 0,0
 Virtual-2 1920,0
 Virtual-3 3840,0
 ### rc=0
-### python3 $HOME/fw-oracle.py gnome-x11
+### python3 $HOME/w11-oracle.py gnome-x11
 Virtual-1 0,0
 Virtual-2 1920,0
 Virtual-3 3840,0
 ### rc=0
-### python3 $HOME/fw-oracle.py gnome-x11
+### python3 $HOME/w11-oracle.py gnome-x11
 Virtual-1 0,0
 Virtual-2 1920,0
 Virtual-3 3840,0
 ### rc=0
 ### wxrandr --output Virtual-3 --pos 1920x0
 ### rc=0
-### python3 $HOME/fw-oracle.py gnome-x11
+### python3 $HOME/w11-oracle.py gnome-x11
 Virtual-1 0,0
 Virtual-2 1920,0
 Virtual-3 1920,0
 ### rc=0
-### python3 $HOME/fw-oracle.py gnome-x11
+### python3 $HOME/w11-oracle.py gnome-x11
 Virtual-1 0,0
 Virtual-2 1920,0
 Virtual-3 1920,0
@@ -183,26 +183,26 @@ compositor: Mutter
 protocol: org.gnome.Mutter.DisplayConfig (D-Bus)
 available: yes
 ### rc=0
-### python3 $HOME/fw-oracle.py gnome-x11
+### python3 $HOME/w11-oracle.py gnome-x11
 Virtual-1 0,0
 Virtual-2 1920,0
 Virtual-3 3840,0
 ### rc=0
 ### wxrandr --backend mutter --output Virtual-3 --pos 1920x0
 ### rc=0
-### python3 $HOME/fw-oracle.py gnome-x11
+### python3 $HOME/w11-oracle.py gnome-x11
 Virtual-1 0,0
 Virtual-2 1920,0
 Virtual-3 1920,0
 ### rc=0
-### python3 $HOME/fw-oracle.py gnome-x11
+### python3 $HOME/w11-oracle.py gnome-x11
 Virtual-1 0,0
 Virtual-2 1920,0
 Virtual-3 1920,0
 ### rc=0
 ### wxrandr --output Virtual-3 --pos 3840x0
 ### rc=0
-### python3 $HOME/fw-oracle.py gnome-x11
+### python3 $HOME/w11-oracle.py gnome-x11
 Virtual-1 0,0
 Virtual-2 1920,0
 Virtual-3 3840,0
@@ -211,9 +211,9 @@ Virtual-3 3840,0
 unavailable
 shell: 46.0
 reason: this session is x11, which places overlapping monitors without it
-file: /home/test/.config/fuckwayland/overlap-consent.json
+file: /home/test/.config/w11/overlap-consent.json
 ### rc=0
-### setsid nohup gnome-text-editor $HOME/fw-smoke.txt >/dev/null 2>&1 </dev/null & sleep 3; true
+### setsid nohup gnome-text-editor $HOME/w11-smoke.txt >/dev/null 2>&1 </dev/null & sleep 3; true
 ### rc=0
 ### wwmctl -l | wc -l
 4
@@ -254,23 +254,23 @@ mask::rw-
 other::---
 
 ### rc=0
-### setsid nohup gnome-text-editor $HOME/fw-smoke.txt >/dev/null 2>&1 </dev/null & sleep 3; true
+### setsid nohup gnome-text-editor $HOME/w11-smoke.txt >/dev/null 2>&1 </dev/null & sleep 3; true
 ### rc=0
 ### wdotool search --onlyvisible --class 'gnome-text-editor' | head -1
 37748740
 ### rc=0
 ### wdotool windowactivate --sync 37748740
 ### rc=0
-### rm -f $HOME/fw-smoke.txt; touch $HOME/fw-smoke.txt
+### rm -f $HOME/w11-smoke.txt; touch $HOME/w11-smoke.txt
 ### rc=0
-### FUCKWAYLAND_PASSTHROUGH=never wdotool type --delay 30 -- 'x11 uinput' 2>&1
+### W11_PASSTHROUGH=never wdotool type --delay 30 -- 'x11 uinput' 2>&1
 wdotool: cannot read the compositor's keymap (no wayland socket found); typing with the built-in US layout table
 ### rc=0
 ### wdotool key ctrl+s
 ### rc=0
-### cat $HOME/fw-smoke.txt 2>/dev/null
+### cat $HOME/w11-smoke.txt 2>/dev/null
 x11 uinput
 ### rc=0
-### cat $HOME/fw-smoke.txt 2>/dev/null
+### cat $HOME/w11-smoke.txt 2>/dev/null
 x11 uinput
 ### rc=0

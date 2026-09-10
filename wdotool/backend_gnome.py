@@ -1,14 +1,14 @@
-"""GNOME Shell (Mutter) window backend over the fuckwayland bridge extension.
+"""GNOME Shell (Mutter) window backend over the w11 bridge extension.
 
 GNOME has no window-management protocol and gnome-shell's own D-Bus surface
 is either read-only and sender-allowlisted (org.gnome.Shell.Introspect) or
 off by default (org.gnome.Shell.Eval outside "unsafe mode"). The only
-supported way in is code running inside the shell: gnome/fuckwayland-bridge@
-fuckwayland (see gnome/README.md) exports Mutter's window/workspace/monitor
+supported way in is code running inside the shell: gnome/w11-bridge@
+w11 (see gnome/README.md) exports Mutter's window/workspace/monitor
 facts and actions on the session bus as
 
-    name  org.fuckwayland.Bridge   path /org/fuckwayland/Bridge
-    iface org.fuckwayland.Bridge1  (JSON strings for structured results)
+    name  org.w11.Bridge   path /org/w11/Bridge
+    iface org.w11.Bridge1  (JSON strings for structured results)
 
 and this module is a thin client for it over dbus_mini (pure stdlib, one
 connection per process, no gdbus spawns). Window ids are Meta.Window.get_id()
@@ -48,23 +48,23 @@ import re
 import struct
 import time
 
-from fwcommon import session
-from fwcommon.dbus_mini import ERR, Bus, DBusError, no_bus_text
-from fwcommon.errors import CmdError
+from w11common import session
+from w11common.dbus_mini import ERR, Bus, DBusError, no_bus_text
+from w11common.errors import CmdError
 from wdotool.backend import View, Window, WindowBackend, Workspace, warn
 from wdotool.ctx import NoSessionError
 
-BUS_NAME = "org.fuckwayland.Bridge"
-OBJECT_PATH = "/org/fuckwayland/Bridge"
-IFACE = "org.fuckwayland.Bridge1"
+BUS_NAME = "org.w11.Bridge"
+OBJECT_PATH = "/org/w11/Bridge"
+IFACE = "org.w11.Bridge1"
 SHELL_NAME = "org.gnome.Shell"
 SCREENSAVER_NAME = "org.gnome.ScreenSaver"
-EXT_UUID = "fuckwayland-bridge@fuckwayland"
+EXT_UUID = "w11-bridge@w11"
 
-_HINT = ("gnome backend: the fuckwayland bridge extension is not running in "
+_HINT = ("gnome backend: the w11 bridge extension is not running in "
          "GNOME Shell; run gnome/install-bridge.sh and restart the session "
          "(log out and back in)")
-_GONE = ("gnome backend: the fuckwayland bridge vanished from the session bus "
+_GONE = ("gnome backend: the w11 bridge vanished from the session bus "
          "(extension disabled, screen locked, or shell restarting); run "
          "gnome/install-bridge.sh --check")
 #: appended to _HINT when the screen is locked as well: true, and the reason
@@ -255,11 +255,11 @@ class GnomeBackend(WindowBackend):
         if not where:
             return _HINT + (_ALSO_LOCKED if locked else "")
         if mode in _LOCKED_MODES:
-            return ("gnome backend: the fuckwayland bridge is unavailable while "
+            return ("gnome backend: the w11 bridge is unavailable while "
                     "GNOME Shell is in '%s' mode (screen locked?); extensions run "
                     "only in the unlocked session" % mode)
         if locked:
-            return ("gnome backend: the fuckwayland bridge is unavailable while "
+            return ("gnome backend: the w11 bridge is unavailable while "
                     "the screen is locked (GNOME Shell disables extensions "
                     "behind the lock screen); unlock the session")
         try:
@@ -271,23 +271,23 @@ class GnomeBackend(WindowBackend):
         if info:
             state = int(info.get("state", 0) or 0)
             if state == 1:
-                return ("gnome backend: the fuckwayland bridge extension reports "
+                return ("gnome backend: the w11 bridge extension reports "
                         "active but %s is not owned; gnome/install-bridge.sh --check"
                         % BUS_NAME)
             if state == 3:
-                return ("gnome backend: the fuckwayland bridge extension failed "
+                return ("gnome backend: the w11 bridge extension failed "
                         "to load: %s (gnome/install-bridge.sh --check)"
                         % (info.get("error") or "see journalctl --user _COMM=gnome-shell"))
             if state == 4:
                 return self._out_of_date_text(info.get("shell-version"))
-            return ("gnome backend: the fuckwayland bridge extension is installed "
+            return ("gnome backend: the w11 bridge extension is installed "
                     "but not enabled (state %d); run gnome/install-bridge.sh "
                     "(or: gnome-extensions enable %s)" % (state, EXT_UUID))
         # On disk, and the shell has never heard of the uuid: it has not rescanned the extension directories
         # since the copy appeared, which only a new session does. Live on 24.04 and 26.04 this is what an
-        # `apt install fuckwayland` inside a running session looks like, and the old text sent the reader to
+        # `apt install w11` inside a running session looks like, and the old text sent the reader to
         # gnome/install-bridge.sh -- a script the .deb does not ship (F0.2) and which would change nothing here.
-        return ("gnome backend: the fuckwayland bridge extension is installed in %s but the running GNOME "
+        return ("gnome backend: the w11 bridge extension is installed in %s but the running GNOME "
                 "Shell has not loaded it (it knows nothing about %s): log out and back in" % (where, EXT_UUID))
 
     def _out_of_date_text(self, listed) -> str:
@@ -306,7 +306,7 @@ class GnomeBackend(WindowBackend):
         ver = self.compositor_version()
         major = str(ver[0]) if ver else ""
         add = ('add "%s" to' % major) if major else "add this shell's major to"
-        return ("gnome backend: the fuckwayland bridge extension is marked out of date for this GNOME Shell "
+        return ("gnome backend: the w11 bridge extension is marked out of date for this GNOME Shell "
                 "%s (it names %s); %s shell-version in the extension's metadata.json and log out and back in"
                 % (major or "(the shell will not say which)", names or "nothing", add))
 
@@ -527,7 +527,7 @@ class GnomeBackend(WindowBackend):
             pass  # too old to ask, or gone: the call below reports it
         if 0 < version < self._SELECT_MIN_VERSION:
             raise CmdError(
-                "selectwindow: the installed fuckwayland bridge is version %d, "
+                "selectwindow: the installed w11 bridge is version %d, "
                 "which can only wait for a focus change (clicking the window "
                 "that already has focus would never return). Reinstall it with "
                 "gnome/install-bridge.sh and log back in." % version)

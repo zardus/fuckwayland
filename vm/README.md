@@ -250,7 +250,7 @@ from `$VMDATA/keys/id_ed25519.pub` through `builtins.getEnv` under `--impure`. T
 `$VMDATA/golden/nixos-*-packages.txt` — written beside the golden by the builder, not committed
 under `vm/reference/` — is the store closure of `/run/current-system` with the hashes stripped,
 not a dpkg list, and the file says so in its first line. Two specialisations are in every NixOS
-image: the default and `without-fuckwayland`; `switch-to-configuration test` between them is the
+image: the default and `without-w11`; `switch-to-configuration test` between them is the
 offline analogue of `apt-get remove` and re-install.
 
 **`vm/build-image.sh` is one file in three layers**, still embedded whole into the flavor's
@@ -597,7 +597,7 @@ Ptyxis window on the three-head layout, as the desktop user and as root over ssh
 no `venv`, no `pipx`, no `git`, no `curl`; `python3-setuptools`, `python3-gi`,
 `gir1.2-gtk-3.0`, `acl`, `x11-utils`, `x11-xserver-utils` present. `install-bridge.sh`
 printed exactly the documented "log out and back in" text and exit 1; after the relogin
-`--check` said `loaded in shell: yes` / `org.fuckwayland.Bridge owned: yes` / `uinput usable
+`--check` said `loaded in shell: yes` / `org.w11.Bridge owned: yes` / `uinput usable
 by test: yes (logind ACL)`; `wdotool --version` … `warandr --version` printed the five
 documented strings; `wxrandr --print-backend --verbose` said `mutter`; typing landed in the
 terminal; the `warandr` GUI opened with `backend: mutter (Wayland)`, a monitor dragged in it
@@ -772,11 +772,11 @@ than to the image are 0.2's; both are re-measured on the shipping tree under *Th
 default install*, further down. Everything the guide tells you to type worked and produced what
 it says it produces: `sudo apt install git python3-venv` (7 new packages, `python3.12-venv` among them), `git clone`,
 `python3 -m venv --system-site-packages`, `pip install -e .` (`Successfully installed
-fuckwayland-0.2.0`), the six `/usr/local/bin` symlinks, `warandr.desktop`, `sh
+w11-0.2.0`), the six `/usr/local/bin` symlinks, `warandr.desktop`, `sh
 gnome/install-bridge.sh` printing exactly the documented "log out and back in" text and exit
 1, one session restart, `sudo sh gnome/install-bridge.sh --udev` → `uinput usable by test:
 yes (logind ACL)`. After the relogin `--check` said `loaded in shell: yes (state 1)` /
-`org.fuckwayland.Bridge owned: yes` / `bridge version: 2` (the maximize pair has made it 3
+`org.w11.Bridge owned: yes` / `bridge version: 2` (the maximize pair has made it 3
 since); the extension's own `metadata.json` lists shell versions `45`–`50`, so **46 is inside its declared range and 24.04
 needs no change to it**. The six version strings printed exactly what *Check it worked* said
 then, `wxrandr --print-backend --verbose` said `mutter`, typing landed in the terminal, the
@@ -813,7 +813,7 @@ And one thing a **user must accept**, which the 26.04 run recorded and this one 
 straight into: **a default install locks itself in the middle of the install guide.** `sudo
 apt install git python3-venv` took 3 min 27 s on this mirror; with the rest of the clone and
 venv steps that is past `idle-delay 300`, and the very next command, `wwmctl -l`, answered
-`gnome backend: the fuckwayland bridge is unavailable while the screen is locked (GNOME Shell
+`gnome backend: the w11 bridge is unavailable while the screen is locked (GNOME Shell
 disables extensions behind the lock screen); unlock the session`, rc 1. The host screenshot at
 that moment is not a lock screen but QEMU's `Display output is not active.` — a default
 desktop switches the outputs off as well, so an unattended screenshot after five idle minutes
@@ -869,7 +869,7 @@ infrastructure branch deliberately does not touch, and all three want scheduling
    guide's own `apt install`, `wwmctl -l` answered
 
    ```
-   gnome backend: the fuckwayland bridge is unavailable while the screen is locked
+   gnome backend: the w11 bridge is unavailable while the screen is locked
    (GNOME Shell disables extensions behind the lock screen); unlock the session
    ```
 
@@ -877,7 +877,7 @@ infrastructure branch deliberately does not touch, and all three want scheduling
    sends you to act on:
 
    ```
-   gnome backend: the fuckwayland bridge extension is not running in GNOME Shell;
+   gnome backend: the w11 bridge extension is not running in GNOME Shell;
    run gnome/install-bridge.sh and restart the session (log out and back in)
    ```
 
@@ -890,7 +890,7 @@ infrastructure branch deliberately does not touch, and all three want scheduling
 
    **Fixed** (`backend_gnome.extension_installed()`, the same two places, no subprocess and
    no gsettings): with no copy on disk the actionable sentence leads and the lock follows it
-   as a clause, so both are still said — `gnome backend: the fuckwayland bridge extension is
+   as a clause, so both are still said — `gnome backend: the w11 bridge extension is
    not running in GNOME Shell; run gnome/install-bridge.sh and restart the session (log out
    and back in); the screen is locked as well, and GNOME Shell disables extensions behind the
    lock screen, so unlocking alone will not be enough`. With a copy on disk the lock message
@@ -903,14 +903,14 @@ reader does is the `.deb`, and that was measured separately, on a fresh `resolut
 instance with two heads at 1280x800. Baseline: no tool on `PATH`, `/dev/uinput`
 `crw------- root root`, no extension, no rule.
 
-`apt-get install -y ./fuckwayland_0.4.0_all.deb` → **rc 0**, and the package's own note about
+`apt-get install -y ./w11_0.4.0_all.deb` → **rc 0**, and the package's own note about
 the one logout, the udev rule and the X11 originals. Straight away, with nothing else typed:
 `/dev/uinput` is `crw-rw----+` with `user:test:rw-` in its ACL and no reboot, and the six tools
 answer exactly what the README's *Check it worked* block says, `Server reports RandR version
 1.6` included. Before the relogin the window commands say the bridge is not running, which is
 what the note promises.
 
-One logout, taken as a reboot. `gnome-extensions info fuckwayland-bridge@fuckwayland` then says
+One logout, taken as a reboot. `gnome-extensions info w11-bridge@w11` then says
 **Version: 3, Enabled: Yes, State: ACTIVE**, enabled by the package with nothing typed, and the
 bridge's own `GetVersion` over the session bus answers `(uint32 3,)`. `wxrandr --print-backend
 --verbose` prints the six lines of the README block verbatim (`mutter` / `session: wayland` /
@@ -920,7 +920,7 @@ it with geometry, pid and class, and `wwmctl -m` ends `Window manager's "showing
 mode: OFF` (with no window open at all that last line is `N/A`, which is the honest answer and
 not a defect).
 
-`apt-get remove -y fuckwayland` → rc 0: `wdotool` is gone from `PATH`, `/dev/uinput` is back to
+`apt-get remove -y w11` → rc 0: `wdotool` is gone from `PATH`, `/dev/uinput` is back to
 `crw------- root root` with no ACL, and the session in progress is still active.
 
 Adding a flavor: copy a yaml, change `hostname`, `# vmctl-base:`, `# vmctl-desktop:` and
@@ -995,7 +995,7 @@ is grouped by desktop and is what a user reads; this one is grouped by flavor an
 image. Neither may claim what the other denies: change them together.
 
 **What the last whole-rig run printed**, per flavor: CI run **34340513060** (commit `a544dec`,
-the guest installing `release/fuckwayland_0.4.0_all.deb` built from that tree, three heads).
+the guest installing `release/w11_0.4.0_all.deb` built from that tree, three heads).
 Every tally is the run's own `done:` line, and the XFAIL column is the `xwant` lines that
 stayed expected-failures:
 
@@ -1065,7 +1065,7 @@ session out and in) and both of them pass every cell of this table, on 46 and on
 open `/dev/uinput`; without it every injection command has to run as root, on GNOME, Plasma and
 Cinnamon alike. On the GNOME flavors the logout is only for a shell that has never scanned the
 extension directory: measured on `noble-gnome-x11` (GNOME Shell 46.0, 2026-09-09),
-`gnome-extensions disable` releases `org.fuckwayland.Bridge` about 3 s later and `enable` takes
+`gnome-extensions disable` releases `org.w11.Bridge` about 3 s later and `enable` takes
 it back about 4 s later with the shell's pid unchanged, which is what the install autostart uses.
 A bridge whose `extension.js` has CHANGED still needs one, and that is **not yet**: see the
 Reload note in [docs/WDOTOOL.md](../docs/WDOTOOL.md).
@@ -1079,7 +1079,7 @@ prints `_NET_SUPPORTING_WM_CHECK(WINDOW): window id # 0x400001` (Xwayland's root
 Everything that needs the window list — `wwmctl -l`, `wdotool getactivewindow` and the rest —
 exits non-zero with
 
-> `gnome backend: the fuckwayland bridge extension is not running in GNOME Shell; run gnome/install-bridge.sh and restart the session (log out and back in)`
+> `gnome backend: the w11 bridge extension is not running in GNOME Shell; run gnome/install-bridge.sh and restart the session (log out and back in)`
 
 The goldens are stock desktops and deliberately do not carry the extension: install it in the
 guest (`gnome/install-bridge.sh`) and log the session out and in to exercise those paths.
@@ -1127,7 +1127,7 @@ shell started is `/usr/bin/xdotool`. Output is the original's, byte for byte —
 since this branch. **SDDM keeps the X cookie in `/tmp/xauth_<random>`**, which is neither
 `~/.Xauthority` (it does not exist on this image) nor anything in a runtime directory, so
 the cookie search came back empty and every handover died with `Authorization required,
-but no authorization protocol specified`. `fwcommon/session.py` now reads it out of the
+but no authorization protocol specified`. `w11common/session.py` now reads it out of the
 session's own leader (`startplasma-x11`, `kwin_x11`, `plasmashell`, ... — uid-qualified
 `/proc/<pid>/environ`, the same trick that already found gnome-shell's), so
 `repair_x_env()` from a root shell yields `{'DISPLAY': ':0', 'XAUTHORITY':
@@ -1135,7 +1135,7 @@ session's own leader (`startplasma-x11`, `kwin_x11`, `plasmashell`, ... — uid-
 still say `Can't open display`.
 
 **The KWin backend is still reachable here on purpose**, with
-`FUCKWAYLAND_PASSTHROUGH=never` (or `WDOTOOL_BACKEND=kwin`), and it works: `loadScript`
+`W11_PASSTHROUGH=never` (or `WDOTOOL_BACKEND=kwin`), and it works: `loadScript`
 is as unprivileged on `kwin_x11` as on `kwin_wayland`, `wwmctl -l` lists KWin's windows,
 `wdotool getactivewindow`/`search`/`getmouselocation` answer. It is still a downgrade,
 which is the argument for the handover being in front of it: `wdotool
@@ -1289,7 +1289,7 @@ printed before the family landed, on one headless labwc with an xterm and a foot
 
 ```console
 $ wwmctl -lGpx
-0x000f4240 -1 0      0    0    1280 720  xterm.xterm    fuckwayland xtermwin
+0x000f4240 -1 0      0    0    1280 720  xterm.xterm    w11 xtermwin
 $ wwmctl -d
 get_desktop is not supported by the wlr backend                              (rc 1)
 ```
@@ -1463,7 +1463,7 @@ desktop where `warandr`'s GTK 3 dependency is satisfied out of the box and `aran
 `warandr` is a real addition there.
 
 `resolute-i3` was built and run: the golden took **21.4 min** on 2 vCPU/3G and carries 936
-packages, the cheapest desktop in the rig. Under `FUCKWAYLAND_PASSTHROUGH=never` the sway
+packages, the cheapest desktop in the rig. Under `W11_PASSTHROUGH=never` the sway
 backend's **i3 dialect** answers, and the `i3ipc` phase pins its four measured divergences: the
 socket at `/run/user/1000/i3/ipc-socket.1434` found with `$I3SOCK` unset; the X id `10485774`
 where i3's con id is a 47-bit pointer (`wxprop -id` used to truncate it to `0x5168c680` and
@@ -1475,7 +1475,7 @@ apply in one line, because i3 has **no `output` command at all**. `gir1.2-gtk-3.
 image (python3-gi is), so `warandr`'s GUI carries the same footnote sway's row does.
 
 `noble-gnome-x11` is the handover under the hardest condition the tree has: `org.gnome.Shell`,
-`org.gnome.Mutter.DisplayConfig` **and** `org.fuckwayland.Bridge` are all on this session's bus,
+`org.gnome.Mutter.DisplayConfig` **and** `org.w11.Bridge` are all on this session's bus,
 every one of them a route this toolbox knows, and the answer is still the X server's, because
 `passthrough.session_kind()` is asked before any backend is detected. The final live run against
 the working tree is **44 pass, 0 fail, 2 XFAIL, 2 XPASS in 296 s**. Four things only this flavor
@@ -1500,7 +1500,7 @@ still holds the WM selection, and after four rounds the unit goes `failed (Resul
 `Start request repeated too quickly`. That OnFailure unit is `ExecStart=gsettings set
 org.gnome.shell disable-user-extensions true`, a PERSISTENT dconf key, so afterwards the bridge
 reads `Enabled: No / State: INITIALIZED` in **every later session of that user** and
-`org.fuckwayland.Bridge` is unowned. It does not come back on a reboot, on `gnome-extensions
+`org.w11.Bridge` is unowned. It does not come back on a reboot, on `gnome-extensions
 enable`, or on deleting `/run/user/1000/gnome-shell-disable-extensions` — all three tried. One
 thing recovers it, live and with no logout: `gsettings set org.gnome.shell
 disable-user-extensions false`, after which the shell loads the extension and takes the name

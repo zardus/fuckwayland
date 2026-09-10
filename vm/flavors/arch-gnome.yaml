@@ -6,7 +6,7 @@
 # rolling golden rots weekly, so this earns a build when somebody wants the third data point
 # and not on every push.  What it adds when it runs: the bridge installed and enabled on Arch,
 # verbatim -- `gnome/install-bridge.sh` found the same extension and udev directories, the
-# uaccess ACL was applied by Arch's own logind, and `--check` said `org.fuckwayland.Bridge
+# uaccess ACL was applied by Arch's own logind, and `--check` said `org.w11.Bridge
 # owned: yes` after one `systemctl restart gdm` [recon2/arch 3.2].  GDM's config is
 # /etc/gdm/custom.conf here, not /etc/gdm3 -- resolved in the guest, not from this header.
 #

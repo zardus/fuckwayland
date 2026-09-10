@@ -1,6 +1,6 @@
 # nixosModules.default -- what the .deb's postinst does, said in nix.
 #
-# The .deb is six things (debian/fuckwayland.install, .links, .postinst and
+# The .deb is six things (debian/w11.install, .links, .postinst and
 # the enabler): the tools in /usr/bin, the bridge extension in
 # /usr/share/gnome-shell/extensions, that extension enabled per user at the
 # next login, the udev rule plus modules-load.d applied without a reboot, the
@@ -8,31 +8,31 @@
 # nobody.  Every one of those has an exact NixOS expression, and all of them
 # were measured working together in a NixOS 26.05 GNOME 50.4 VM test before
 # this file existed [recon2/pkg-nix §7]: the store-installed extension was
-# found through XDG_DATA_DIRS and loaded ("[fuckwayland-bridge] enabled
-# (bridge v3, gnome-shell 50.4)" and "acquired org.fuckwayland.Bridge" in the
+# found through XDG_DATA_DIRS and loaded ("[w11-bridge] enabled
+# (bridge v3, gnome-shell 50.4)" and "acquired org.w11.Bridge" in the
 # guest journal at t=60.7 s), and `wdotool key a` took the /dev/uinput path
 # with no fallback notice.
 { self }:
 { config, lib, pkgs, ... }:
 
 let
-  cfg = config.programs.fuckwayland;
-  fw = self.packages.${pkgs.stdenv.hostPlatform.system};
+  cfg = config.programs.w11;
+  w11pkgs = self.packages.${pkgs.stdenv.hostPlatform.system};
 in
 {
-  options.programs.fuckwayland = {
-    enable = lib.mkEnableOption "the fuckwayland tools (wdotool, wwmctl, wxprop, wxrandr, wmirror)";
+  options.programs.w11 = {
+    enable = lib.mkEnableOption "the w11 tools (wdotool, wwmctl, wxprop, wxrandr, wmirror)";
 
     package = lib.mkOption {
       type = lib.types.package;
-      default = fw.fuckwayland;
-      defaultText = lib.literalExpression "fuckwayland.packages.\${system}.fuckwayland";
+      default = w11pkgs.w11;
+      defaultText = lib.literalExpression "w11.packages.\${system}.w11";
       description = ''
         The stdlib CLI package -- five of the six tools, no GTK.  `warandr`
         (the one GUI) is a package of its own for the 330.9 MiB of closure it
         needs (216.0 MiB against 546.9 MiB, both built from this tree), and
         the two `bin/` directories are disjoint so that nothing has to be
-        installed in the right order; {option}`programs.fuckwayland.warandr.enable`
+        installed in the right order; {option}`programs.w11.warandr.enable`
         is how you ask for it.
       '';
     };
@@ -47,7 +47,7 @@ in
         and nothing else in this project imports `gi`.
 
         This is a separate package and not a separate `bin/` name in
-        {option}`programs.fuckwayland.package`: the two would collide in
+        {option}`programs.w11.package`: the two would collide in
         {option}`environment.systemPackages`, where the system path is built
         with `ignoreCollisions = true` and the winner is whichever module
         happens to be earlier in the list.
@@ -147,13 +147,13 @@ in
         {
           assertion = !(cfg.uinput.enable && config.hardware.uinput.enable);
           message = ''
-            programs.fuckwayland.uinput.enable and hardware.uinput.enable are
+            programs.w11.uinput.enable and hardware.uinput.enable are
             two different grants on the same node and the weaker one wins:
             nixpkgs' module writes MODE="0660" GROUP="uinput", which hands
             every member of that group a standing input channel into whoever
             is at the seat, while this project's rule leaves /dev/uinput
             root:root 0600 with a logind uaccess ACL for the active session.
-            Pick one: set programs.fuckwayland.uinput.enable = false to keep
+            Pick one: set programs.w11.uinput.enable = false to keep
             the group, or hardware.uinput.enable = false to keep the ACL.
           '';
         }
@@ -161,10 +161,10 @@ in
 
       environment.systemPackages =
         [ cfg.package ]
-        ++ lib.optional cfg.warandr.enable fw.warandr
-        ++ lib.optional cfg.shadowOriginals (lib.hiPrio fw.x11-shadows)
-        ++ lib.optional cfg.gnomeBridge.enable fw.gnome-bridge
-        ++ lib.optional cfg.gnomeOverlap.enable fw.gnome-overlap
+        ++ lib.optional cfg.warandr.enable w11pkgs.warandr
+        ++ lib.optional cfg.shadowOriginals (lib.hiPrio w11pkgs.x11-shadows)
+        ++ lib.optional cfg.gnomeBridge.enable w11pkgs.gnome-bridge
+        ++ lib.optional cfg.gnomeOverlap.enable w11pkgs.gnome-overlap
         ++ lib.optional cfg.wlMirror.enable pkgs.wl-mirror
         # `pkgs.xprop or pkgs.xorg.xprop`: nixos-unstable has moved the X
         # clients out of the xorg set ("The xorg package set has been
@@ -181,7 +181,7 @@ in
     }
 
     (lib.mkIf cfg.uinput.enable {
-      services.udev.packages = [ fw.udev-rules ];
+      services.udev.packages = [ w11pkgs.udev-rules ];
       # The rule's own static_node=uinput creates the node before the module
       # is loaded, but modules-load.d exists in the .deb for a reason: the
       # node then carries the permissions and the uaccess ACL from the first
@@ -198,7 +198,7 @@ in
       programs.dconf.profiles.user.databases = [{
         settings."org/gnome/shell" = {
           disable-user-extensions = false;
-          enabled-extensions = [ fw.gnome-bridge.passthru.extensionUuid ];
+          enabled-extensions = [ w11pkgs.gnome-bridge.passthru.extensionUuid ];
         };
       }];
     })

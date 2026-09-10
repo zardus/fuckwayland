@@ -1,9 +1,9 @@
 [Desktop Entry]
 Type=Application
 Version=1.0
-Name=fuckwayland bridge setup
-Comment=Enable the fuckwayland GNOME Shell bridge extension for this user, once
-Exec=/usr/lib/fuckwayland/enable-bridge
+Name=w11 bridge setup
+Comment=Enable the w11 GNOME Shell bridge extension for this user, once
+Exec=/usr/lib/w11/enable-bridge
 Terminal=false
 NoDisplay=true
 OnlyShowIn=GNOME;

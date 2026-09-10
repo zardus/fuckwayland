@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The desktop's OWN display tool, as one line per enabled output: `<name> <x>,<y>`.
 
-This runs INSIDE the guest (live-smoke.sh copies it to $HOME/fw-oracle.py, and
+This runs INSIDE the guest (live-smoke.sh copies it to $HOME/w11-oracle.py, and
 re-copies it after every reboot -- /tmp is emptied at boot on 24.04) and is
 the second opinion every wxrandr apply in the smoke is checked against -- never
 wxrandr's own `--query`, which would make the check a tautology.  One file for
@@ -58,7 +58,7 @@ def run(*argv):
     try:
         p = subprocess.run(argv, capture_output=True, text=True)
     except FileNotFoundError:
-        sys.stderr.write("fw-oracle: %s is not installed on this guest\n" % argv[0])
+        sys.stderr.write("w11-oracle: %s is not installed on this guest\n" % argv[0])
         raise SystemExit(2)
     return p.stdout
 
@@ -188,7 +188,7 @@ def cosmic():
 
 def wayfire_socket():
     """$WAYFIRE_SOCKET first, then the same `wayfire-*.socket` glob the tools'
-    own finder walks (fwcommon.session.find_wayfire_socket).  The measured name
+    own finder walks (w11common.session.find_wayfire_socket).  The measured name
     is /tmp/wfrt1/wayfire-wayland-1-.socket -- `<display>-<pid>` with an empty
     pid field [recon2/wayfire 1.2], which is why nothing here matches on a pid."""
     for var in ("WAYFIRE_SOCKET", "_WAYFIRE_SOCKET"):
@@ -289,7 +289,7 @@ if __name__ == "__main__":
     which = sys.argv[1] if len(sys.argv) > 1 else "gnome"
     fn = DESKTOPS.get(which)
     if fn is None:
-        sys.stderr.write("fw-oracle: no oracle for %s (want %s)\n"
+        sys.stderr.write("w11-oracle: no oracle for %s (want %s)\n"
                          % (which, "|".join(sorted(DESKTOPS))))
         raise SystemExit(2)
     for line in fn():

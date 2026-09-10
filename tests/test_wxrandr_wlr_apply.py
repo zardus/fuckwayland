@@ -34,14 +34,14 @@ import unittest
 # The suite never hands a tool over to the real X11 one: see tests/conftest.py (which covers pytest) and
 # tests/test_passthrough.py.  This line is what covers `python3 tests/<file>.py`, where conftest is not
 # loaded, and it reaches every subprocess a test spawns.
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import wl_fake
-from fwcommon.wayland_mini import WlConn
+from w11common.wayland_mini import WlConn
 from wxrandr import core
 from wxrandr.core import Fatal, State, WlrOutputs, build_targets, snapshot_wlr
 

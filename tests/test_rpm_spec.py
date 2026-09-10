@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""packaging/rpm/fuckwayland.spec read as text: does it ship what debian/ ships?
+"""packaging/rpm/w11.spec read as text: does it ship what debian/ ships?
 
 An RPM of this tree is a translation of debian/, not a port -- every payload
 path exists on Fedora under the same name -- and the failure mode of a
@@ -8,10 +8,10 @@ invisible from either side: `sh scripts/build-deb.sh` keeps working, `sh
 scripts/build-rpm.sh` keeps working, and the Fedora package quietly stops
 carrying a typelib, or the udev rule, or the enabler.
 
-So this reads the spec against debian/fuckwayland.install, debian/rules,
-debian/fuckwayland.links, pyproject.toml and generations.json, through one path
-map (usr/lib/udev/rules.d -> %{_udevrulesdir}, usr/lib/fuckwayland ->
-%{_libexecdir}/fuckwayland, and so on).  Nothing here needs rpmbuild: the
+So this reads the spec against debian/w11.install, debian/rules,
+debian/w11.links, pyproject.toml and generations.json, through one path
+map (usr/lib/udev/rules.d -> %{_udevrulesdir}, usr/lib/w11 ->
+%{_libexecdir}/w11, and so on).  Nothing here needs rpmbuild: the
 %pyproject_* macros are Fedora-only and this guest's rpm 6.0.1 dies at
 "%pyproject_buildrequires: not found" [recon2/pkg-rpm.md 4], so the first real
 build is the CI `rpm` job in fedora:44 and everything that can be held without
@@ -40,7 +40,7 @@ import unittest
 # The suite never hands a tool over to the real X11 one: see tests/conftest.py
 # (which covers pytest) and tests/test_passthrough.py.  This line is what
 # covers `python3 tests/<file>.py`, where conftest is not loaded.
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
@@ -50,19 +50,19 @@ sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import support                                                    # noqa: E402
-from fwcommon import VERSION                                      # noqa: E402
+from w11common import VERSION                                     # noqa: E402
 
-SPEC = os.path.join(ROOT, "packaging", "rpm", "fuckwayland.spec")
-RPMLINTRC = os.path.join(ROOT, "packaging", "rpm", "fuckwayland.rpmlintrc")
+SPEC = os.path.join(ROOT, "packaging", "rpm", "w11.spec")
+RPMLINTRC = os.path.join(ROOT, "packaging", "rpm", "w11.rpmlintrc")
 BUILD_RPM = os.path.join(ROOT, "scripts", "build-rpm.sh")
-DEB_INSTALL = os.path.join(ROOT, "debian", "fuckwayland.install")
+DEB_INSTALL = os.path.join(ROOT, "debian", "w11.install")
 DEB_RULES = os.path.join(ROOT, "debian", "rules")
-DEB_LINKS = os.path.join(ROOT, "debian", "fuckwayland.links")
-GENERATIONS = os.path.join(ROOT, "gnome", "fuckwayland-overlap@fuckwayland",
+DEB_LINKS = os.path.join(ROOT, "debian", "w11.links")
+GENERATIONS = os.path.join(ROOT, "gnome", "w11-overlap@w11",
                            "generations.json")
 
-BRIDGE_UUID = "fuckwayland-bridge@fuckwayland"
-OVERLAP_UUID = "fuckwayland-overlap@fuckwayland"
+BRIDGE_UUID = "w11-bridge@w11"
+OVERLAP_UUID = "w11-overlap@w11"
 
 #: The spec's own %global definitions plus the two macros rpm defines for it.
 #: Expanding these is what lets a dpkg-side path be compared with a spec-side
@@ -70,7 +70,7 @@ OVERLAP_UUID = "fuckwayland-overlap@fuckwayland"
 GLOBALS = {
     "%{bridge_uuid}": BRIDGE_UUID,
     "%{overlap_uuid}": OVERLAP_UUID,
-    "%{name}": "fuckwayland",
+    "%{name}": "w11",
     "%{version}": VERSION,
 }
 
@@ -81,9 +81,9 @@ GLOBALS = {
 #:     are /usr/lib/udev/rules.d and /usr/lib/modules-load.d -- the same two
 #:     directories, named by macro because a spec that hard-codes them breaks
 #:     on a distribution that moves them;
-#:   * %{_libexecdir}/fuckwayland is /usr/libexec, which is where Fedora puts a
+#:   * %{_libexecdir}/w11 is /usr/libexec, which is where Fedora puts a
 #:     program no user runs by hand; dpkg has no /usr/libexec and uses
-#:     /usr/lib/fuckwayland;
+#:     /usr/lib/w11;
 #:   * the autostart entry is a PLAIN FILE under %{_sysconfdir} where debian/
 #:     needs a symlink, because debhelper makes every regular file under /etc a
 #:     conffile and a conffile survives `apt remove`.  rpm marks nothing
@@ -93,7 +93,7 @@ PATH_MAP = {
     "usr/lib/modules-load.d": "%{_modulesloaddir}",
     "usr/share/applications": "%{_datadir}/applications",
     "usr/share/gnome-shell/extensions": "%{_datadir}/gnome-shell/extensions",
-    "usr/lib/fuckwayland": "%{_libexecdir}/%{name}",
+    "usr/lib/w11": "%{_libexecdir}/%{name}",
     "etc/xdg/autostart": "%{_sysconfdir}/xdg/autostart",
 }
 
@@ -107,7 +107,7 @@ SOURCE_ALIASES = {
 #: Every rpmlint finding this package accepts, and the whole of it.  The
 #: rpmlintrc is compared against this list in both directions: a filter that
 #: has stopped being needed is a finding too, which is the rule
-#: debian/fuckwayland.lintian-overrides is held to.
+#: debian/w11.lintian-overrides is held to.
 #:
 #: zero-perms-ghost is deliberately NOT here.  The recon saw it (rpmlint 2.7.0
 #: on the three packages built on this guest) and the answer was to fix it --
@@ -194,7 +194,7 @@ def tag_values(name, text=None):
 
 
 def deb_install_lines():
-    """debian/fuckwayland.install as [(source, destination directory)]."""
+    """debian/w11.install as [(source, destination directory)]."""
     out = []
     with open(DEB_INSTALL, encoding="utf-8") as fh:
         for line in fh:
@@ -219,14 +219,14 @@ def deb_rules_installs():
     out = []
     for m in re.finditer(r"^\tinstall -D -m \d+\s+(\S+)\s+(\S+)\s*$", text, re.M):
         src, dest = m.group(1), m.group(2)
-        # debian/fuckwayland/ is the package build directory
-        dest = re.sub(r"^debian/fuckwayland/", "", dest)
+        # debian/w11/ is the package build directory
+        dest = re.sub(r"^debian/w11/", "", dest)
         out.append((src, dest))
     return out
 
 
 def deb_links():
-    """debian/fuckwayland.links as {installed path: the symlink over it}.
+    """debian/w11.links as {installed path: the symlink over it}.
 
     The .deb installs the autostart entry under /usr/lib and links it into
     /etc/xdg/autostart because debhelper makes every regular file under /etc a
@@ -252,7 +252,7 @@ class TheVersion(unittest.TestCase):
     that would have caught the 0.3-package-in-a-0.4-tree failure had there
     been an rpm then."""
 
-    def test_the_version_tag_is_fwcommons(self):
+    def test_the_version_tag_is_w11commons(self):
         self.assertEqual(tag_values("Version"), [VERSION])
 
     def test_the_top_changelog_entry_names_this_release(self):
@@ -293,7 +293,7 @@ class EveryPathTheDebShips(unittest.TestCase):
 
     def test_every_source_file_the_deb_installs_is_named_in_percent_install(self):
         """dpkg's list is the reference because it is the one a release is
-        built from today.  A new data file added to debian/fuckwayland.install
+        built from today.  A new data file added to debian/w11.install
         and not to the spec is a Fedora package missing it, and nothing else
         would say so."""
         self.maxDiff = None
@@ -308,7 +308,7 @@ class EveryPathTheDebShips(unittest.TestCase):
         pairs = deb_rules_installs()
         self.assertGreaterEqual(len(pairs), 3, pairs)
         self.assertIn(("packaging/common/enable-bridge",
-                       "usr/lib/fuckwayland/enable-bridge"), pairs)
+                       "usr/lib/w11/enable-bridge"), pairs)
 
     def test_every_destination_directory_maps_onto_a_macro_the_spec_uses(self):
         self.maxDiff = None
@@ -342,23 +342,23 @@ class EveryPathTheDebShips(unittest.TestCase):
 
     def test_the_autostart_entrys_exec_line_is_rewritten_for_libexec(self):
         """The one difference between the .deb's copy of the .desktop and the
-        rpm's: Exec= names %{_libexecdir}/fuckwayland/enable-bridge, because
+        rpm's: Exec= names %{_libexecdir}/w11/enable-bridge, because
         that is where the helper goes on Fedora.  The script itself is
         installed unchanged, which is what makes one file serve both."""
         self.assertIn("sed 's|^Exec=.*|Exec=%{_libexecdir}/%{name}/enable-bridge|'",
                       section("install"))
         with open(os.path.join(ROOT, "packaging", "common", "enable-bridge.desktop"),
                   encoding="utf-8") as fh:
-            self.assertIn("Exec=/usr/lib/fuckwayland/enable-bridge", fh.read())
+            self.assertIn("Exec=/usr/lib/w11/enable-bridge", fh.read())
 
     def test_the_autostart_entry_is_a_plain_file_and_not_a_symlink(self):
-        """debian/fuckwayland.links exists because debhelper turns a regular
+        """debian/w11.links exists because debhelper turns a regular
         file under /etc into a conffile that survives `apt remove`.  rpm has no
         such rule, so the file goes straight in and an erase takes it -- and
         the spec must not have copied the symlink dance across."""
         with open(DEB_LINKS, encoding="utf-8") as fh:
             self.assertIn("etc/xdg/autostart", fh.read())
-        entry = "%{_sysconfdir}/xdg/autostart/fuckwayland-enable-bridge.desktop"
+        entry = "%{_sysconfdir}/xdg/autostart/w11-enable-bridge.desktop"
         self.assertIn(entry, spec_text())
         self.assertNotIn("ln -s", section("install"))
 
@@ -421,7 +421,7 @@ class TheExtensions(unittest.TestCase):
         self.assertIn("typelib/*.typelib", section("install"))
 
     def test_the_bridge_subpackage_supplements_both_halves(self):
-        """`Supplements: (fuckwayland and gnome-shell)` is the thing the .deb
+        """`Supplements: (w11 and gnome-shell)` is the thing the .deb
         cannot say: dnf installs the bridge by itself on a machine that has
         both halves and on no sway or KDE box.  Measured working on this
         guest's rpm 6.0.1 (rich dependencies) [recon2/pkg-rpm.md 4]."""
@@ -483,7 +483,7 @@ class TheScriptletsAsText(unittest.TestCase):
     """What %post and %postun say.  What they DO is tests/test_rpm_scripts.py,
     which runs them as processes against a fake root."""
 
-    #: debian/fuckwayland.postinst's udev half, in order.  Three copies of one
+    #: debian/w11.postinst's udev half, in order.  Three copies of one
     #: procedure -- dpkg's, rpm's and pacman's -- and the order is the part
     #: that matters: the trigger has to follow the reload or the node is
     #: re-tagged against the rules that were in force before the install.
@@ -513,7 +513,7 @@ class TheScriptletsAsText(unittest.TestCase):
         self.assertIn("%{_sharedstatedir}/%{name}/installed", body)
         with open(os.path.join(ROOT, "packaging", "common", "enable-bridge"),
                   encoding="utf-8") as fh:
-            self.assertIn("/var/lib/fuckwayland/installed", fh.read())
+            self.assertIn("/var/lib/w11/installed", fh.read())
 
     def test_postun_does_its_work_only_on_the_last_erase(self):
         """rpm has no purge: $1 == 0 is the last erase and $1 == 1 is an
@@ -555,7 +555,7 @@ class TheLicence(unittest.TestCase):
     over a temporary tree with a LICENSE planted in it."""
 
     def setUp(self):
-        self.tmp = tempfile.mkdtemp(prefix="fw-spdx-")
+        self.tmp = tempfile.mkdtemp(prefix="w11-spdx-")
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         self.body = support.sh_function(BUILD_RPM, "spdx_id")
 
@@ -662,12 +662,12 @@ class TheLicence(unittest.TestCase):
             src = fh.read()
         self.assertIn("stag=$(sed -n 's/^License: *\\([^ ].*\\)$/\\1/p' \"$SPEC\"", src)
         self.assertIn("build-rpm.sh: licence mismatch", src)
-        self.assertIn('cp "$SPEC" "$top/SPECS/fuckwayland.spec"', src)
+        self.assertIn('cp "$SPEC" "$top/SPECS/w11.spec"', src)
         self.assertNotIn('sed "s|^License: .*', src)
 
 
 class TheRpmlintrc(unittest.TestCase):
-    """The analogue of debian/fuckwayland.lintian-overrides: exactly the
+    """The analogue of debian/w11.lintian-overrides: exactly the
     accepted findings, each with the sentence saying why."""
 
     def setUp(self):
@@ -677,7 +677,7 @@ class TheRpmlintrc(unittest.TestCase):
 
     def test_it_names_exactly_the_accepted_findings_and_nothing_else(self):
         """Both directions.  A filter nobody needs any more is a finding of its
-        own -- the rule debian/fuckwayland.lintian-overrides is held to -- and
+        own -- the rule debian/w11.lintian-overrides is held to -- and
         an accepted finding with no filter is a red CI job."""
         self.maxDiff = None
         named = []
@@ -721,7 +721,7 @@ class TheRpmlintrc(unittest.TestCase):
 
     def test_only_the_readme_of_packaging_rpm_is_in_the_payload(self):
         """An rpmlint configuration lives in the build, not on the user's
-        machine -- unlike debian/fuckwayland.lintian-overrides, which dpkg
+        machine -- unlike debian/w11.lintian-overrides, which dpkg
         ships under /usr/share/lintian/overrides.  The way it would get in is
         a %doc naming the directory rather than the one file in it, which is
         what this reads: the %doc line's packaging/ entries, not the absence

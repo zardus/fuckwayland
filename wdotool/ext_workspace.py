@@ -89,7 +89,7 @@ class _Workspace:
 class WorkspaceClient:
     """The manager, its groups and its workspaces, kept up to date by the caller's round trips.
 
-    `conn` is a live `fwcommon.wayland_mini.WlConn` whose registry has already been fetched. `bind()` returns
+    `conn` is a live `w11common.wayland_mini.WlConn` whose registry has already been fetched. `bind()` returns
     None when the compositor does not offer the protocol, so a caller can say `ws = WorkspaceClient.bind(conn)`
     and keep its own refusal for None rather than catching anything."""
 

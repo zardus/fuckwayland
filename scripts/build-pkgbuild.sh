@@ -1,10 +1,10 @@
 #!/bin/sh
-# Build the fuckwayland Arch package.  One command, from a clean clone, on
+# Build the w11 Arch package.  One command, from a clean clone, on
 # Arch or in an archlinux:base-devel container:
 #
 #     sh scripts/build-pkgbuild.sh
 #
-# -> dist/fuckwayland-<version>-1-any.pkg.tar.zst
+# -> dist/w11-<version>-1-any.pkg.tar.zst
 #    (never committed: site-packages is version-pinned on Arch, so a built
 #    package belongs to one python and is a CI artifact, not a release file)
 #
@@ -108,11 +108,11 @@ Edit $PKGBUILD: set pkgver=$pver (and reset pkgrel=1).
 EOM
     exit 1
 fi
-echo "build-pkgbuild.sh: building fuckwayland $pver"
+echo "build-pkgbuild.sh: building w11 $pver"
 
 # The licence tag, against the licence the tree ships.  The recipe carries
 # license=('BSD-2-Clause') and package() installs LICENSE under
-# /usr/share/licenses/fuckwayland/, so the tag is right in the file; this
+# /usr/share/licenses/w11/, so the tag is right in the file; this
 # refuses the build when a relicence has edited one and not the other.  `set
 # -e` carries spdx_id()'s own exit -- on a licence it cannot name -- with it.
 if [ ! -f LICENSE ]; then
@@ -162,14 +162,14 @@ mkdir -p "$build" dist
 if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
     echo "build-pkgbuild.sh: the tree is dirty; the tarball is HEAD, not what is on disk" >&2
 fi
-tarball="fuckwayland-$pver.tar.gz"
-git archive --format=tar.gz --prefix="fuckwayland-$pver/" -o "$build/$tarball" HEAD
+tarball="w11-$pver.tar.gz"
+git archive --format=tar.gz --prefix="w11-$pver/" -o "$build/$tarball" HEAD
 sum=$(sha256sum "$build/$tarball" | cut -d' ' -f1)
 
 # The three lines that differ from the shipped recipe, and nothing else: a
 # local source, its real checksum, and the directory `git archive` wrote (the
 # shipped one names upstream's two-component tag, which unpacks to
-# fuckwayland-0.4/ -- see the comment on _tag in the recipe).  It is written
+# w11-0.4/ -- see the comment on _tag in the recipe).  It is written
 # into the scratch directory and not into packaging/arch/, so a build leaves
 # nothing behind that a `git status` has to explain.
 sed -e "s|^source=(.*|source=(\"$tarball\")|" \
@@ -177,7 +177,7 @@ sed -e "s|^source=(.*|source=(\"$tarball\")|" \
     -e "s|^_srcdir=.*|_srcdir=\"\$pkgname-\$pkgver\"|" \
     "$PKGBUILD" > "$build/PKGBUILD.local"
 
-cp packaging/arch/fuckwayland.install "$build/fuckwayland.install"
+cp packaging/arch/w11.install "$build/w11.install"
 
 # --- build -------------------------------------------------------------------
 ( cd "$build" && makepkg -p PKGBUILD.local -f --noconfirm )
@@ -197,7 +197,7 @@ if [ "$LINT" = 1 ]; then
         # one by one in packaging/arch/namcap.expected, which
         # tests/test_release_pkgbuild.py compares the output against.
         namcap "$build/PKGBUILD.local"
-        namcap dist/fuckwayland-"$pver"-*.pkg.tar.* || true
+        namcap dist/w11-"$pver"-*.pkg.tar.* || true
     else
         echo "build-pkgbuild.sh: namcap is not installed (sudo pacman -S namcap)" >&2
     fi
@@ -208,4 +208,4 @@ if [ "$CLEAN" = 1 ]; then
 fi
 
 echo
-echo "Install it with:  sudo pacman -U ./dist/fuckwayland-$pver-1-any.pkg.tar.zst"
+echo "Install it with:  sudo pacman -U ./dist/w11-$pver-1-any.pkg.tar.zst"

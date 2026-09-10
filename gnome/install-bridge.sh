@@ -1,6 +1,6 @@
 #!/bin/sh
-# install-bridge.sh — install, enable, check or remove the fuckwayland GNOME
-# Shell bridge extension (fuckwayland-bridge@fuckwayland), and optionally the
+# install-bridge.sh — install, enable, check or remove the w11 GNOME
+# Shell bridge extension (w11-bridge@w11), and optionally the
 # udev rule that opens /dev/uinput to the logged-in user.
 #
 #   install-bridge.sh [--system] [--try-unsafe] [--no-enable]   install + enable
@@ -23,23 +23,23 @@
 # see bootstrap_unsafe below).
 set -eu
 
-UUID='fuckwayland-bridge@fuckwayland'
-BUS_NAME='org.fuckwayland.Bridge'
-OBJ_PATH='/org/fuckwayland/Bridge'
-IFACE='org.fuckwayland.Bridge1'
+UUID='w11-bridge@w11'
+BUS_NAME='org.w11.Bridge'
+OBJ_PATH='/org/w11/Bridge'
+IFACE='org.w11.Bridge1'
 SHELL_DEST='org.gnome.Shell'
 SHELL_PATH='/org/gnome/Shell'
 EXT_IFACE='org.gnome.Shell.Extensions'
 SYSTEM_DIR='/usr/share/gnome-shell/extensions'
-UDEV_RULE='60-fuckwayland-uinput.rules'
+UDEV_RULE='60-w11-uinput.rules'
 UDEV_DEST="/etc/udev/rules.d/$UDEV_RULE"
 MODLOAD_SRC='modules-load-uinput.conf'
-MODLOAD_DEST='/etc/modules-load.d/fuckwayland-uinput.conf'
+MODLOAD_DEST='/etc/modules-load.d/w11-uinput.conf'
 # Where the .deb puts the same two files.  --udev and --udev --uninstall own
 # the /etc copies and nothing else, but --check has to look here as well, or
 # it reports "no" to someone whose package-installed rule is working.
 UDEV_PKG="/usr/lib/udev/rules.d/$UDEV_RULE"
-MODLOAD_PKG='/usr/lib/modules-load.d/fuckwayland-uinput.conf'
+MODLOAD_PKG='/usr/lib/modules-load.d/w11-uinput.conf'
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 SRC="$HERE/$UUID"
@@ -553,7 +553,7 @@ do_install() {
     fi
     mkdir -p "$DEST"
     cp "$SRC/metadata.json" "$SRC/extension.js" "$DEST/"
-    [ -f "$SRC/org.fuckwayland.Bridge1.xml" ] && cp "$SRC/org.fuckwayland.Bridge1.xml" "$DEST/"
+    [ -f "$SRC/org.w11.Bridge1.xml" ] && cp "$SRC/org.w11.Bridge1.xml" "$DEST/"
     chmod 755 "$DEST"
     chmod 644 "$DEST"/*
     if [ "$ME" = 0 ] && [ "$SYSTEM" = 0 ]; then

@@ -19,8 +19,8 @@
 # profile rather than by an autostart script and a stamp file: the extension is in the
 # system profile before the session starts, so it is on at the FIRST login and the .deb's
 # "log out and back in once" banner has no analogue.  Measured in a NixOS VM test before
-# the module existed -- "[fuckwayland-bridge] enabled (bridge v3, gnome-shell 50.4)" and
-# "acquired org.fuckwayland.Bridge" in the guest journal at t=60.7 s [recon2/pkg-nix §7].
+# the module existed -- "[w11-bridge] enabled (bridge v3, gnome-shell 50.4)" and
+# "acquired org.w11.Bridge" in the guest journal at t=60.7 s [recon2/pkg-nix §7].
 #
 # On demand rather than per push: a GNOME image is ~15 min of build against sway's ~10
 # (the recon measured ~50 min wall on the dev host, nearly all of it substitution), and

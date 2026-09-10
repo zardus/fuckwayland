@@ -41,7 +41,7 @@ import unittest
 # The suite never hands a tool over to the real X11 one: see tests/conftest.py
 # (which covers pytest) and tests/test_passthrough.py.  This line is what
 # covers `python3 tests/<file>.py`, where conftest is not loaded.
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
@@ -106,7 +106,7 @@ class FetchHarness:
     the other asks only whether a name resolves at all."""
 
     def setUp(self):
-        self.dir = tempfile.mkdtemp(prefix="fw-cigolden-")
+        self.dir = tempfile.mkdtemp(prefix="w11-cigolden-")
         self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
         self.bin = os.path.join(self.dir, "bin")
         self.images = os.path.join(self.dir, "images")
@@ -279,7 +279,7 @@ class TheCacheKey(unittest.TestCase):
 
     The nix list is a key that is never used as one, and the distinction
     matters if anybody turns that cache on: vm/nixos/flake.nix takes the
-    repository as `inputs.fuckwayland.url = "path:../.."` and the module
+    repository as `inputs.w11.url = "path:../.."` and the module
     installs the package built from it, so a NixOS image's contents move with
     any file of the tree and not only with these eleven.  Nothing serves a
     stale one today because a `# vmctl-nix:` golden is neither pulled nor
@@ -291,7 +291,7 @@ class TheCacheKey(unittest.TestCase):
         # repository does not have, while the real run printed a `nix/checks:`
         # header, six `cat: ... No such file` lines, and a key that left every
         # file of nix/checks out.
-        tree = tempfile.mkdtemp(prefix="fw-keytree-")
+        tree = tempfile.mkdtemp(prefix="w11-keytree-")
         self.addCleanup(shutil.rmtree, tree, ignore_errors=True)
         for path in ("vm/flavors", "vm/nixos", "nix/checks"):
             os.makedirs(os.path.join(tree, path))

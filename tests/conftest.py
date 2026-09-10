@@ -1,7 +1,7 @@
 """Suite-wide safety guard: no test process ever hands itself over to the
 real X11 tools.
 
-`fwcommon.passthrough` replaces this process with `/usr/bin/xdotool` (and
+`w11common.passthrough` replaces this process with `/usr/bin/xdotool` (and
 friends) when it decides the session is X11 — which is exactly right for an
 installed clone and exactly wrong inside a test runner: ~17 tests call
 `cli.main([...])` in-process, and `tests/test_cli_parity.py` shells a shim
@@ -12,7 +12,7 @@ tautologically.
 Two independent belts, both proven by `tests/test_passthrough.py`:
 
 * this file, imported by pytest before collection, forces the documented
-  escape hatch `FUCKWAYLAND_PASSTHROUGH=never` for the whole process *and*
+  escape hatch `W11_PASSTHROUGH=never` for the whole process *and*
   for everything it spawns;
 * `maybe_exec_real(..., entry=False)`: a `main()` that was handed an explicit
   argv is being used as a library, and we never replace a library caller's
@@ -23,7 +23,7 @@ Two independent belts, both proven by `tests/test_passthrough.py`:
 
 import os
 
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
 # B13: the injection tests pin the *fixed US table* as the source of
 # keycodes. Without this a developer running the suite inside a German or

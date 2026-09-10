@@ -30,8 +30,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from fwcommon import dbus_mini, session as wsession
-from fwcommon.dbus_mini import Bus, Message, Variant
+from w11common import dbus_mini, session as wsession
+from w11common.dbus_mini import Bus, Message, Variant
 import test_dbus_mini as tdm
 from wl_fake import msg, wstr
 from wxrandr import cli, core, monitors_xml, mutter
@@ -51,7 +51,7 @@ PLAIN_REFUSED = "xrandr: GNOME's Mutter refused this layout: %s\n"
 # tests/conftest.py (which covers pytest) and tests/test_passthrough.py.
 # This line is what covers `python3 tests/<file>.py`, where conftest is
 # not loaded, and it reaches every subprocess a test spawns.
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
 ERR = dbus_mini.ERR
 DEST, PATH, IFACE = mutter.DEST, mutter.PATH, mutter.IFACE
@@ -1749,7 +1749,7 @@ class SavedConfigurationFileAsAnotherUid(MutterCase):
     """`--persistent` run by root against somebody else's session.
 
     `ssh root@box wxrandr --persistent ...` and the same from cron are the
-    documented ways to drive a session that is not the caller's -- fwcommon's
+    documented ways to drive a session that is not the caller's -- w11common's
     session discovery exists for exactly that, and finds the Wayland socket, the
     bus and the X cookie of the session's own uid.  The saved display
     configuration was the one thing left reading the *process* environment: as
@@ -1805,7 +1805,7 @@ class SavedConfigurationFileAsAnotherUid(MutterCase):
     @contextlib.contextmanager
     def session_of(self, uid):
         """That uid owns the graphical session, and its home is `tmp/sessionuser`."""
-        with mock.patch("fwcommon.session.session_uid", return_value=uid), \
+        with mock.patch("w11common.session.session_uid", return_value=uid), \
                 mock.patch.object(monitors_xml.pwd, "getpwuid",
                                   lambda u: _Pw(self.user_home) if u == self.other
                                   else (_ for _ in ()).throw(KeyError(u))):
@@ -1916,7 +1916,7 @@ class SavedConfigurationFileAsAnotherUid(MutterCase):
         """A uid with no passwd entry (a session whose user has been deleted, or
         a container with no passwd database) leaves `default_path` where it has
         always been rather than building a path out of nothing."""
-        with mock.patch("fwcommon.session.session_uid", return_value=self.other), \
+        with mock.patch("w11common.session.session_uid", return_value=self.other), \
                 mock.patch.object(monitors_xml.pwd, "getpwuid",
                                   side_effect=KeyError(self.other)):
             code, _out, err = self.run_cli("--persistent", "--output", "HDMI-1",

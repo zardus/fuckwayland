@@ -43,7 +43,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # tests/conftest.py (which covers pytest) and tests/test_passthrough.py.
 # This line is what covers `python3 tests/<file>.py`, where conftest is
 # not loaded, and it reaches every subprocess a test spawns.
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
 import support
 from wxrandr import cli, core
@@ -297,7 +297,7 @@ class I3Dialect(_Wire):
     """U06: the same client against i3 4.25.1, which speaks this protocol and is not sway.
 
     `wxrandr --backend sway` is one of the two ways onto our own code on an i3 box (the other is
-    `FUCKWAYLAND_PASSTHROUGH=never`), and what it did there was half-true [M recon2/i3.md §2b]: it called the
+    `W11_PASSTHROUGH=never`), and what it did there was half-true [M recon2/i3.md §2b]: it called the
     compositor `sway 4.25.1 (2026-02-06)`, it listed i3's `xroot-0` pseudo-output as a connected output with
     no geometry beside the real one, and every apply died with i3's own 30-token parse error after the modes
     had already been recorded.

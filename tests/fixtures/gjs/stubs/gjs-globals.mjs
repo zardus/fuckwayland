@@ -91,13 +91,13 @@ export const LIB_SYMBOLS = [
 ];
 
 /**
- * The loaded FwOverlap namespace.  Every symbol records its arguments under
+ * The loaded W11Overlap namespace.  Every symbol records its arguments under
  * `lib.<name>`; `impl` supplies the ones whose answer matters, `drop` takes
  * symbols away, and `notCallable` leaves a non-function in their place.
  */
 export function makeLib(opts = {}) {
     const {impl = {}, drop = [], notCallable = []} = opts;
-    const lib = tag({}, 'FwOverlap');
+    const lib = tag({}, 'W11Overlap');
     for (const name of LIB_SYMBOLS) {
         if (drop.includes(name))
             continue;

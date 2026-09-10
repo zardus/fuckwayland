@@ -6,7 +6,7 @@ are impossible, and a missing cmd_* function resolves to a stub that raises CmdE
 
 import importlib
 
-from fwcommon.errors import CmdError
+from w11common.errors import CmdError
 
 _MISC = "wdotool.misc_cmds"
 _INPUT = "wdotool.input_cmds"

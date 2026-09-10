@@ -28,9 +28,9 @@ Window ids are 1000000 + arrival order and are only stable within one wdotool pr
 import struct
 import time
 
-from fwcommon import session
-from fwcommon.errors import CmdError
-from fwcommon.wayland_mini import WlConn
+from w11common import session
+from w11common.errors import CmdError
+from w11common.wayland_mini import WlConn
 from wdotool import ext_workspace, xid_match
 from wdotool.backend import View, Window, WindowBackend, warn
 

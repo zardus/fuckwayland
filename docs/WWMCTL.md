@@ -45,7 +45,7 @@ rather than being handed one of two ids. Either way:
 ## The X11 wire client
 
 `wdotool/x11_mini.py` is the pure-stdlib X11 client wwmctl reads the X plane with.
-It lives under `wdotool/` because it already imports `fwcommon.session`, and it has
+It lives under `wdotool/` because it already imports `w11common.session`, and it has
 three callers: wwmctl (identity, geometry, EWMH ClientMessages), wxprop (all of its
 X-window work) and `wdotool.backend_kwin` (the XWayland ids KWin 6 does not export).
 What it speaks, what it does not, and its two-class error model are
@@ -138,7 +138,7 @@ sway's own "workspace current".
 ## GNOME
 
 On a stock GNOME Wayland session (Ubuntu 24.04 / GNOME 46, 26.04 / GNOME 50)
-the compositor plane is the fuckwayland bridge extension
+the compositor plane is the w11 bridge extension
 (`gnome/install-bridge.sh`, see `gnome/README.md`) through
 `wdotool.backend_gnome.GnomeBackend`. wwmctl never reaches into backend
 privates there: it consumes the typed hooks `views()`, `workspaces()`,
@@ -184,7 +184,7 @@ untouched) and the generic `list()` fallback.
 * **The X plane** is opened with the `DISPLAY`/`XAUTHORITY` the bridge
   reports (`XInfo`: gnome-shell's own environment, else Mutter's
   `$XDG_RUNTIME_DIR/.mutter-Xwaylandauth.*` cookie found by
-  `fwcommon.session`), passed to `x11_mini.X11Conn(display, xauthority=)`.
+  `w11common.session`), passed to `x11_mini.X11Conn(display, xauthority=)`.
   Mutter starts Xwayland with `-auth`, so the cookie is mandatory — the
   cookie-less same-uid pass that works on wlroots is refused there — and
   this is what makes `ssh root@box` with an empty environment, `sudo`, and
@@ -323,7 +323,7 @@ untouched) and the generic `list()` fallback.
   Wayland compositor lets a client grab the pointer for another client's
   windows, and the shell exports no click-to-pick API.
 * **Errors.** Every failure is one line on stderr, exit 1: the bridge not
-  installed (`gnome backend: the fuckwayland bridge extension is not
+  installed (`gnome backend: the w11 bridge extension is not
   running in GNOME Shell; run gnome/install-bridge.sh and restart the
   session (log out and back in)`), installed but disabled, the screen
   locked (extensions stop behind the lock screen), the bridge gone

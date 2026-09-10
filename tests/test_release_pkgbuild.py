@@ -36,39 +36,39 @@ import unittest
 # The suite never hands a tool over to the real X11 one: see tests/conftest.py
 # (which covers pytest) and tests/test_passthrough.py.  This line is what
 # covers `python3 tests/<file>.py`, where conftest is not loaded.
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from fwcommon import VERSION                                      # noqa: E402
+from w11common import VERSION                                      # noqa: E402
 
-PKGDIR = os.environ.get("FW_PKG_DIR") or os.path.join(ROOT, "dist")
+PKGDIR = os.environ.get("W11_PKG_DIR") or os.path.join(ROOT, "dist")
 PKGBUILD = os.path.join(ROOT, "packaging", "arch", "PKGBUILD")
 NAMCAP_EXPECTED = os.path.join(ROOT, "packaging", "arch", "namcap.expected")
-BRIDGE_UUID = "fuckwayland-bridge@fuckwayland"
-OVERLAP_UUID = "fuckwayland-overlap@fuckwayland"
+BRIDGE_UUID = "w11-bridge@w11"
+OVERLAP_UUID = "w11-overlap@w11"
 EXT = "usr/share/gnome-shell/extensions"
 
 #: Every non-Python file the package carries, paired with the file in the tree
-#: it is a copy of.  Arch keeps dpkg's /usr/lib/fuckwayland for the helper (it
+#: it is a copy of.  Arch keeps dpkg's /usr/lib/w11 for the helper (it
 #: has no /usr/libexec convention), so this is test_release_deb.py's table with
 #: one path re-pointed -- and the autostart entry IS a byte copy here, unlike
 #: the rpm's, because nothing rewrites its Exec= line.
 PAIRS = {
-    "usr/lib/udev/rules.d/60-fuckwayland-uinput.rules":
-        "gnome/60-fuckwayland-uinput.rules",
-    "usr/lib/modules-load.d/fuckwayland-uinput.conf":
+    "usr/lib/udev/rules.d/60-w11-uinput.rules":
+        "gnome/60-w11-uinput.rules",
+    "usr/lib/modules-load.d/w11-uinput.conf":
         "gnome/modules-load-uinput.conf",
-    "usr/lib/fuckwayland/enable-bridge": "packaging/common/enable-bridge",
-    "etc/xdg/autostart/fuckwayland-enable-bridge.desktop":
+    "usr/lib/w11/enable-bridge": "packaging/common/enable-bridge",
+    "etc/xdg/autostart/w11-enable-bridge.desktop":
         "packaging/common/enable-bridge.desktop",
     "usr/share/applications/warandr.desktop": "warandr.desktop",
     # BSD-2-Clause is not one of /usr/share/licenses/common/, so the package
     # carries the text.  Byte for byte, because a licence file that is not the
     # project's licence file is the one payload error nobody looks for.
-    "usr/share/licenses/fuckwayland/LICENSE": "LICENSE",
+    "usr/share/licenses/w11/LICENSE": "LICENSE",
 }
 
 TOOLS = ("warandr", "wdotool", "wmirror", "wwmctl", "wxprop", "wxrandr")
@@ -91,7 +91,7 @@ def find():
     if not os.path.isdir(PKGDIR):
         return []
     return sorted(os.path.join(PKGDIR, n) for n in os.listdir(PKGDIR)
-                  if n.startswith("fuckwayland-%s-" % VERSION)
+                  if n.startswith("w11-%s-" % VERSION)
                   and ".pkg.tar." in n)
 
 
@@ -107,7 +107,7 @@ class PkgCase(unittest.TestCase):
             self.skipTest("no bsdtar (libarchive) to read a .pkg.tar.zst")
         found = find()
         if not found:
-            self.skipTest("no fuckwayland %s package in %s (sh scripts/build-pkgbuild.sh)"
+            self.skipTest("no w11 %s package in %s (sh scripts/build-pkgbuild.sh)"
                           % (VERSION, PKGDIR))
         self.pkg = found[0]
 
@@ -125,7 +125,7 @@ class PkgCase(unittest.TestCase):
         return got.stdout
 
     def unpack(self):
-        tmp = tempfile.mkdtemp(prefix="fw-pkg-")
+        tmp = tempfile.mkdtemp(prefix="w11-pkg-")
         self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
         subprocess.run(["bsdtar", "-xf", self.pkg], cwd=tmp, check=True, timeout=300)
         return tmp
@@ -175,7 +175,7 @@ class ThePayload(PkgCase):
     def test_both_extension_trees_are_the_ones_in_gnome(self):
         """One package carries both extensions here, where Fedora splits them
         into subpackages: pacman has no weak dependencies, so there is nothing
-        for a `Supplements: (fuckwayland and gnome-shell)` to be expressed
+        for a `Supplements: (w11 and gnome-shell)` to be expressed
         with, and gnome-shell stays an optdepends clause.
 
         typelib/ is left out of this walk on purpose and has its own test
@@ -317,7 +317,7 @@ class InstallAndRemove(PkgCase):
     The measured run: the package installed clean, printed the banner, listed
     the optdepends, and pacman ran its own `(1/2) Reloading device manager
     configuration` from 35-systemd-udev-reload.hook; `pacman -R` removed every
-    file and the /var/lib/fuckwayland stamp [recon2/pkg-arch.md 2]."""
+    file and the /var/lib/w11 stamp [recon2/pkg-arch.md 2]."""
 
     def setUp(self):
         super().setUp()
@@ -331,17 +331,17 @@ class InstallAndRemove(PkgCase):
                        check=True, capture_output=True, timeout=900)
         try:
             self.assertTrue(shutil.which("wdotool"), "the tools are not on PATH")
-            check = subprocess.run(["pacman", "-Qkk", "fuckwayland"],
+            check = subprocess.run(["pacman", "-Qkk", "w11"],
                                    capture_output=True, text=True, timeout=300)
             self.assertEqual(check.returncode, 0, check.stdout + check.stderr)
         finally:
-            subprocess.run(["pacman", "-R", "--noconfirm", "fuckwayland"],
+            subprocess.run(["pacman", "-R", "--noconfirm", "w11"],
                            check=True, capture_output=True, timeout=900)
         self.assertIsNone(shutil.which("wdotool"))
-        for path in ("/usr/lib/udev/rules.d/60-fuckwayland-uinput.rules",
-                     "/etc/xdg/autostart/fuckwayland-enable-bridge.desktop",
-                     "/usr/lib/fuckwayland/enable-bridge",
-                     "/var/lib/fuckwayland/installed",
+        for path in ("/usr/lib/udev/rules.d/60-w11-uinput.rules",
+                     "/etc/xdg/autostart/w11-enable-bridge.desktop",
+                     "/usr/lib/w11/enable-bridge",
+                     "/var/lib/w11/installed",
                      "/usr/share/gnome-shell/extensions/" + BRIDGE_UUID):
             with self.subTest(path):
                 self.assertFalse(os.path.exists(path), path)

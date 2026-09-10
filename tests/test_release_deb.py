@@ -2,7 +2,7 @@
 """What actually ships: the package committed in `release/`, and what the documents say about it.
 
 Every other file in this suite runs the *tree*.  What a user runs is
-`sudo apt install ./release/fuckwayland_<version>_all.deb`, which is a binary in the
+`sudo apt install ./release/w11_<version>_all.deb`, which is a binary in the
 repository -- and nothing in the tree makes that binary agree with the tree.  While 0.4
 was being finished it did not agree: the committed file was the build of the v0.3 tag,
 put there by "Release version 0.3" and never rebuilt, so a user who followed the README
@@ -32,7 +32,7 @@ import unittest
 # The suite never hands a tool over to the real X11 one: see tests/conftest.py
 # (which covers pytest) and tests/test_passthrough.py.  This line is what
 # covers `python3 tests/<file>.py`, where conftest is not loaded.
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
@@ -41,13 +41,13 @@ sys.path.insert(0, ROOT)
 # `python3 -m unittest tests/<file>.py` does not.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from fwcommon import VERSION
+from w11common import VERSION
 from support import documents
 
 RELEASE = os.path.join(ROOT, "release")
 DIST = "usr/lib/python3/dist-packages"
-OVERLAP_UUID = "fuckwayland-overlap@fuckwayland"
-BRIDGE_UUID = "fuckwayland-bridge@fuckwayland"
+OVERLAP_UUID = "w11-overlap@w11"
+BRIDGE_UUID = "w11-bridge@w11"
 EXT = "usr/share/gnome-shell/extensions"
 
 #: Every file the package carries that is *not* a Python module, paired with
@@ -57,9 +57,9 @@ EXT = "usr/share/gnome-shell/extensions"
 #: that runs on the user's machine: a udev rule, a modules-load line, the
 #: autostart script and its .desktop entry, the menu entry, the licence.
 PAIRS = {
-    "usr/lib/udev/rules.d/60-fuckwayland-uinput.rules":
-        "gnome/60-fuckwayland-uinput.rules",
-    "usr/lib/modules-load.d/fuckwayland-uinput.conf":
+    "usr/lib/udev/rules.d/60-w11-uinput.rules":
+        "gnome/60-w11-uinput.rules",
+    "usr/lib/modules-load.d/w11-uinput.conf":
         "gnome/modules-load-uinput.conf",
     # packaging/common/, not debian/: the enabler and its autostart entry are a
     # per-user gsettings enable and an XDG entry, needed identically by the
@@ -67,18 +67,18 @@ PAIRS = {
     # directory named for dpkg was what said they were in the wrong place.  The
     # bytes did not move, only the directory, so the package in release/ still
     # matches them byte for byte with no rebuild.
-    "usr/lib/fuckwayland/enable-bridge": "packaging/common/enable-bridge",
-    "usr/lib/fuckwayland/enable-bridge.desktop": "packaging/common/enable-bridge.desktop",
+    "usr/lib/w11/enable-bridge": "packaging/common/enable-bridge",
+    "usr/lib/w11/enable-bridge.desktop": "packaging/common/enable-bridge.desktop",
     "usr/share/applications/warandr.desktop": "warandr.desktop",
-    "usr/share/doc/fuckwayland/copyright": "debian/copyright",
-    "usr/share/lintian/overrides/fuckwayland": "debian/fuckwayland.lintian-overrides",
+    "usr/share/doc/w11/copyright": "debian/copyright",
+    "usr/share/lintian/overrides/w11": "debian/w11.lintian-overrides",
 }
 
 
 def _deb_filter(member, dest_path):
     """tarfile's `data` rules, minus the one a .deb legitimately breaks.
 
-    The autostart entry is a symlink to `/usr/lib/fuckwayland/...`, an absolute
+    The autostart entry is a symlink to `/usr/lib/w11/...`, an absolute
     path, which `data_filter` refuses on principle -- it is a link that would
     escape the extraction root if the root were `/`.  For a package payload
     that is the whole point of the file, and `dpkg-deb -x` writes it, so the
@@ -162,7 +162,7 @@ class ThePackageInTheTree(unittest.TestCase):
         `unpack_deb` rather than `dpkg-deb -x`: the two are proved identical by
         `StdlibUnpacking` below, and this way the payload tests run on a
         machine with no dpkg -- which is where they were being skipped."""
-        tmp = tempfile.mkdtemp(prefix="fw-deb-")
+        tmp = tempfile.mkdtemp(prefix="w11-deb-")
         self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
         unpack_deb(self.deb(), tmp)
         return tmp
@@ -171,7 +171,7 @@ class ThePackageInTheTree(unittest.TestCase):
         """The control member's files, as name -> text (`dpkg-deb -e`)."""
         if shutil.which("dpkg-deb") is None:
             self.skipTest("no dpkg-deb")
-        tmp = tempfile.mkdtemp(prefix="fw-deb-ctl-")
+        tmp = tempfile.mkdtemp(prefix="w11-deb-ctl-")
         self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
         subprocess.run(["dpkg-deb", "-e", self.deb(), tmp], check=True)
         out = {}
@@ -188,7 +188,7 @@ class ThePackageInTheTree(unittest.TestCase):
         return out.stdout.strip()
 
     def test_exactly_one_package_named_for_this_version(self):
-        self.assertEqual(self.debs, ["fuckwayland_%s_all.deb" % VERSION])
+        self.assertEqual(self.debs, ["w11_%s_all.deb" % VERSION])
 
     def test_its_own_control_says_the_same_version(self):
         self.assertEqual(self.field("Version"), VERSION)
@@ -225,12 +225,12 @@ class ThePackageInTheTree(unittest.TestCase):
     def test_it_carries_both_extensions_the_udev_rule_and_the_menu_entry(self):
         tmp = self.unpacked()
         for rel in (
-                "usr/lib/udev/rules.d/60-fuckwayland-uinput.rules",
+                "usr/lib/udev/rules.d/60-w11-uinput.rules",
                 "usr/share/applications/warandr.desktop",
                 "usr/share/gnome-shell/extensions/%s/extension.js" % BRIDGE_UUID,
                 "usr/share/gnome-shell/extensions/%s/extension.js" % OVERLAP_UUID,
                 "usr/share/gnome-shell/extensions/%s/typelib/"
-                "FwOverlap18-1.0.typelib" % OVERLAP_UUID):
+                "W11Overlap18-1.0.typelib" % OVERLAP_UUID):
             self.assertTrue(os.path.exists(os.path.join(tmp, rel)), rel)
 
     def test_the_shipped_extensions_are_the_ones_in_gnome(self):
@@ -276,7 +276,7 @@ class ThePackageInTheTree(unittest.TestCase):
         control = self.control()
         for name in ("postinst", "postrm"):
             with self.subTest(name):
-                with open(os.path.join(ROOT, "debian", "fuckwayland." + name),
+                with open(os.path.join(ROOT, "debian", "w11." + name),
                           encoding="utf-8") as f:
                     mine = [ln for ln in f.read().splitlines()
                             if ln.strip() != "#DEBHELPER#"]
@@ -296,7 +296,7 @@ class ThePackageInTheTree(unittest.TestCase):
         """generations.json is the single record of which libmutter layouts the
         overlap extension knows, and one compiled type description per row is
         what makes each of them reachable.  The old assertion named
-        FwOverlap18 and nothing else, so a package that shipped one typelib out
+        W11Overlap18 and nothing else, so a package that shipped one typelib out
         of three passed it -- and on GNOME 46 or 51 the extension would load
         and then fail at its first call."""
         tmp = self.unpacked()
@@ -330,15 +330,15 @@ class ThePackageInTheTree(unittest.TestCase):
                          "other major: metadata.json is what gnome-shell reads")
 
     def test_the_autostart_entry_is_a_symlink_to_the_one_file(self):
-        """One file, two names: /usr/lib/fuckwayland/enable-bridge.desktop is
+        """One file, two names: /usr/lib/w11/enable-bridge.desktop is
         the payload and /etc/xdg/autostart/ holds a link to it, so a user who
         does not want it can mask the link in ~/.config/autostart without dpkg
         putting it back at the next upgrade."""
         tmp = self.unpacked()
-        link = os.path.join(tmp, "etc/xdg/autostart/fuckwayland-enable-bridge.desktop")
+        link = os.path.join(tmp, "etc/xdg/autostart/w11-enable-bridge.desktop")
         self.assertTrue(os.path.islink(link), link)
         self.assertEqual(os.readlink(link),
-                         "/usr/lib/fuckwayland/enable-bridge.desktop")
+                         "/usr/lib/w11/enable-bridge.desktop")
 
     def test_usr_bin_is_exactly_the_project_scripts_table(self):
         """Three lists of six names that have to agree: what dpkg installs,
@@ -356,7 +356,7 @@ class ThePackageInTheTree(unittest.TestCase):
 
     def test_the_readme_installs_the_file_that_is_there(self):
         text = documents()["README.md"]
-        named = set(re.findall(r"release/(fuckwayland_[0-9.]+_all\.deb)", text))
+        named = set(re.findall(r"release/(w11_[0-9.]+_all\.deb)", text))
         self.assertEqual(named, set(self.debs), "README.md names a package "
                                                 "that is not in release/")
 
@@ -366,14 +366,14 @@ class TheDocumentsAboutIt(unittest.TestCase):
     check against a fact rather than against prose."""
 
     def test_no_document_says_the_package_leaves_the_overlap_extension_out(self):
-        """`debian/fuckwayland.install` decides this, and since 0.4 it lists
+        """`debian/w11.install` decides this, and since 0.4 it lists
         the overlap extension -- while gnome/README.md, docs/Technical.md and
         the installer's own header still said "not in the .deb", the last of
         them four lines under "since 0.4 it is packaged"."""
-        with open(os.path.join(ROOT, "debian", "fuckwayland.install"),
+        with open(os.path.join(ROOT, "debian", "w11.install"),
                   encoding="utf-8") as f:
             shipped = OVERLAP_UUID in f.read()
-        self.assertTrue(shipped, "debian/fuckwayland.install no longer ships "
+        self.assertTrue(shipped, "debian/w11.install no longer ships "
                                  "the overlap extension: fix this test's "
                                  "premise, not the documents")
         claims = ("not in the .deb", "not installed by the .deb",
@@ -407,9 +407,9 @@ class TheDocumentsAboutIt(unittest.TestCase):
     def test_the_uinput_opt_out_in_readme_debian_is_the_revoke_sequence(self):
         """Fix 56 (deferred: the author's call), finding F6.1.
         debian/README.Debian tells a reader who does not want the udev rule to
-        `rm /usr/lib/udev/rules.d/60-fuckwayland-uinput.rules`.  Three things
+        `rm /usr/lib/udev/rules.d/60-w11-uinput.rules`.  Three things
         are wrong with that.  The file is dpkg's: removing it makes `dpkg -V
-        fuckwayland` report the package as modified for ever, and the next
+        w11` report the package as modified for ever, and the next
         upgrade puts it back.  `udevadm control --reload-rules` alone does not
         undo anything -- udev preserves permissions and ACLs no rule asks it to
         change, and its tags are sticky in its own database, so the node keeps
@@ -417,7 +417,7 @@ class TheDocumentsAboutIt(unittest.TestCase):
         *removed*, not masked, because the uaccess builtin only ever adds
         entries: a left-over one makes a later reinstall a no-op.  The right
         opt-out is the one postrm already performs -- mask the rule with an
-        empty `/etc/udev/rules.d/60-fuckwayland-uinput.rules`, which shadows
+        empty `/etc/udev/rules.d/60-w11-uinput.rules`, which shadows
         the package's copy by name and survives upgrades, and then
         `install-bridge.sh --udev --uninstall` (or a shipped revoke helper) to
         clear what is already granted."""
@@ -428,14 +428,14 @@ class TheDocumentsAboutIt(unittest.TestCase):
         self.assertNotIn("rm /usr/lib/udev/rules.d/", para)
         self.assertTrue("install-bridge.sh --udev --uninstall" in para
                         or "uinput-revoke" in para, para)
-        self.assertIn("/etc/udev/rules.d/60-fuckwayland-uinput.rules", para)
+        self.assertIn("/etc/udev/rules.d/60-w11-uinput.rules", para)
 
     def test_postrm_still_does_the_revoking_this_paragraph_should_name(self):
         """The premise of the test above, from the code: what `apt remove`
         does to the node is exactly the sequence the opt-out paragraph ought to
         describe, so if postrm ever stops doing it the paragraph is not the
         thing to fix."""
-        with open(os.path.join(ROOT, "debian", "fuckwayland.postrm"),
+        with open(os.path.join(ROOT, "debian", "w11.postrm"),
                   encoding="utf-8") as f:
             sh = f.read()
         self.assertIn("setfacl -b /dev/uinput", sh)
@@ -466,17 +466,17 @@ class TheDocumentsAboutIt(unittest.TestCase):
 
 
 class OneVersionEverywhere(unittest.TestCase):
-    """Three files besides `fwcommon.VERSION` spell this release's version,
+    """Three files besides `w11common.VERSION` spell this release's version,
     and nothing but this test makes them agree.
 
     The 0.3-package-in-a-0.4-tree failure was one half of this: the file name
-    said 0.3 while `fwcommon.VERSION` said 0.4, and every test in the suite
+    said 0.3 while `w11common.VERSION` said 0.4, and every test in the suite
     read the second.  That half -- the name in `release/` and the `Version:`
     field inside the package -- is `ThePackageInTheTree` above.  This is the
     other: the three a release forgets, because nothing installs or runs them
     at test time -- pyproject.toml, the changelog stanza dpkg builds the
     package version out of, and flake.nix, which is what `nix build` and
-    `nix run github:.../fuckwayland` produce."""
+    `nix run github:.../w11` produce."""
 
     def test_pyproject_says_it(self):
         with open(os.path.join(ROOT, "pyproject.toml"), "rb") as f:
@@ -490,7 +490,7 @@ class OneVersionEverywhere(unittest.TestCase):
         the same check from the other end."""
         with open(os.path.join(ROOT, "debian", "changelog"), encoding="utf-8") as f:
             top = f.readline()
-        m = re.match(r"fuckwayland \(([^)]+)\) ", top)
+        m = re.match(r"w11 \(([^)]+)\) ", top)
         self.assertTrue(m, top)
         self.assertEqual(m.group(1), VERSION)
 
@@ -507,7 +507,7 @@ class OneVersionEverywhere(unittest.TestCase):
         rpm builds the package's name out of.  `sh scripts/build-rpm.sh`
         refuses the build over either; this is the same check from the other
         end, and it is the one that runs on every push."""
-        with open(os.path.join(ROOT, "packaging", "rpm", "fuckwayland.spec"),
+        with open(os.path.join(ROOT, "packaging", "rpm", "w11.spec"),
                   encoding="utf-8") as f:
             spec = f.read()
         self.assertEqual(re.findall(r"^Version: *(\S+)$", spec, re.M), [VERSION])
@@ -561,8 +561,8 @@ class StdlibUnpacking(unittest.TestCase):
     def trees(self):
         if shutil.which("dpkg-deb") is None:
             self.skipTest("no dpkg-deb to compare against")
-        mine = tempfile.mkdtemp(prefix="fw-stdlib-")
-        theirs = tempfile.mkdtemp(prefix="fw-dpkgdeb-")
+        mine = tempfile.mkdtemp(prefix="w11-stdlib-")
+        theirs = tempfile.mkdtemp(prefix="w11-dpkgdeb-")
         self.addCleanup(shutil.rmtree, mine, ignore_errors=True)
         self.addCleanup(shutil.rmtree, theirs, ignore_errors=True)
         unpack_deb(self.deb, mine)
@@ -600,7 +600,7 @@ class StdlibUnpacking(unittest.TestCase):
         Extracting it as a copy would leave two files where the package has
         one, and `dpkg -V` would report the difference forever."""
         mine, _ = self.trees()
-        link = os.path.join(mine, "etc/xdg/autostart/fuckwayland-enable-bridge.desktop")
+        link = os.path.join(mine, "etc/xdg/autostart/w11-enable-bridge.desktop")
         self.assertTrue(os.path.islink(link))
 
 
@@ -629,7 +629,7 @@ class TheGtkDependency(unittest.TestCase):
         # is the whole of what the Depends line is about (gen-gir.py imports
         # gi too, and is a build-time tool that is not in the package)
         importers = set()
-        for pkg in ("fwcommon", "wdotool", "wwmctl", "wxprop", "wxrandr",
+        for pkg in ("w11common", "wdotool", "wwmctl", "wxprop", "wxrandr",
                     "warandr", "wmirror"):
             for base, dirs, names in os.walk(os.path.join(ROOT, pkg)):
                 dirs[:] = [d for d in dirs if d != "__pycache__"]

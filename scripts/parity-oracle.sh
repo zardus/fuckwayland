@@ -18,11 +18,11 @@
 # the file has to be green against both -- so it is run once against each.
 #
 # Where the oracles come from, in order:
-#   $FW_ORACLE_PATH    colon-separated PATH prefix, used as given
-#   $FW_ORACLE_PATH_FILE / scripts/nixpath  a file holding one such prefix
+#   $W11_ORACLE_PATH    colon-separated PATH prefix, used as given
+#   $W11_ORACLE_PATH_FILE / scripts/nixpath  a file holding one such prefix
 #   /nix/store/*-xdotool-<pinned>/bin and /nix/store/*-wmctrl-1.07/bin
 # On a host with neither, build them: `nix develop` (both on PATH), or
-#   FW_ORACLE_PATH=$(nix build --no-link --print-out-paths .#xdotool .#wmctrl |
+#   W11_ORACLE_PATH=$(nix build --no-link --print-out-paths .#xdotool .#wmctrl |
 #                    sed 's|$|/bin|' | paste -sd:)
 # `packages.xdotool` and `packages.wmctrl` are nixpkgs' own, re-exported by
 # flake.nix so that this sentence is true.  Until 0.5 they were not there and
@@ -31,12 +31,12 @@
 # it the working way (`nix build --inputs-from . nixpkgs#xdotool`)
 # [recon2/pkg-nix §1 defect 2].
 #
-#   FW_PARITY_DISPLAY   display to use for the Xvfb we start (default :99)
+#   W11_PARITY_DISPLAY   display to use for the Xvfb we start (default :99)
 set -eu
 cd "$(dirname "$0")/.."
 
 XDO_PIN=$(python3 -c 'import sys; sys.path.insert(0, "."); from wdotool import cli; print(cli.XDO_VERSION)')
-: "${FW_PARITY_DISPLAY:=:99}"
+: "${W11_PARITY_DISPLAY:=:99}"
 
 die() { printf 'parity-oracle: %s\n' "$*" >&2; exit 2; }
 say() { printf '\n== %s\n' "$*"; }
@@ -44,10 +44,10 @@ say() { printf '\n== %s\n' "$*"; }
 # -- find the pinned oracles --------------------------------------------------
 
 prefix=""
-if [ -n "${FW_ORACLE_PATH:-}" ]; then
-  prefix=$FW_ORACLE_PATH
+if [ -n "${W11_ORACLE_PATH:-}" ]; then
+  prefix=$W11_ORACLE_PATH
 else
-  for f in "${FW_ORACLE_PATH_FILE:-}" scripts/nixpath; do
+  for f in "${W11_ORACLE_PATH_FILE:-}" scripts/nixpath; do
     [ -n "$f" ] && [ -f "$f" ] || continue
     prefix=$(tr -d '\n' < "$f")
     break
@@ -63,7 +63,7 @@ if [ -z "$prefix" ]; then
     [ -x "$d/wmctrl" ] && prefix="${prefix:+$prefix:}$d" && break
   done
 fi
-[ -n "$prefix" ] || die "no oracle path: set \$FW_ORACLE_PATH, or build them with nix"
+[ -n "$prefix" ] || die "no oracle path: set \$W11_ORACLE_PATH, or build them with nix"
 PATH="$prefix:$PATH"
 export PATH
 
@@ -83,9 +83,9 @@ cleanup() { [ -n "$xvfb_pid" ] && kill "$xvfb_pid" 2>/dev/null; :; }
 trap cleanup EXIT INT TERM HUP PIPE
 if [ -z "${DISPLAY:-}" ] || ! xdotool getdisplaygeometry >/dev/null 2>&1; then
   command -v Xvfb >/dev/null 2>&1 || die "no usable DISPLAY and no Xvfb to start one"
-  Xvfb "$FW_PARITY_DISPLAY" -screen 0 1280x720x24 >/dev/null 2>&1 &
+  Xvfb "$W11_PARITY_DISPLAY" -screen 0 1280x720x24 >/dev/null 2>&1 &
   xvfb_pid=$!
-  DISPLAY=$FW_PARITY_DISPLAY
+  DISPLAY=$W11_PARITY_DISPLAY
   export DISPLAY
   i=0
   while [ "$i" -lt 100 ]; do
@@ -93,7 +93,7 @@ if [ -z "${DISPLAY:-}" ] || ! xdotool getdisplaygeometry >/dev/null 2>&1; then
     i=$((i + 1))
     sleep 0.1
   done
-  [ "$i" -lt 100 ] || die "Xvfb on $FW_PARITY_DISPLAY never came up"
+  [ "$i" -lt 100 ] || die "Xvfb on $W11_PARITY_DISPLAY never came up"
 fi
 printf 'parity-oracle: DISPLAY=%s (%s)\n' "$DISPLAY" "$(xdotool getdisplaygeometry | tr '\n' ' ')"
 
@@ -118,7 +118,7 @@ from wdotool import cli
 sys.exit(cli.main())
 EOF
 chmod 755 "$tmp/ours"
-FUCKWAYLAND_PASSTHROUGH=never "$tmp/ours" "$tmp/comment.xdo" > "$tmp/out.ours" 2>&1 || true
+W11_PASSTHROUGH=never "$tmp/ours" "$tmp/comment.xdo" > "$tmp/out.ours" 2>&1 || true
 xdotool "$tmp/comment.xdo" > "$tmp/out.real" 2>&1 || true
 if ! cmp -s "$tmp/out.ours" "$tmp/out.real"; then
   printf 'ours: %s\nreal: %s\n' "$(cat "$tmp/out.ours")" "$(cat "$tmp/out.real")" >&2

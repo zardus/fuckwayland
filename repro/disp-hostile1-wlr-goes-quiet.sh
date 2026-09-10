@@ -3,7 +3,7 @@
 # different moments.  Before the fix, "silent-apply" hangs forever (killed at
 # 30 s, rc=137); after it, the CLI returns inside the 10 s guard.
 cd "$(dirname "$0")/.." || exit 1
-export FUCKWAYLAND_PASSTHROUGH=never PYTHONPATH=$PWD
+export W11_PASSTHROUGH=never PYTHONPATH=$PWD
 for m in normal silent-start silent-apply mute-apply; do
   rm -f /tmp/fakewl-$m.sock
   setsid python3 tests/fixtures/fake_wlr.py /tmp/fakewl-$m.sock $m </dev/null >/dev/null 2>&1 &

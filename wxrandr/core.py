@@ -8,7 +8,7 @@ close/name), of which two live in this file:
 
 - sway/i3 IPC (GET_OUTPUTS for state, `output ...` commands for mutation, all
   mutations batched into single RUN_COMMAND messages),
-- generic wlroots: zwlr_output_management_unstable_v1 over fwcommon.wayland_mini
+- generic wlroots: zwlr_output_management_unstable_v1 over w11common.wayland_mini
   — one atomic configuration apply, which is exactly xrandr's model,
 - and, in their own modules, Mutter's DisplayConfig (`mutter.py`) and KWin's
   kde_output_management_v2 (`kwin.py`).
@@ -47,8 +47,8 @@ import struct
 import sys
 import time
 
-from fwcommon import procs, session
-from fwcommon.errors import CmdError
+from w11common import procs, session
+from w11common.errors import CmdError
 
 PROGRAM_VERSION = "1.5.4"
 
@@ -603,7 +603,7 @@ class WlrOutputs:
     name = "wlroots"
 
     def __init__(self, conn=None):
-        from fwcommon.wayland_mini import WlConn
+        from w11common.wayland_mini import WlConn
         self.conn = conn
         self._own_conn = conn is None
         if self.conn is None:

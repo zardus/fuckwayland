@@ -42,7 +42,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # the first tool import, which is the suite's rule: passthrough is decided
 # in cli.main here, but a module that read the variable at import time would
 # read it too late.
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
 import support                                                    # noqa: E402
 from wmirror import supervise                                     # noqa: E402
@@ -109,7 +109,7 @@ class Live(unittest.TestCase):
         cls.env = dict(os.environ,
                        XDG_RUNTIME_DIR=cls.rig.rtdir,
                        PATH=cls.stubdir + os.pathsep + os.environ.get("PATH", ""),
-                       FUCKWAYLAND_PASSTHROUGH="never")
+                       W11_PASSTHROUGH="never")
         cls.env.pop("WAYLAND_DISPLAY", None)
         if cls.swaymsg("create_output").returncode != 0:
             cls.rig.stop()

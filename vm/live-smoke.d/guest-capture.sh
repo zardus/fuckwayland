@@ -34,12 +34,12 @@
 # replays 30 pass / 0 fail.
 set -u
 DESKTOP=${1:-gnome}
-F=/tmp/fw-smoke.txt
+F=/tmp/w11-smoke.txt
 # The smoke keeps its copy of the oracle in $HOME (a reboot empties /tmp on
 # 24.04); a hand run of this script may have scp'd one to /tmp instead, so both
 # are looked for and the section prints under one name either way.
-OR=$HOME/fw-oracle.py
-[ -f "$OR" ] || OR=/tmp/fw-oracle.py
+OR=$HOME/w11-oracle.py
+[ -f "$OR" ] || OR=/tmp/w11-oracle.py
 
 run() {
     echo "### $*"
@@ -55,26 +55,26 @@ run() {
 # on purpose and in that order (before and after the move): fake-vmctl walks the
 # two, which is what makes the move a claim rather than a reading.
 capture_i3ipc() {
-    OURS="FUCKWAYLAND_PASSTHROUGH=never env -u I3SOCK"
+    OURS="W11_PASSTHROUGH=never env -u I3SOCK"
     run 'i3 --get-socketpath'
     run 'echo $I3SOCK'
     run 'wdotool --version'
     # -e, so there is no interactive shell: the test user's ~/.bashrc retitles an
-    # xterm on its first prompt and `search --name fwsmoke` then matches nothing
-    run "setsid nohup xterm -T fwsmoke -e sh -c 'while :; do sleep 3600; done' \
+    # xterm on its first prompt and `search --name w11smoke` then matches nothing
+    run "setsid nohup xterm -T w11smoke -e sh -c 'while :; do sleep 3600; done' \
 >/dev/null 2>&1 </dev/null & sleep 2; true"
     sleep 3
-    run 'wdotool search --name fwsmoke'
-    W=$(wdotool search --name fwsmoke 2>/dev/null | head -1); HEX=$(printf '0x%08x' "$W")
-    run "$OURS wdotool search --name fwsmoke"
+    run 'wdotool search --name w11smoke'
+    W=$(wdotool search --name w11smoke 2>/dev/null | head -1); HEX=$(printf '0x%08x' "$W")
+    run "$OURS wdotool search --name w11smoke"
     run "$OURS wxprop -id $HEX WM_CLASS"
     run "$OURS wdotool getwindowpid $W"
-    run "$OURS wdotool search --onlyvisible --name fwsmoke"
-    run "i3-msg '[title=\"fwsmoke\"] floating enable'"; sleep 1
+    run "$OURS wdotool search --onlyvisible --name w11smoke"
+    run "i3-msg '[title=\"w11smoke\"] floating enable'"; sleep 1
     run "wdotool getwindowgeometry $W"
     run "$OURS wdotool windowmove $W 120 140"; sleep 1
     run "wdotool getwindowgeometry $W"
-    run "i3-msg '[title=\"fwsmoke\"] floating disable'"
+    run "i3-msg '[title=\"w11smoke\"] floating disable'"
     run "$OURS wdotool getdisplaygeometry"
     run "$OURS wxrandr --backend sway --print-backend --verbose"
     run "$OURS wxrandr --backend sway --output Virtual-1 --pos 0x0"
@@ -95,9 +95,9 @@ echo "### capture $(date -Is) desktop=$DESKTOP host=$(uname -sr)"
 run 'lsb_release -ds'
 run 'gnome-shell --version || kwin_wayland --version || sway --version'
 run 'wdotool --version'
-run 'dpkg -l fuckwayland | tail -1'
-[ "$DESKTOP" = gnome ] && run 'gnome-extensions info fuckwayland-bridge@fuckwayland'
-[ "$DESKTOP" = gnome ] && run 'gnome-extensions info fuckwayland-overlap@fuckwayland'
+run 'dpkg -l w11 | tail -1'
+[ "$DESKTOP" = gnome ] && run 'gnome-extensions info w11-bridge@w11'
+[ "$DESKTOP" = gnome ] && run 'gnome-extensions info w11-overlap@w11'
 
 # --- a window to work on
 rm -f "$F"; touch "$F"
@@ -115,7 +115,7 @@ case $DESKTOP in
            CLASS='gnome[-.]terminal' ;;
     # -e, so the shell that would retitle the window on its first prompt is never
     # started (Ubuntu's /etc/skel/.bashrc, the `xterm*|rxvt*)` case)
-    *)     setsid nohup xterm -T fwsmoke -e sh -c 'while :; do sleep 3600; done' \
+    *)     setsid nohup xterm -T w11smoke -e sh -c 'while :; do sleep 3600; done' \
                >/dev/null 2>&1 </dev/null & CLASS=xterm ;;
 esac
 sleep 6
@@ -184,5 +184,5 @@ run 'gsettings get org.gnome.desktop.input-sources sources'
 run 'gsettings get org.gnome.desktop.input-sources mru-sources'
 run 'getfacl -p /dev/uinput'
 run 'stat -c "%U %G %a" /dev/uinput'
-run 'ls /usr/lib/udev/rules.d/60-fuckwayland-uinput.rules'
+run 'ls /usr/lib/udev/rules.d/60-w11-uinput.rules'
 echo "### end $(date -Is)"

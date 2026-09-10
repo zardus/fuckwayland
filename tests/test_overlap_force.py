@@ -50,7 +50,7 @@ sys.path.insert(0, os.path.join(ROOT, "tests"))
 from test_gnome_overlap import Case, EXT_DIR, GIR_DIR, FakeOverlap, load_gen_gir
 from wxrandr import cli, gnome_overlap
 
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
 FLAG = gnome_overlap.FLAG
 FORCE = gnome_overlap.FORCE_FLAG
@@ -94,7 +94,7 @@ UMV = "%d.0" % UNMEASURED_MAJOR                 # what such a shell reports
 #: anything.
 NEXT = {"shell_major": UNMEASURED_MAJOR, "libmutter": UM,
         "soname": "libmutter-%s.so.0" % UM,
-        "meta_typelib": UM, "namespace": "FwOverlap%s" % UM,
+        "meta_typelib": UM, "namespace": "W11Overlap%s" % UM,
         "struct_size": 80, "tail_slots": 3,
         "measured_on": "nowhere: this record is a test fixture"}
 
@@ -262,7 +262,7 @@ class TheFlagOnAnXSession(unittest.TestCase):
         self.addCleanup(shutil.rmtree, tmp, True)
         log = os.path.join(tmp, "log")
         env = {"PATH": "/usr/bin:/bin", "HOME": tmp, "DISPLAY": ":0",
-               "PYTHONPATH": ROOT, "FUCKWAYLAND_PASSTHROUGH": "always",
+               "PYTHONPATH": ROOT, "W11_PASSTHROUGH": "always",
                "WXRANDR_REAL_XRANDR": os.path.join(ROOT, "tests", "fixtures",
                                                    "fake_real_tool.py"),
                "FAKE_REAL_LOG": log}
@@ -291,7 +291,7 @@ class TheFlagOnAnXSession(unittest.TestCase):
 
         Measured at HEAD, as a real process: `python3 -m wxrandr
         --unsafe-gnome-overlap-unmeasured 52 --output X --auto` with
-        `FUCKWAYLAND_PASSTHROUGH=always`, DISPLAY set and WAYLAND_DISPLAY unset
+        `W11_PASSTHROUGH=always`, DISPLAY set and WAYLAND_DISPLAY unset
         exec'd the stand-in with argv `["--unsafe-gnome-overlap-unmeasured",
         "52", "--output", "X", "--auto"]` and exited 0.  Real xrandr would
         answer "unrecognized option" and exit 1 with the layout unapplied --
@@ -549,7 +549,7 @@ class WhatForcingPrints(Case):
         self.assertIn("every program running in it goes", err)
         # the way back, in full, and it is the same one the ordinary warning gives
         self.assertIn("Ctrl+Alt+F3", err)
-        self.assertIn("gnome-extensions disable fuckwayland-overlap@fuckwayland", err)
+        self.assertIn("gnome-extensions disable w11-overlap@w11", err)
         self.assertIn("~/.local/share/gnome-shell/extensions/", err)
         # and the other place the files can be, which is where the .deb puts
         # them and therefore where almost every reader's copy actually is
@@ -616,7 +616,7 @@ class WhatARefusalPrints(Case):
 
     def test_it_names_where_the_answer_goes_and_what_to_run(self):
         err = self.refusal()
-        self.assertIn("gnome/fuckwayland-overlap@fuckwayland/generations.json", err)
+        self.assertIn("gnome/w11-overlap@w11/generations.json", err)
         self.assertIn("wxrandr/gnome_overlap.py  (GENERATIONS)", err)
         self.assertIn("gen-gir.py --from-header", err)
         self.assertIn("meta-monitor-config-manager.h", err)
@@ -654,7 +654,7 @@ class WhatARefusalPrints(Case):
         The reader here is on a GNOME nobody has measured -- `%s` -- with the
         package installed and the extension not on the bus.  gnome-shell will
         not load an extension whose metadata.json does not list the running
-        major, so `gnome-extensions enable fuckwayland-overlap@fuckwayland`
+        major, so `gnome-extensions enable w11-overlap@w11`
         cannot bring it up on that release however many times it is typed:
         measured on the 26.10 stonking-gnome golden, where the shipped bridge
         was "OUT OF DATE" for exactly this reason and the advice printed
@@ -671,7 +671,7 @@ class WhatARefusalPrints(Case):
         ov.present = False
         code, out, err = self.run_cli(FLAG, FORCE, UM, *MOVE)
         self.assertEqual(code, 1)
-        self.assertIn("gnome-extensions enable fuckwayland-overlap@fuckwayland", err)
+        self.assertIn("gnome-extensions enable w11-overlap@w11", err)
         self.assertIn("install-overlap.sh --system", err)
         self.assertIn("Shell %s" % UM, err)
 
@@ -765,10 +765,10 @@ class TheTable(unittest.TestCase):
 
     #: code that builds a *file name* or a *namespace* out of a substituted
     #: value.  Prose about the old scheme is fine and is everywhere; a format
-    #: string that ends in `.so`, or a `FwOverlap` with a hole in it, is the
+    #: string that ends in `.so`, or a `W11Overlap` with a hole in it, is the
     #: thing mutter 51 made wrong, and there must be none left.
     COMPOSED = (re.compile(r"libmutter-(%[sd]|\$\{|\{|\" *\+|' *\+)[^\n]*\.so"),
-                re.compile(r"FwOverlap(%[sd]|\$\{|\{|\" *\+|' *\+)"))
+                re.compile(r"W11Overlap(%[sd]|\$\{|\{|\" *\+|' *\+)"))
 
     def test_no_library_name_is_composed_out_of_a_number(self):
         """The rewrite in one assertion.  `libmutter-14` and `libmutter-18`
@@ -776,7 +776,7 @@ class TheTable(unittest.TestCase):
         code that *builds* a soname or a namespace from an integer, because
         mutter 51 stopped following the arithmetic that would make it right."""
         roots = [os.path.join(ROOT, p) for p in
-                 ("wxrandr", "warandr", "gnome", "fwcommon")]
+                 ("wxrandr", "warandr", "gnome", "w11common")]
         for root in roots:
             for dirpath, _dirs, files in os.walk(root):
                 for name in files:
@@ -832,10 +832,10 @@ class TheTable(unittest.TestCase):
         spec.loader.exec_module(gen)
         odd = dict(NEXT, shell_major=99, libmutter="mainline",
                    soname="libmutter-mainline.so.0", meta_typelib="mainline",
-                   namespace="FwOverlapMainline")
+                   namespace="W11OverlapMainline")
         ns, text = gen.gir(odd)
-        self.assertEqual(ns, "FwOverlapMainline")
-        self.assertIn('name="FwOverlapMainline"', text)
+        self.assertEqual(ns, "W11OverlapMainline")
+        self.assertIn('name="W11OverlapMainline"', text)
 
     def test_a_record_missing_a_field_is_an_error_naming_the_field(self):
         import importlib.util
@@ -1306,7 +1306,7 @@ class TheInstallerSeesThePackagesCopy(unittest.TestCase):
     on what is installed on the machine running it."""
 
     SH = os.path.join(ROOT, "gnome", "install-overlap.sh")
-    UUID = "fuckwayland-overlap@fuckwayland"
+    UUID = "w11-overlap@w11"
 
     def _slice(self, first, last):
         src = open(self.SH, encoding="utf-8").read()
@@ -1329,7 +1329,7 @@ class TheInstallerSeesThePackagesCopy(unittest.TestCase):
         for n in ("extension.js", "generations.json"):
             with open(os.path.join(d, n), "w", encoding="utf-8") as fh:
                 fh.write("{}\n")
-        with open(os.path.join(d, "typelib", "FwOverlap18-1.0.typelib"), "w") as fh:
+        with open(os.path.join(d, "typelib", "W11Overlap18-1.0.typelib"), "w") as fh:
             fh.write("x")
         return d
 
@@ -1395,7 +1395,7 @@ class TheInstallerSeesThePackagesCopy(unittest.TestCase):
             kept = self._tree(sysdir)
             out = self.uninstall(os.path.join(tmp, "never-created"), sysdir)
             self.assertIn(kept, out)
-            self.assertIn("sudo apt remove fuckwayland", out)
+            self.assertIn("sudo apt remove w11", out)
             self.assertTrue(os.path.exists(os.path.join(kept, "extension.js")),
                             "another package's files are not this script's to delete")
 
@@ -1462,17 +1462,17 @@ class ThePackageShipsWhatTheExtensionReads(unittest.TestCase):
     exercised the packaged copy."""
 
     def test_every_file_the_extension_reads_is_in_the_package(self):
-        install = open(os.path.join(ROOT, "debian", "fuckwayland.install"),
+        install = open(os.path.join(ROOT, "debian", "w11.install"),
                        encoding="utf-8").read()
         for name in ("extension.js", "rules.js", "metadata.json",
-                     "generations.json", "org.fuckwayland.Overlap1.xml"):
+                     "generations.json", "org.w11.Overlap1.xml"):
             self.assertIn("%s/%s" % (gnome_overlap.UUID, name), install, name)
         self.assertIn("%s/typelib/*" % gnome_overlap.UUID, install)
 
     def test_the_directory_holds_nothing_the_package_leaves_out(self):
         """The other direction, so that a file added beside the extension is
         either packaged or deliberately not."""
-        install = open(os.path.join(ROOT, "debian", "fuckwayland.install"),
+        install = open(os.path.join(ROOT, "debian", "w11.install"),
                        encoding="utf-8").read()
         for name in sorted(os.listdir(EXT_DIR)):
             if name == "typelib":

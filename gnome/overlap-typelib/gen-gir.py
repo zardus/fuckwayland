@@ -45,12 +45,12 @@ generation and why the extension refuses to run one against the other.
     size    72                        80
 
 Usage:  python3 gnome/overlap-typelib/gen-gir.py [OUTDIR]
-        (OUTDIR defaults to gnome/fuckwayland-overlap@fuckwayland/typelib)
+        (OUTDIR defaults to gnome/w11-overlap@w11/typelib)
         python3 gnome/overlap-typelib/gen-gir.py --check
         python3 gnome/overlap-typelib/gen-gir.py --from-header PATH [--shell N]
 
 What it generates it generates *from the table*,
-gnome/fuckwayland-overlap@fuckwayland/generations.json: one .gir and one
+gnome/w11-overlap@w11/generations.json: one .gir and one
 .typelib per record, and metadata.json's `shell-version` list.  So adding a
 GNOME release is a record in that file (and its twin, GENERATIONS in
 wxrandr/gnome_overlap.py) plus one run of this script -- there is no fourth
@@ -96,10 +96,10 @@ import sys
 import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-EXT_DIR = os.path.join(os.path.dirname(HERE), "fuckwayland-overlap@fuckwayland")
+EXT_DIR = os.path.join(os.path.dirname(HERE), "w11-overlap@w11")
 
 #: THE TABLE, and this script no longer has one of its own.  It reads
-#: `gnome/fuckwayland-overlap@fuckwayland/generations.json` -- the same file the
+#: `gnome/w11-overlap@w11/generations.json` -- the same file the
 #: extension reads at run time -- so that a new GNOME is a record there and not
 #: an edit here as well.
 #:
@@ -486,7 +486,7 @@ def report_header(path: str, shell) -> int:
               % shell)
         print("       \"soname\": \"<the file gnome-shell maps, from /proc/<pid>/maps>\",")
         print("       \"meta_typelib\": \"<GIRepository's version for Meta>\",")
-        print("       \"namespace\": \"FwOverlap<the same>\",")
+        print("       \"namespace\": \"W11Overlap<the same>\",")
         print("       \"struct_size\": %d, \"tail_slots\": %d," % (size, ints))
         print("       \"measured_on\": \"<the machine you proved this on>\"}")
         print("  Every name is written out because none of them can be computed: "

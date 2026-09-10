@@ -13,7 +13,7 @@
 #       tests/fixtures/live/<flavor>-windows-wm-replay.txt
 set -u
 CLASS=${1:-TextEditor}
-F=/tmp/fw-smoke.txt
+F=/tmp/w11-smoke.txt
 
 run() { echo "### $*"; sh -c "$*" 2>&1; echo "### rc=$?"; }
 

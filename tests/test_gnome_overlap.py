@@ -6,11 +6,11 @@ and it needs a GNOME session to run at all; everything *around* it does not, and
 that is what is here.  The mock org.gnome.Mutter.DisplayConfig from
 tests/test_wxrandr_mutter.py is extended with a mock org.gnome.Shell (for the
 ShellVersion property the version gate reads) and a mock
-org.fuckwayland.Overlap, so a whole `wxrandr --unsafe-gnome-overlap ...`
+org.w11.Overlap, so a whole `wxrandr --unsafe-gnome-overlap ...`
 invocation runs end to end on a bus in this process, and every refusal can be
 demanded rather than argued.
 
-The rules the extension applies are in gnome/fuckwayland-overlap@fuckwayland/
+The rules the extension applies are in gnome/w11-overlap@w11/
 rules.js, deliberately in a file with no `gi` imports so that plain node can run
 it: `RulesJS` checks it against wxrandr/monitors_xml.py, which is the same rule
 written twice, and skips itself where there is no node.
@@ -44,15 +44,15 @@ sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tests"))
 
-from fwcommon import dbus_mini
-from fwcommon.dbus_mini import Bus, Message, Variant
+from w11common import dbus_mini
+from w11common.dbus_mini import Bus, Message, Variant
 import test_wxrandr_mutter as twm
 from wxrandr import cli, gnome_overlap, monitors_xml, mutter
 
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
 ERR = dbus_mini.ERR
-EXT_DIR = os.path.join(ROOT, "gnome", "fuckwayland-overlap@fuckwayland")
+EXT_DIR = os.path.join(ROOT, "gnome", "w11-overlap@w11")
 GIR_DIR = os.path.join(ROOT, "gnome", "overlap-typelib")
 FLAG = gnome_overlap.FLAG
 
@@ -65,7 +65,7 @@ xrandr: --unsafe-gnome-overlap: GNOME will not place these monitors, so they are
   placed by writing into the running gnome-shell instead of asking it.
   What it does:         move Virtual-2 from +1920+0 to +960+0
                         by writing 8 bytes per monitor inside gnome-shell
-                        (GNOME Shell 50.1), through the fuckwayland-overlap@fuckwayland
+                        (GNOME Shell 50.1), through the w11-overlap@w11
                         extension, and then asking Mutter to apply the result.
   What it risks:        those 8 bytes go where this build of libmutter keeps a
                         logical monitor's position.  The extension re-checks
@@ -86,10 +86,10 @@ xrandr: --unsafe-gnome-overlap: GNOME will not place these monitors, so they are
                         so the layout is the one you started with.
                         If a session will not start at all, switch to a text
                         console with Ctrl+Alt+F3, log in and run
-                            gnome-extensions disable fuckwayland-overlap@fuckwayland
+                            gnome-extensions disable w11-overlap@w11
                         (or delete whichever of these two is there:
-                            ~/.local/share/gnome-shell/extensions/fuckwayland-overlap@fuckwayland
-                            /usr/share/gnome-shell/extensions/fuckwayland-overlap@fuckwayland   <- from the .deb ),
+                            ~/.local/share/gnome-shell/extensions/w11-overlap@w11
+                            /usr/share/gnome-shell/extensions/w11-overlap@w11   <- from the .deb ),
                         then Ctrl+Alt+F1 back to the login screen.
 """
 
@@ -210,7 +210,7 @@ class FakeOverlap:
                         "detail": "GNOME Shell %s, libmutter-%s"
                                   % (self.shell, self.libmutter)},
                        {"name": "typelib", "ok": True,
-                        "detail": "FwOverlap%s, MetaMonitorsConfig %s bytes as declared"
+                        "detail": "W11Overlap%s, MetaMonitorsConfig %s bytes as declared"
                                   % (self.libmutter, self.declared_size)},
                        {"name": "sentinel", "ok": True,
                         "detail": "switch_config round-tripped at the declared offset"},
@@ -696,9 +696,9 @@ class Refusals(Case):
         # the versions found, the size reported, what was expected
         self.assertIn("libmutter-18.so.0", err)
         self.assertIn("MetaMonitorsConfig 80 bytes, from this build's GType registry", err)
-        self.assertIn("GNOME 46 -> libmutter-14.so.0, FwOverlap14", err)
+        self.assertIn("GNOME 46 -> libmutter-14.so.0, W11Overlap14", err)
         # and where the answer goes
-        self.assertIn("gnome/fuckwayland-overlap@fuckwayland/generations.json", err)
+        self.assertIn("gnome/w11-overlap@w11/generations.json", err)
         self.assertIn("wxrandr/gnome_overlap.py", err)
         self.assertIn('docs/Technical.md section 6, "Adding a GNOME generation"', err)
         self.assertEqual(self.ext_calls(), ["Probe"])
@@ -996,7 +996,7 @@ class Applying(Case):
                 self.assertIn("overlap check shell-version: GNOME Shell %d.0, "
                               "libmutter-%s" % (g["shell_major"], g["libmutter"]),
                               err)
-                self.assertIn("overlap check typelib: FwOverlap%s, "
+                self.assertIn("overlap check typelib: W11Overlap%s, "
                               "MetaMonitorsConfig %d bytes as declared"
                               % (g["libmutter"], g["struct_size"]), err)
 
@@ -1155,7 +1155,7 @@ class NoOtherWayIn(unittest.TestCase):
     def _sources(self):
         out = {}
         for sub in ("wxrandr", "warandr", "wdotool", "wwmctl", "wxprop",
-                    "wmirror", "fwcommon"):
+                    "wmirror", "w11common"):
             d = os.path.join(ROOT, sub)
             if not os.path.isdir(d):
                 continue
@@ -1392,7 +1392,7 @@ class ShippedExtension(unittest.TestCase):
         sh = open(os.path.join(ROOT, "gnome", "install-overlap.sh"),
                   encoding="utf-8").read()
         self.assertIn(gnome_overlap.UUID, sh)
-        self.assertNotIn("fuckwayland-bridge@fuckwayland", sh)
+        self.assertNotIn("w11-bridge@w11", sh)
         subprocess.run(["sh", "-n", os.path.join(ROOT, "gnome", "install-overlap.sh")],
                        check=True)
         bridge = open(os.path.join(ROOT, "gnome", "install-bridge.sh"),
@@ -1420,7 +1420,7 @@ class ShippedExtension(unittest.TestCase):
         two 1.86 compilers agree with each other.  The descriptions themselves
         are right: all six checks pass live on GNOME 46.0 with these exact
         bytes (noble-gnome golden, package route, --dryrun through the shipped
-        FwOverlap14).  A hash is not a meaning, and a test that cannot tell a
+        W11Overlap14).  A hash is not a meaning, and a test that cannot tell a
         compiler upgrade from a wrong offset is a test nobody will believe the
         next time it goes red.
         """

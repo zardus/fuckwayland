@@ -3,7 +3,7 @@
 #   $1 = tree (before|after)
 T=$1
 cd /home/test/$T || exit 2
-export PYTHONPATH=/home/test/$T FUCKWAYLAND_PASSTHROUGH=never
+export PYTHONPATH=/home/test/$T W11_PASSTHROUGH=never
 export XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-1
 export SWAYSOCK=$(ls /run/user/1000/sway-ipc.*.sock | head -1)
 W="python3 -m wxrandr"

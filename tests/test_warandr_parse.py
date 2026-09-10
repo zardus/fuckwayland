@@ -19,7 +19,7 @@ from wxrandr import core
 # tests/conftest.py (which covers pytest) and tests/test_passthrough.py.
 # This line is what covers `python3 tests/<file>.py`, where conftest is
 # not loaded, and it reaches every subprocess a test spawns.
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
 # -- Xvfb 21.1.12, xrandr 1.5.2 (Ubuntu 24.04), `Xvfb :91 -screen 0
 #    1280x1024x24`: no rotations list, a 0.00 rate, verbose "normal (normal)"

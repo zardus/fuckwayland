@@ -1,5 +1,5 @@
 #!/bin/sh
-# install-overlap.sh — install, enable, check or remove fuckwayland-overlap,
+# install-overlap.sh — install, enable, check or remove w11-overlap,
 # the GNOME Shell extension behind `wxrandr --unsafe-gnome-overlap`.
 #
 #   install-overlap.sh [--system] [--no-enable]   install + enable
@@ -30,10 +30,10 @@
 # gsettings/gdbus call is made as that user on that user's session bus).
 set -eu
 
-UUID='fuckwayland-overlap@fuckwayland'
-BUS_NAME='org.fuckwayland.Overlap'
-OBJ_PATH='/org/fuckwayland/Overlap'
-IFACE='org.fuckwayland.Overlap1'
+UUID='w11-overlap@w11'
+BUS_NAME='org.w11.Overlap'
+OBJ_PATH='/org/w11/Overlap'
+IFACE='org.w11.Overlap1'
 SHELL_DEST='org.gnome.Shell'
 SHELL_PATH='/org/gnome/Shell'
 EXT_IFACE='org.gnome.Shell.Extensions'
@@ -62,7 +62,7 @@ Exit status of an install: 0 when the extension is up, 1 when it is installed
 and waiting for the log out and back in that lets gnome-shell load it.
 
 What this extension is for, and what it risks, is in gnome/README.md and in
-docs/WXRANDR.md under "--unsafe-gnome-overlap".  Nothing else in fuckwayland
+docs/WXRANDR.md under "--unsafe-gnome-overlap".  Nothing else in w11
 needs it: wdotool, wwmctl and wxprop need the *bridge*, which is a different
 extension with a different installer.
 EOU
@@ -220,7 +220,7 @@ copy_files() {
     fi
     mkdir -p "$DEST/typelib"
     cp -f "$SRC/metadata.json" "$SRC/extension.js" "$SRC/rules.js" \
-          "$SRC/generations.json" "$SRC/org.fuckwayland.Overlap1.xml" "$DEST/"
+          "$SRC/generations.json" "$SRC/org.w11.Overlap1.xml" "$DEST/"
     # Typelibs are replaced by RENAME, never written in place.  gjs maps a
     # typelib into memory and keeps the mapping for the life of the process, so
     # rewriting the bytes of one a running gnome-shell has already loaded
@@ -402,8 +402,8 @@ uninstall)
     # are dpkg's and this script does not delete another package's payload.
     if [ "$SYSTEM" = 0 ] && [ -f "$SYSTEM_DIR/$UUID/extension.js" ]; then
         echo "install-overlap.sh: the extension is disabled, and its files are still" \
-             "in $SYSTEM_DIR/$UUID, where the fuckwayland package put them."
-        echo "install-overlap.sh: to take the files too: sudo apt remove fuckwayland" \
+             "in $SYSTEM_DIR/$UUID, where the w11 package put them."
+        echo "install-overlap.sh: to take the files too: sudo apt remove w11" \
              "(or, to delete just this extension, install-overlap.sh --system --uninstall)."
     fi
     ;;

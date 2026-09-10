@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The sway backend's i3 dialect, against the recordings of a live i3 4.25.1.
 
-i3 speaks the same i3-ipc protocol sway does, so `FUCKWAYLAND_PASSTHROUGH=never` (and `wxrandr --backend
+i3 speaks the same i3-ipc protocol sway does, so `W11_PASSTHROUGH=never` (and `wxrandr --backend
 sway`) land on `wdotool/backend_sway.py` on an i3 box -- the default path there is the X11 handover and is
 right [M recon2/i3.md §2a].  Forced onto our own code it half-worked and half-lied, and this file is the four
 lies, one class each [M recon2/i3.md §2b, §2c]:
@@ -36,7 +36,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # tests/conftest.py (which covers pytest) and tests/test_passthrough.py.
 # This line is what covers `python3 tests/<file>.py`, where conftest is
 # not loaded, and it reaches every subprocess a test spawns.
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
 import support
 from test_wxprop_x11 import FakeXServerExt
@@ -44,7 +44,7 @@ from wdotool import cli, x11_mini
 from wdotool.backend_sway import SwayBackend
 from wdotool.ctx import Context
 
-#: the fwsmoke xterm, as the live i3 reported it [M recon2/i3.md §1, fixtures/i3/get_tree_floating.json]
+#: the w11smoke xterm, as the live i3 reported it [M recon2/i3.md §1, fixtures/i3/get_tree_floating.json]
 CON_ID = 97479943571072                 # i3's own node id: a pointer, 47 bits wide
 X_ID = 8388621                          # the same window's X id, which is what `wwmctl -l` printed
 #: what `wxprop -id 97479943571072` actually asked the X server for, and the id in the BadWindow it got back
@@ -55,8 +55,8 @@ BAR_X_ID = 6291462
 VISIBLE_WS = "2"
 
 
-def tree_with_fwsmoke_on_ws2(floating: bool):
-    """The recorded tree with the fwsmoke con moved onto workspace 2, floating or tiled.
+def tree_with_w11smoke_on_ws2(floating: bool):
+    """The recorded tree with the w11smoke con moved onto workspace 2, floating or tiled.
 
     The recording caught that xterm in the scratchpad (`__i3_scratch`), which is where §2c isolated the
     floating bug; a window on a live workspace is the ordinary case and the only place the derived `visible`
@@ -76,7 +76,7 @@ def tree_with_fwsmoke_on_ws2(floating: bool):
 
 #: a second workspace, off the same output, that GET_WORKSPACES does not call visible
 HIDDEN_WS = "3"
-#: the copy of the fwsmoke xterm that sits on it
+#: the copy of the w11smoke xterm that sits on it
 HIDDEN_X_ID = 8388640
 HIDDEN_CON_ID = 97479943571073
 
@@ -88,7 +88,7 @@ def tree_with_a_hidden_workspace():
     workspace desktop -- and the only shape that tells "on a workspace GET_WORKSPACES calls visible" apart
     from "on a workspace at all", which is what the one-workspace recording cannot do.  The second xterm is
     the recorded con with new ids, so the two rows differ in nothing but where they hang."""
-    tree = tree_with_fwsmoke_on_ws2(floating=False)
+    tree = tree_with_w11smoke_on_ws2(floating=False)
     content = _find(tree, lambda n: n.get("type") == "con" and n.get("name") == "content"
                     and any(c.get("num") == 2 for c in n.get("nodes") or []))
     ws2 = _find(tree, lambda n: n.get("type") == "workspace" and n.get("name") == VISIBLE_WS)
@@ -301,7 +301,7 @@ class Floating(I3Base):
 
     def test_a_tiled_view_is_still_refused(self):
         """The refusal is right when the window really is tiled -- the fix is a predicate, not its removal."""
-        b = self.backend(tree=tree_with_fwsmoke_on_ws2(floating=False))
+        b = self.backend(tree=tree_with_w11smoke_on_ws2(floating=False))
         rc, _out, err = self.run_chain(b, ["windowmove", str(X_ID), "100", "100"])
         self.assertEqual(rc, 0)                     # SoftCmdError: a warning, not a failed chain
         self.assertIn("cannot move a tiled window", err)
@@ -312,22 +312,22 @@ class Floating(I3Base):
         flag, the pids -- and the two tiled refusals and the fullscreen one were the last strings that did
         not.  Measured verbatim on the first live resolute-i3 run, 2026-09-09:
 
-            $ FUCKWAYLAND_PASSTHROUGH=never env -u I3SOCK wdotool windowsize 10485774 400 300
+            $ W11_PASSTHROUGH=never env -u I3SOCK wdotool windowsize 10485774 400 300
             sway: cannot resize a tiled window to an absolute size (floating enable it first)
 
         which names a program the user is not running [requests-batch-9.md, from batch 16].  Asserted on
         the PREFIX in both directions, because `vm/live-smoke.d/i3.sh:103` and `hypr.sh:155` match the
         middle of the same sentence and neither would notice the word in front of it."""
-        b = self.backend(tree=tree_with_fwsmoke_on_ws2(floating=False))
+        b = self.backend(tree=tree_with_w11smoke_on_ws2(floating=False))
         _rc, _out, err = self.run_chain(b, ["windowmove", str(X_ID), "100", "100"])
         self.assertIn("i3: cannot move a tiled window", err)
         self.assertNotIn("sway:", err)
-        b2 = self.backend(tree=tree_with_fwsmoke_on_ws2(floating=False))
+        b2 = self.backend(tree=tree_with_w11smoke_on_ws2(floating=False))
         _rc, _out, err2 = self.run_chain(b2, ["windowsize", str(X_ID), "400", "300"])
         self.assertIn("i3: cannot resize a tiled window", err2)
         self.assertNotIn("sway:", err2)
         # and the third of the three, which is why `_refuse_fullscreen` stopped being a staticmethod
-        tree = tree_with_fwsmoke_on_ws2(floating=True)
+        tree = tree_with_w11smoke_on_ws2(floating=True)
         _find(tree, lambda n: n.get("window") == X_ID)["fullscreen_mode"] = 1
         b3 = self.backend(tree=tree)
         _rc, _out, err3 = self.run_chain(b3, ["windowmove", str(X_ID), "100", "100"])
@@ -337,7 +337,7 @@ class Floating(I3Base):
     def test_i3s_own_floating_field_is_read(self):
         """i3 also states it on the con (`user_on` / `auto_on` / `user_off` / `auto_off`, a field sway does
         not send), and a tree fetched without the wrapper -- or a future i3 that drops it -- still answers."""
-        tree = tree_with_fwsmoke_on_ws2(floating=False)
+        tree = tree_with_w11smoke_on_ws2(floating=False)
         _find(tree, lambda n: n.get("window") == X_ID)["floating"] = "user_on"
         b = self.backend(tree=tree)
         rows = {win.id: floating for _n, win, floating, _ws in b._nodes()}
@@ -351,7 +351,7 @@ class PidAndVisible(XPlaneBase):
     every window, and `search --onlyvisible` returned nothing with rc 1."""
 
     def test_getwindowpid_answers_off_the_x_plane(self):
-        b = self.backend(tree=tree_with_fwsmoke_on_ws2(floating=True))
+        b = self.backend(tree=tree_with_w11smoke_on_ws2(floating=True))
         rc, out, err = self.run_chain(b, ["getwindowpid", str(X_ID)])
         self.assertEqual((rc, err), (0, ""))
         self.assertEqual(out, "54187\n")
@@ -360,20 +360,20 @@ class PidAndVisible(XPlaneBase):
         """One unreachable X server is not a failed listing: the pid goes back to 0 and everything else in
         the row still answers."""
         self.x.stop()
-        b = self.backend(tree=tree_with_fwsmoke_on_ws2(floating=True))
+        b = self.backend(tree=tree_with_w11smoke_on_ws2(floating=True))
         rows = {w.id: w for w in b.list()}
         self.assertEqual(rows[X_ID].pid, 0)
-        self.assertEqual(rows[X_ID].title, "fwsmoke")
+        self.assertEqual(rows[X_ID].title, "w11smoke")
 
     def test_a_view_on_the_visible_workspace_is_visible(self):
-        b = self.backend(tree=tree_with_fwsmoke_on_ws2(floating=True))
+        b = self.backend(tree=tree_with_w11smoke_on_ws2(floating=True))
         rows = {w.id: w for w in b.list()}
         self.assertTrue(rows[X_ID].visible)
         # i3bar hangs off a dockarea, outside every workspace, so it is not on a visible one
         self.assertFalse(rows[BAR_X_ID].visible)
 
     def test_onlyvisible_matches_it(self):
-        b = self.backend(tree=tree_with_fwsmoke_on_ws2(floating=True))
+        b = self.backend(tree=tree_with_w11smoke_on_ws2(floating=True))
         rc, out, err = self.run_chain(b, ["search", "--onlyvisible", "--class", "XTerm"])
         self.assertEqual((rc, err), (0, ""))
         self.assertEqual(out, "%d\n" % X_ID)
@@ -451,7 +451,7 @@ class RefusalsCarryTheirRoute(I3Base):
     still a plain failure that wwmctl's X-plane retry does not treat as a capability gap."""
 
     def test_windowlower_warns_with_a_route_and_still_succeeds(self):
-        b = self.backend(tree=tree_with_fwsmoke_on_ws2(floating=True))
+        b = self.backend(tree=tree_with_w11smoke_on_ws2(floating=True))
         rc, out, err = self.run_chain(b, ["windowlower", str(X_ID)])
         self.assertEqual((rc, out), (0, ""))
         self.assertIn("i3 has no lower command", err)
@@ -462,7 +462,7 @@ class RefusalsCarryTheirRoute(I3Base):
         self.assertEqual(self.commands(), [], "a warning is not a command")
 
     def test_raising_a_tiled_window_names_the_route_in_the_dialect(self):
-        b = self.backend(tree=tree_with_fwsmoke_on_ws2(floating=False))
+        b = self.backend(tree=tree_with_w11smoke_on_ws2(floating=False))
         rc, _out, err = self.run_chain(b, ["windowraise", str(X_ID)])
         self.assertEqual(rc, 0)
         self.assertIn("tiled i3 windows have no stacking order", err)
@@ -474,7 +474,7 @@ class RefusalsCarryTheirRoute(I3Base):
         carries the head clause only, on purpose, so there is no second copy to keep in step. Also the
         mechanics: an `unsupported` state refusal has always been a FAILURE (wwmctl's X-plane retry keys
         off the flag), and rewording it did not make it a warning."""
-        b = self.backend(tree=tree_with_fwsmoke_on_ws2(floating=True))
+        b = self.backend(tree=tree_with_w11smoke_on_ws2(floating=True))
         rc, _out, err = self.run_chain(b, ["windowstate", "--add", "SHADED", str(X_ID)])
         self.assertNotEqual(rc, 0, "a state refusal is a failure and stays one")
         self.assertIn("windowstate SHADED is not supported by the sway backend: i3 has no such window "

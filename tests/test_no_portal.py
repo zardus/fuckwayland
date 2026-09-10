@@ -58,13 +58,13 @@ import unittest
 # This file spawns nothing, but the suite-wide guard wants the line in every
 # test file and the guard is right: the day this one shells a tool, it is
 # already here.
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # Everything that runs on a user's machine as one of our commands: the six
 # tools, and the package they all share.
-PACKAGES = ("fwcommon", "wdotool", "wwmctl", "wxprop", "wxrandr", "warandr",
+PACKAGES = ("w11common", "wdotool", "wwmctl", "wxprop", "wxrandr", "warandr",
             "wmirror")
 
 # The other half of what a user installs: the GNOME Shell extension and the

@@ -20,8 +20,8 @@
 # The floor as it was, before batch 8, on one headless labwc with an xterm and a foot:
 #
 #   $ wwmctl -lGpx
-#   0x000f4240 -1 0      0    0    1280 720  xterm.xterm    fuckwayland xtermwin
-#   0x000f4241 -1 0      0    0    1280 720  foot.foot      fuckwayland footwin
+#   0x000f4240 -1 0      0    0    1280 720  xterm.xterm    w11 xtermwin
+#   0x000f4241 -1 0      0    0    1280 720  foot.foot      w11 footwin
 #   $ wwmctl -d
 #   get_desktop is not supported by the wlr backend                              (rc 1)
 #
@@ -346,11 +346,11 @@ labwc_modeline() {
     pair=$(display_pair); first=${pair%% *}
     if [ -z "$first" ]; then fail "no enabled output for the modeline check"; return 1; fi
     local st=0
-    guestq "wxrandr --newmode fwsmoke600 38.22 800 832 912 1024 600 603 607 624 -hsync +vsync" || st=$?
-    ok "wxrandr --newmode fwsmoke600" "$st"
-    st=0; guestq "wxrandr --addmode $first fwsmoke600" || st=$?
-    ok "wxrandr --addmode $first fwsmoke600" "$st"
-    guest "wxrandr --output $first --mode fwsmoke600" >/dev/null 2>&1 || true
+    guestq "wxrandr --newmode w11smoke600 38.22 800 832 912 1024 600 603 607 624 -hsync +vsync" || st=$?
+    ok "wxrandr --newmode w11smoke600" "$st"
+    st=0; guestq "wxrandr --addmode $first w11smoke600" || st=$?
+    ok "wxrandr --addmode $first w11smoke600" "$st"
+    guest "wxrandr --output $first --mode w11smoke600" >/dev/null 2>&1 || true
     sleep 2
     want "the custom mode is current on $first (no other flavor covers this path)" \
          "800x600" "$(guest "wxrandr --query" | grep -A2 "^$first " || true)"

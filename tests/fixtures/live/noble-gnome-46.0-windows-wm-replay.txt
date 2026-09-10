@@ -4,7 +4,7 @@
 ### rc=0
 ### WIN=1950993699
 ### wdotool getwindowname 1950993699
-fw-smoke.txt (/tmp) - Text Editor
+w11-smoke.txt (/tmp) - Text Editor
 ### rc=0
 ### wdotool getwindowgeometry 1950993699
 Window 1950993699
@@ -47,10 +47,10 @@ Window 1950993699
   Geometry: 800x600
 ### rc=0
 ### wwmctl -l
-0x7449cd23  0 gnome46 fw-smoke.txt (/tmp) - Text Editor
+0x7449cd23  0 gnome46 w11-smoke.txt (/tmp) - Text Editor
 ### rc=0
 ### wwmctl -l -G
-0x7449cd23  0 100  100  800  600  gnome46 fw-smoke.txt (/tmp) - Text Editor
+0x7449cd23  0 100  100  800  600  gnome46 w11-smoke.txt (/tmp) - Text Editor
 ### rc=0
 ### wwmctl -d
 0  * DG: 5760x1080  VP: 0,0  WA: 66,32 5694x1048  Workspace 1

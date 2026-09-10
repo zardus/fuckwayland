@@ -6,7 +6,7 @@
 # /usr/lib/python3/dist-packages plus generated console scripts -- needs no
 # private directory and no bundled anything.
 
-export PYBUILD_NAME=fuckwayland
+export PYBUILD_NAME=w11
 
 %:
 	dh $@ --with python3 --buildsystem=pybuild
@@ -19,7 +19,7 @@ execute_after_dh_install:
 # Renamed on the way in: modules-load.d wants the file named for what installs
 # it, and the autostart entry is namespaced by the package.  The autostart
 # entry itself lands under /usr/lib and reaches /etc/xdg/autostart as the
-# symlink in debian/fuckwayland.links: debhelper registers every regular file
+# symlink in debian/w11.links: debhelper registers every regular file
 # under /etc as a conffile, and a conffile survives `apt remove` -- an entry
 # left behind pointing at a helper that removal has just deleted.  A symlink is
 # not a conffile, so it goes when the package goes.
@@ -31,8 +31,8 @@ execute_after_dh_install:
 # place.  Same bytes, one copy; the rpm rewrites only the .desktop's Exec=,
 # because /usr/libexec is where Fedora puts the helper.
 	install -D -m 644 gnome/modules-load-uinput.conf \
-	    debian/fuckwayland/usr/lib/modules-load.d/fuckwayland-uinput.conf
+	    debian/w11/usr/lib/modules-load.d/w11-uinput.conf
 	install -D -m 755 packaging/common/enable-bridge \
-	    debian/fuckwayland/usr/lib/fuckwayland/enable-bridge
+	    debian/w11/usr/lib/w11/enable-bridge
 	install -D -m 644 packaging/common/enable-bridge.desktop \
-	    debian/fuckwayland/usr/lib/fuckwayland/enable-bridge.desktop
+	    debian/w11/usr/lib/w11/enable-bridge.desktop

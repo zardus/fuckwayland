@@ -11,16 +11,16 @@
   # The repo itself, by relative path -- vm/nixos/ is two directories down --
   # with its nixpkgs made to follow this one, so the whole image is built from
   # exactly one nixpkgs and the module under test is the repo's own.
-  inputs.fuckwayland.url = "path:../..";
-  inputs.fuckwayland.inputs.nixpkgs.follows = "nixpkgs";
+  inputs.w11.url = "path:../..";
+  inputs.w11.inputs.nixpkgs.follows = "nixpkgs";
 
-  outputs = { self, nixpkgs, fuckwayland }:
+  outputs = { self, nixpkgs, w11 }:
     let
       system = "x86_64-linux";
       flavor = name: nixpkgs.lib.nixosSystem {
         inherit system;
         modules = [
-          fuckwayland.nixosModules.default
+          w11.nixosModules.default
           ./common.nix
           (./. + "/${name}.nix")
           { networking.hostName = name; }

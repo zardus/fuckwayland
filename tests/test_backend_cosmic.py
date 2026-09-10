@@ -28,15 +28,15 @@ from unittest import mock
 # The suite never hands a tool over to the real X11 one: see tests/conftest.py (which covers pytest) and
 # tests/test_passthrough.py. This line is what covers `python3 tests/<file>.py`, and it goes before the
 # first tool import so that no module can read the variable's absence on the way in.
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import wl_fake
-from fwcommon import session
-from fwcommon.errors import CmdError
+from w11common import session
+from w11common.errors import CmdError
 from support import env
 from test_backend_wlr import FakeXPlane, net_wm_state
 from wdotool.backend import ID_BASE, mint_id

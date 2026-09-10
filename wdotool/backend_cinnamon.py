@@ -37,13 +37,13 @@ Two things this backend does that the GNOME one does not have to:
 
 `x_info()` returns None on purpose: `global.display.get_x11_display()` does not exist in muffin (measured),
 and it does not need to -- muffin writes `$XDG_RUNTIME_DIR/.mutter-Xwaylandauth.XXXXXX`, which is exactly
-what fwcommon/session.py's cookie discovery already looks for [M cinnamon.md §2.3]."""
+what w11common/session.py's cookie discovery already looks for [M cinnamon.md §2.3]."""
 
 import json
 import time
 
-from fwcommon.dbus_mini import ERR, Bus, DBusError, no_bus_text
-from fwcommon.errors import CmdError
+from w11common.dbus_mini import ERR, Bus, DBusError, no_bus_text
+from w11common.errors import CmdError
 from wdotool import cinnamon_js as js
 from wdotool.backend import View, Window, WindowBackend, Workspace, warn
 from wdotool.ctx import NoSessionError

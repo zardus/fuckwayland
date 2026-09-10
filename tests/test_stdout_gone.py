@@ -23,7 +23,7 @@ Every one of them printed something no original ever prints:
   for two of them on a default desktop.  `stdio.warn()` writes the last
   word every tool says, and closes stderr when it cannot.
 
-What they do now is in fwcommon/stdio.py: repair a missing stdout at the top
+What they do now is in w11common/stdio.py: repair a missing stdout at the top
 of main(), and flush -- and, on failure, CLOSE -- at the bottom of it, one
 line to stderr, silence for a reader that left, and never a traceback.
 """
@@ -41,11 +41,11 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from fwcommon import stdio
+from w11common import stdio
 
 # The suite never hands a tool over to the real X11 one (tests/conftest.py);
 # this line covers `python3 tests/<file>.py` and reaches every child below.
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -64,7 +64,7 @@ TOOLS = [
 def child_env():
     env = dict(os.environ)
     env["PYTHONPATH"] = ROOT
-    env["FUCKWAYLAND_PASSTHROUGH"] = "never"
+    env["W11_PASSTHROUGH"] = "never"
     # No session of any kind: the sockets and the bus address as well as the
     # two display variables, so the `wdotool getactivewindow` row in FAILING
     # exits 2 (no Wayland session found) here whatever the host happens to be
@@ -116,7 +116,7 @@ class FullStdout(NoTracebackEver):
 #: when fd 2 was CLOSED before the interpreter (the write goes nowhere and
 #: nobody was listening: the tool's own status stands) and what it exits with
 #: when fd 2 is /dev/full (the diagnostic was written and could not land, so
-#: the run failed for a reason of its own: 1, per fwcommon/stdio.py).
+#: the run failed for a reason of its own: 1, per w11common/stdio.py).
 FAILING = [
     ("wdotool", ["nosuchcommand"], 1, 1),
     # rc 2, not 1: "there is no session to talk to" is its own answer
@@ -140,7 +140,7 @@ class FullStderr(NoTracebackEver):
 
     `tool >/dev/full 2>&1` is the cron job whose disk filled up, and it used to
     end in a traceback and exit 120 -- the status the module docstring of
-    fwcommon/stdio.py says no original produces.  Nothing can be printed here,
+    w11common/stdio.py says no original produces.  Nothing can be printed here,
     so the whole of the contract is the exit status."""
 
     def setUp(self):
@@ -254,7 +254,7 @@ class ClosedStderr(NoTracebackEver):
 _BOOM = """
 import os, sys
 sys.path.insert(0, %r)
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 from wdotool.backend import WindowBackend
 
 
@@ -333,7 +333,7 @@ class DebugTraceback(NoTracebackEver):
         # A file, not -c: the assertion below wants the offending source line in
         # the traceback, and Python 3.12 prints none for code that came in as a
         # string (3.14 does), so 24.04 and 26.04 would disagree.
-        d = tempfile.mkdtemp(prefix="fw-boom-")
+        d = tempfile.mkdtemp(prefix="w11-boom-")
         self.addCleanup(shutil.rmtree, d, True)
         script = os.path.join(d, "boom.py")
         with open(script, "w") as f:

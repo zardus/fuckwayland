@@ -1,7 +1,7 @@
 #!/bin/bash
 # hostile-4: what a non-finite number does to each option that takes one.
 cd "$(dirname "$0")/.." || exit 1
-export FUCKWAYLAND_PASSTHROUGH=never PYTHONPATH=$PWD
+export W11_PASSTHROUGH=never PYTHONPATH=$PWD
 rm -f /tmp/fakewl-nf.sock; rm -rf /tmp/nf-rt; mkdir -p /tmp/nf-rt
 setsid python3 tests/fixtures/fake_wlr.py /tmp/fakewl-nf.sock normal </dev/null >/dev/null 2>&1 &
 sleep 1

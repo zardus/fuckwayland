@@ -18,8 +18,8 @@ sys.path.insert(0, ROOT)
 # `python3 -m unittest tests/<file>.py` does not.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from fwcommon import session
-from fwcommon.errors import CmdError
+from w11common import session
+from w11common.errors import CmdError
 from support import (FakeEvdev, RecorderDev, abs_report, env, key_bitmap,
                      stop_daemons_under)
 from wdotool import daemon, keymap, keystate, uinput
@@ -28,7 +28,7 @@ from wdotool import daemon, keymap, keystate, uinput
 # tests/conftest.py (which covers pytest) and tests/test_passthrough.py.
 # This line is what covers `python3 tests/<file>.py`, where conftest is
 # not loaded, and it reaches every subprocess a test spawns.
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
 # B13: the injection tests pin the *fixed US table* as the source of
 # keycodes. Without this a developer running the suite inside a German or

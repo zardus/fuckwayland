@@ -119,9 +119,9 @@ def _detect_backend():
     ids minted from compositor handles), which on a session that has a real X root and a real EWMH window
     manager is simply wrong. That state is reachable in principle and is pinned hermetically
     (tests/test_wxprop_cli.py); it was not reproducible on Plasma 5.27 or 6.6 on Xorg.
-    `FUCKWAYLAND_PASSTHROUGH=never` still says "our own code whatever the session" and still detects, so the
+    `W11_PASSTHROUGH=never` still says "our own code whatever the session" and still detects, so the
     Wayland paths stay reachable from an X11 development box (and the whole test suite)."""
-    from fwcommon import passthrough
+    from w11common import passthrough
     from wdotool import backend_detect
     if passthrough.session_kind("xprop") == "x11":
         return None
@@ -146,7 +146,7 @@ def _progname() -> str:
 
 def _xwayland_running() -> bool:
     try:
-        from fwcommon import session
+        from w11common import session
         return session.xwayland_running()
     except Exception:
         return False

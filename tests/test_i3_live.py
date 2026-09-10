@@ -7,7 +7,7 @@ Two halves, and they are the two things a user can do on an i3 box:
   claim for every X11 session and the only one worth making on i3, where the X server owns the layout, the
   input and the property store [M recon2/i3.md §2a: IDENTICAL for `search --name`, `-lGpx`, `-root` and
   `--listmonitors`, same rc].
-* **the forced path** -- `FUCKWAYLAND_PASSTHROUGH=never` and `wxrandr --backend sway` reach our own code
+* **the forced path** -- `W11_PASSTHROUGH=never` and `wxrandr --backend sway` reach our own code
   over i3's IPC socket, and this is where the four measured lies were [M recon2/i3.md §2b, §2c].  The unit
   half is tests/test_windows_i3.py over the recordings; this is the same claims against the compositor that
   produced them.
@@ -33,13 +33,13 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # tests/conftest.py (which covers pytest) and tests/test_passthrough.py.
 # This line is what covers `python3 tests/<file>.py`, where conftest is
 # not loaded, and it reaches every subprocess a test spawns.
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
 import support
 
 #: the four (ours, the original) command pairs the report compared, verbatim
 PARITY = (
-    (["-m", "wdotool", "search", "--name", "fwsmoke"], ["xdotool", "search", "--name", "fwsmoke"]),
+    (["-m", "wdotool", "search", "--name", "w11smoke"], ["xdotool", "search", "--name", "w11smoke"]),
     (["-m", "wwmctl", "-l", "-G", "-p", "-x"], ["wmctrl", "-l", "-G", "-p", "-x"]),
     (["-m", "wxprop", "-root", "_NET_CLIENT_LIST"], ["xprop", "-root", "_NET_CLIENT_LIST"]),
     (["-m", "wxrandr", "--listmonitors"], ["xrandr", "--listmonitors"]),
@@ -61,7 +61,7 @@ class I3Live(unittest.TestCase):
         # directory that holds its socket goes away (cleanups are last-in-first-out)
         cls.addClassCleanup(support.stop_daemons_under, cls.rig.rtdir)
         cls.xterm = subprocess.Popen(
-            ["xterm", "-T", "fwsmoke", "-e", "sleep", "600"], env=cls.rig.env,
+            ["xterm", "-T", "w11smoke", "-e", "sleep", "600"], env=cls.rig.env,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         cls.addClassCleanup(cls._stop_xterm)
         cls.xid = cls._wait_for_window()
@@ -82,7 +82,7 @@ class I3Live(unittest.TestCase):
             out = subprocess.run(["wmctrl", "-l"], env=cls.rig.env,
                                  capture_output=True, text=True).stdout
             for line in out.splitlines():
-                if line.endswith("fwsmoke"):
+                if line.endswith("w11smoke"):
                     return int(line.split()[0], 16)
             if cls.xterm.poll() is not None:
                 raise unittest.SkipTest("xterm exited at startup")
@@ -96,15 +96,15 @@ class I3Live(unittest.TestCase):
         only way to measure the thing this file's first half is about."""
         env = dict(self.rig.env)
         if handover:
-            env.pop("FUCKWAYLAND_PASSTHROUGH", None)
+            env.pop("W11_PASSTHROUGH", None)
         else:
-            env["FUCKWAYLAND_PASSTHROUGH"] = "never"
+            env["W11_PASSTHROUGH"] = "never"
         return subprocess.run([sys.executable] + list(argv), env=env, cwd=ROOT,
                               capture_output=True, text=True, timeout=120)
 
     def original(self, *argv):
         env = dict(self.rig.env)
-        env.pop("FUCKWAYLAND_PASSTHROUGH", None)
+        env.pop("W11_PASSTHROUGH", None)
         return subprocess.run(list(argv), env=env, capture_output=True, text=True, timeout=120)
 
     def i3_run(self, command):

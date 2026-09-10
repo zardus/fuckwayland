@@ -1,7 +1,7 @@
 #!/bin/bash
 # hostile-9: a broken stdout must exit 1, never the interpreter's 120.
 cd "$(dirname "$0")/.." || exit 1
-export FUCKWAYLAND_PASSTHROUGH=never PYTHONPATH=$PWD
+export W11_PASSTHROUGH=never PYTHONPATH=$PWD
 rm -f /tmp/fakewl-exit.sock; rm -rf /tmp/exit-rt; mkdir -p /tmp/exit-rt
 setsid python3 tests/fixtures/fake_wlr.py /tmp/fakewl-exit.sock normal </dev/null >/dev/null 2>&1 &
 sleep 1

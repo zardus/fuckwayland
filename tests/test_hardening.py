@@ -21,7 +21,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from fwcommon.errors import CmdError
+from w11common.errors import CmdError
 from support import RecorderDev
 from wdotool import backend, daemon, keymap, uinput
 from wdotool.keysyms import NAME_TO_KEYSYM
@@ -30,7 +30,7 @@ from wdotool.keysyms import NAME_TO_KEYSYM
 # tests/conftest.py (which covers pytest) and tests/test_passthrough.py.
 # This line is what covers `python3 tests/<file>.py`, where conftest is
 # not loaded, and it reaches every subprocess a test spawns.
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
 # B13: the injection tests pin the *fixed US table* as the source of
 # keycodes. Without this a developer running the suite inside a German or
@@ -462,7 +462,7 @@ class TestKeycodeRegistration(unittest.TestCase):
 
 class TestWaylandMalformed(unittest.TestCase):
     def test_short_size_raises(self):
-        from fwcommon.wayland_mini import WlConn
+        from w11common.wayland_mini import WlConn
 
         a, b = socket.socketpair()
         self.addCleanup(a.close)
@@ -475,7 +475,7 @@ class TestWaylandMalformed(unittest.TestCase):
             conn._dispatch_some()
 
     def _conn(self):
-        from fwcommon.wayland_mini import WlConn
+        from w11common.wayland_mini import WlConn
 
         a, b = socket.socketpair()
         self.addCleanup(a.close)

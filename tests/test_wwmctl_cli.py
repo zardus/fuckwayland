@@ -25,7 +25,7 @@ from contextlib import redirect_stderr, redirect_stdout
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-from fwcommon.errors import CmdError
+from w11common.errors import CmdError
 from wdotool.backend import Window
 from wdotool.backend_cosmic import CosmicBackend
 from wdotool.backend_sway import SwayBackend
@@ -37,7 +37,7 @@ from wwmctl.cli import WMCTRL_VERSION
 # tests/conftest.py (which covers pytest) and tests/test_passthrough.py.
 # This line is what covers `python3 tests/<file>.py`, where conftest is
 # not loaded, and it reaches every subprocess a test spawns.
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
 
 class FakeSwayBackend:
@@ -1215,7 +1215,7 @@ class BuildScriptTest(unittest.TestCase):
 
     def test_build_emits_both_zipapps(self):
         with tempfile.TemporaryDirectory(prefix="wwmctl-build-") as tmp:
-            for d in ("fwcommon", "wdotool", "wwmctl", "wxprop", "wxrandr",
+            for d in ("w11common", "wdotool", "wwmctl", "wxprop", "wxrandr",
                       "warandr", "wmirror", "scripts"):
                 shutil.copytree(os.path.join(ROOT, d), os.path.join(tmp, d),
                                 ignore=shutil.ignore_patterns("__pycache__"))

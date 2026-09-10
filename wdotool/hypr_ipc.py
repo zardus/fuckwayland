@@ -24,8 +24,8 @@ import select
 import socket
 import time
 
-from fwcommon import session
-from fwcommon.errors import CmdError
+from w11common import session
+from w11common.errors import CmdError
 
 #: Deadline on connect and on the reply. The same 10 s the sway backend arms, and for the same reason: every
 #: answer is built in the compositor's own event loop, so silence means it is wedged rather than busy. A live

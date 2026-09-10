@@ -36,7 +36,7 @@ import unittest
 # The suite never hands a tool over to the real X11 one: see tests/conftest.py
 # (which covers pytest) and tests/test_passthrough.py.  This line is what
 # covers `python3 tests/<file>.py`, where conftest is not loaded.
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
@@ -46,7 +46,7 @@ sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import support                                                    # noqa: E402
-from fwcommon import VERSION                                      # noqa: E402
+from w11common import VERSION                                     # noqa: E402
 
 #: Where the collected test count is written down.  Four documents, and the
 #: number is the same number in all four.
@@ -68,7 +68,7 @@ ABOUT_OVERLAP = ("overlap", "libmutter", "Probe(", "--dryrun")
 #: A markdown section: its heading line and everything up to the next heading.
 SECTION = re.compile(r"^#{1,6} .*$", re.M)
 
-OVERLAP_JS = os.path.join(ROOT, "gnome", "fuckwayland-overlap@fuckwayland",
+OVERLAP_JS = os.path.join(ROOT, "gnome", "w11-overlap@w11",
                           "extension.js")
 
 
@@ -327,7 +327,7 @@ class TheOverlapCheckCount(unittest.TestCase):
     def test_the_extension_reports_six_passing_checks(self):
         """Measured on GNOME 46.0 (noble-gnome, package route): `wxrandr
         --dryrun --unsafe-gnome-overlap` passes all six with the shipped
-        FwOverlap14 typelib."""
+        W11Overlap14 typelib."""
         names = self.passing_checks()
         self.assertEqual(names, ["bounded-read", "pending-dialog", "public-view",
                                  "sentinel", "shell-version", "typelib"])
@@ -420,7 +420,7 @@ class TheVersionBlock(unittest.TestCase):
         the *server* line, and with none prints `Can't open display` and exits
         1 -- so off a desktop only the first line of that entry is produced,
         which is what is compared here."""
-        env = dict(os.environ, PYTHONPATH=ROOT, FUCKWAYLAND_PASSTHROUGH="never",
+        env = dict(os.environ, PYTHONPATH=ROOT, W11_PASSTHROUGH="never",
                    WWMCTL_WMCTRL_GENERATION="1.07", LC_ALL="C")
         pairs = self.pairs()
         self.assertEqual(len(pairs), 6, pairs)

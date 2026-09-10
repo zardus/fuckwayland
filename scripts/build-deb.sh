@@ -1,15 +1,15 @@
 #!/bin/sh
-# Build the fuckwayland .deb.  One command, from a clean clone, on Ubuntu
+# Build the w11 .deb.  One command, from a clean clone, on Ubuntu
 # 24.04 and 26.04 alike:
 #
 #     sh scripts/build-deb.sh
 #
-# -> release/fuckwayland_<version>_all.deb, committed, replacing the one there
+# -> release/w11_<version>_all.deb, committed, replacing the one there
 #    (the .changes/.buildinfo go to the untracked dist/)
 #
 #   --no-deps     do not apt-get anything; fail if a build tool is missing
 #   --lintian     run lintian on the result (needs the `lintian` package)
-#   --keep        keep debian/fuckwayland/ and the other build droppings
+#   --keep        keep debian/w11/ and the other build droppings
 #
 # Everything it installs is in the Ubuntu archive of both releases and is
 # named in debian/control's Build-Depends; nothing here wants a PPA, a
@@ -49,7 +49,7 @@ Add a debian/changelog entry for $pver (dch -v $pver, or edit the top stanza).
 EOM
     exit 1
 fi
-echo "build-deb.sh: building fuckwayland $pver"
+echo "build-deb.sh: building w11 $pver"
 
 # --- build tools -------------------------------------------------------------
 # Kept in step with debian/control by hand; dpkg-checkbuilddeps below is what
@@ -90,20 +90,20 @@ dpkg-buildpackage -b -us -uc
 # file.  The .changes and the .buildinfo stay out: they describe the machine
 # that ran the build, not the thing anyone installs, so they go to dist/ with
 # the zipapps, which .gitignore keeps out of the tree.
-deb=release/fuckwayland_${pver}_all.deb
+deb=release/w11_${pver}_all.deb
 mkdir -p release dist
 
-for old in release/fuckwayland_*_all.deb; do
+for old in release/w11_*_all.deb; do
     if [ -e "$old" ] && [ "$old" != "$deb" ]; then
         echo "build-deb.sh: removing the superseded $old"
         rm -f "$old"
     fi
 done
 
-if [ -e ../fuckwayland_"$pver"_all.deb ]; then
-    mv -f ../fuckwayland_"$pver"_all.deb "$deb"
+if [ -e ../w11_"$pver"_all.deb ]; then
+    mv -f ../w11_"$pver"_all.deb "$deb"
 fi
-for f in ../fuckwayland_"$pver"_*.changes ../fuckwayland_"$pver"_*.buildinfo; do
+for f in ../w11_"$pver"_*.changes ../w11_"$pver"_*.buildinfo; do
     if [ -e "$f" ]; then
         mv -f "$f" dist/
     fi

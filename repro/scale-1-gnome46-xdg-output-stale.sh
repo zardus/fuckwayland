@@ -19,7 +19,7 @@ VM=$1
 
 step() {
     echo "--- $1"
-    $V ssh "$VM" -- "cd /root/fw && python3 probe.py '{\"label\":\"$1\",\"settle\":0.5,\"targets\":[[400,100],[400,100]]}'" \
+    $V ssh "$VM" -- "cd /root/w11 && python3 probe.py '{\"label\":\"$1\",\"settle\":0.5,\"targets\":[[400,100],[400,100]]}'" \
       | python3 -c '
 import json,sys
 d=json.load(sys.stdin)

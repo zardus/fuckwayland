@@ -24,7 +24,7 @@ sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from wl_fake import wstr
-from fwcommon import procs
+from w11common import procs
 from wxrandr import core
 from wxrandr import gamma as gammamod
 from wxrandr.core import State
@@ -33,7 +33,7 @@ from wxrandr.core import State
 # tests/conftest.py (which covers pytest) and tests/test_passthrough.py.
 # This line is what covers `python3 tests/<file>.py`, where conftest is
 # not loaded, and it reaches every subprocess a test spawns.
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
 GAMMA_SIZE = 256
 
@@ -321,7 +321,7 @@ class GammaHolderTest(unittest.TestCase):
     def test_11_a_holder_whose_compositor_died_exits_by_itself(self):
         """The gamma control dies with the client connection, so a holder whose
         compositor has gone is holding nothing -- and a process holding nothing
-        for ever is the orphan fwcommon.procs exists to prevent.  It ends itself:
+        for ever is the orphan w11common.procs exists to prevent.  It ends itself:
         `holder_main`'s dispatch loop sees the connection close and returns,
         and `spawn_detached`'s grandchild `os._exit(0)`s after it.
 

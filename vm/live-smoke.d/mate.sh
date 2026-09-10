@@ -22,7 +22,7 @@
 #     [M recon2/mate.md 4].  Whether LightDM's ~/.Xauthority masks the gap on a real box is exactly what
 #     this phase settles.
 #
-# The window every check acts on is xfce.sh's `xterm -T fwsmoke`: `wwmctl -lGpx` byte-identical to
+# The window every check acts on is xfce.sh's `xterm -T w11smoke`: `wwmctl -lGpx` byte-identical to
 # `wmctrl -lGpx` was measured on an xterm on a MATE session [M recon2/mate.md 3], and mate-terminal --
 # which ubuntu-mate-desktop puts on the image -- has a VTE geometry that nothing here needs.
 #
@@ -39,10 +39,10 @@ SMOKE_PHASES="install passthrough marco heads x11root"
 phase_marco() {
     editor_start
     local out win
-    out=$(await 30 '[0-9]' "wdotool search --name fwsmoke | head -1" || true)
+    out=$(await 30 '[0-9]' "wdotool search --name w11smoke | head -1" || true)
     win=$(printf '%s\n' "$out" | grep -E '^[0-9]+$' | head -1)
-    if [ -z "$win" ]; then fail "no fwsmoke xterm to work on [$(ev "$out")]"; return 1; fi
-    pass "wdotool search --name fwsmoke -> $win (through the real xdotool)"
+    if [ -z "$win" ]; then fail "no w11smoke xterm to work on [$(ev "$out")]"; return 1; fi
+    pass "wdotool search --name w11smoke -> $win (through the real xdotool)"
     local m; m=$(guest 'wwmctl -m' || true)
     want "wwmctl -m names the window manager marco's check window names" "^Name: Metacity \(Marco\)$" "$m"
     # The three N/A columns, each on its own, because each is a different missing property and a reader
@@ -56,17 +56,17 @@ phase_marco() {
     # can move between the two reads.  On an X11 session the two are the same binary by construction --
     # which is the claim: the handover happened and nothing mangled the argv on the way.
     local diffrc
-    diffrc=$(guest 'wwmctl -lGpx > /tmp/fw-a.txt 2>&1; wmctrl -lGpx > /tmp/fw-b.txt 2>&1;
-                    diff /tmp/fw-a.txt /tmp/fw-b.txt >/dev/null 2>&1; echo $?' | tr -d ' \r\n' || true)
+    diffrc=$(guest 'wwmctl -lGpx > /tmp/w11-a.txt 2>&1; wmctrl -lGpx > /tmp/w11-b.txt 2>&1;
+                    diff /tmp/w11-a.txt /tmp/w11-b.txt >/dev/null 2>&1; echo $?' | tr -d ' \r\n' || true)
     same "wwmctl -lGpx is byte-identical to wmctrl -lGpx" "0" "$diffrc"
-    note "the list: $(ev "$(guest 'cat /tmp/fw-a.txt' || true)")"
+    note "the list: $(ev "$(guest 'cat /tmp/w11-a.txt' || true)")"
     # Shading: marco kept it, so it is a live state here and a script that depends on it must keep
     # working.  wmctrl does the work; what is asserted is that the state STICKS.
-    guest "wwmctl -r fwsmoke -b add,shaded" >/dev/null 2>&1 || true
+    guest "wwmctl -r w11smoke -b add,shaded" >/dev/null 2>&1 || true
     sleep 1
     want "-b add,shaded sets _NET_WM_STATE_SHADED (marco kept what mutter dropped)" \
          "_NET_WM_STATE_SHADED" "$(guest "wxprop -id $win _NET_WM_STATE" || true)"
-    guest "wwmctl -r fwsmoke -b remove,shaded" >/dev/null 2>&1 || true
+    guest "wwmctl -r w11smoke -b remove,shaded" >/dev/null 2>&1 || true
     sleep 1
     wantnot "-b remove,shaded takes it off again" "_NET_WM_STATE_SHADED" \
             "$(guest "wxprop -id $win _NET_WM_STATE" || true)"

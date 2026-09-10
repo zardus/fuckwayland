@@ -1,4 +1,4 @@
-fuckwayland for Fedora
+w11 for Fedora
 ======================
 
 Nothing is published anywhere yet -- COPR and Fedora proper are the owner's
@@ -11,22 +11,22 @@ clone, build, install your own build.
   sudo dnf install ./dist/*.rpm
 
 `--no-deps` fails instead of installing build tools, `--lint` runs rpmlint
-with packaging/rpm/fuckwayland.rpmlintrc, `--keep` leaves the scratch topdir
+with packaging/rpm/w11.rpmlintrc, `--keep` leaves the scratch topdir
 under dist/rpmbuild, and `--help` prints the header of the script.
 
 Three packages, not one
 -----------------------
 
-  fuckwayland
+  w11
         the six commands, the udev rule, the modules-load line and the
         warandr menu entry.
-  gnome-shell-extension-fuckwayland-bridge
+  gnome-shell-extension-w11-bridge
         the bridge extension, the per-user enabler and its autostart entry.
-        `Supplements: (fuckwayland and gnome-shell)`, so dnf installs it by
+        `Supplements: (w11 and gnome-shell)`, so dnf installs it by
         itself on a machine that has both halves and on no other -- a sway or
         KDE box gets the tools and no extension.  The .deb cannot say that;
         it carries the extension everywhere.
-  gnome-shell-extension-fuckwayland-overlap
+  gnome-shell-extension-w11-overlap
         the second, separate extension, the one behind
         `wxrandr --unsafe-gnome-overlap`.  No Supplements, on purpose:
         nothing installs it for you, nothing enables it, and it is the only
@@ -41,22 +41,22 @@ What differs from the .deb, and why
     noarch build covers both; rawhide is 3.15 and needs its own.  (The .deb's
     "one file for both releases" story survives here only by accident of two
     releases sharing a python.)
-  * The helper is /usr/libexec/fuckwayland/enable-bridge.  It is the same
+  * The helper is /usr/libexec/w11/enable-bridge.  It is the same
     script the .deb installs -- packaging/common/enable-bridge -- and only the
     autostart entry's Exec= line is rewritten at build time.
-  * /etc/xdg/autostart/fuckwayland-enable-bridge.desktop is a plain file, not
+  * /etc/xdg/autostart/w11-enable-bridge.desktop is a plain file, not
     a symlink.  rpm marks nothing %config unless the spec says so, so an erase
     takes it; debhelper would have made it a conffile that outlives the
     package, which is the reason for the .deb's symlink.
   * GTK is `Recommends: python3-gobject gtk3`, not a hard dependency.  Weak
     deps are on by default in dnf, so the warandr GUI still arrives for
-    everyone who has not turned them off, and `dnf install fuckwayland` on a
+    everyone who has not turned them off, and `dnf install w11` on a
     box with no GNOME pulls in no toolkit.  Fedora has no gir1.2-* split:
     Gtk-3.0.typelib is inside gtk3 itself.
   * The X11 handover's install hint names four packages, not two: Fedora ships
     one binary per package (xprop, xrandr), where Debian has x11-utils and
     x11-xserver-utils.  The tools print the right one for the machine they are
-    on -- see fwcommon/distro.py.
+    on -- see w11common/distro.py.
   * `acl` is not on a Fedora cloud image (measured: no setfacl, no getfacl),
     so the removal's ACL teardown takes the python fallback
     (`os.removexattr`).  Nothing here requires acl for it.

@@ -8,8 +8,8 @@ import io
 import os
 import sys
 
-from fwcommon import passthrough, stdio
-from fwcommon.errors import CmdError
+from w11common import passthrough, stdio
+from w11common.errors import CmdError
 from wdotool import backend, commands
 from wdotool.cnum import atoi as _atoi
 from wdotool.ctx import Context
@@ -483,7 +483,7 @@ def main(argv: list[str] | None = None) -> int:
     xdotool never prints a traceback and never exits 120.  Ctrl-C during `wdotool sleep 5`, a reader leaving
     `wdotool search . | head -1`, a stdout that cannot take what we print (`>/dev/full`) and one that was closed
     before we started (`>&-`) are ordinary exits here, and the last thing that happens is the flush that says
-    whether the output arrived (fwcommon/stdio.py)."""
+    whether the output arrived (w11common/stdio.py)."""
     backend.set_program("wdotool")
     stdio.repair_std()
     prog = _prog_name(argv)

@@ -15,9 +15,9 @@ import os
 import sys
 import time
 
-FW = os.environ.get("FW", "/root/fw")
-sys.path.insert(0, FW)
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+W11 = os.environ.get("W11", "/root/w11")
+sys.path.insert(0, W11)
+os.environ["W11_PASSTHROUGH"] = "never"
 # scale-probe.py has a hyphen in it, so it is loaded by path rather than
 # imported by name; it is the file that owns the four readings.
 _HERE = os.path.dirname(os.path.abspath(__file__))

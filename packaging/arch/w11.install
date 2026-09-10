@@ -1,0 +1,83 @@
+# The udev half of the .deb's postinst/postrm, in pacman's scriptlet shape.
+#
+# The sequence is deliberately the same four commands in the same order as
+# debian/w11.postinst and packaging/rpm/w11.spec's %post, and
+# the removal is the same revoke as debian/w11.postrm and %postun --
+# tests/test_rpm_scripts.py and tests/test_pkgbuild.py compare all three token
+# for token, because three copies of one procedure drifting apart is how one
+# packaging quietly stops granting /dev/uinput.
+#
+# The reload is here although pacman runs its own: 35-systemd-udev-reload.hook
+# has `Target = usr/lib/udev/rules.d/*` and fired by itself on the measured
+# `pacman -U` ("(1/2) Reloading device manager configuration...").  That hook
+# runs AFTER this scriptlet, so without our own reload the `udevadm trigger`
+# below would re-tag the node against the rule set that was in force before
+# this package arrived -- the same ordering hazard the rpm's %post has with
+# systemd-udev's transfiletrigger.
+_stamp=/var/lib/w11/installed
+
+_apply_udev() {
+    command -v udevadm >/dev/null 2>&1 || return 0
+    [ -d /run/udev ] || return 0
+    modprobe uinput >/dev/null 2>&1 || true
+    udevadm control --reload-rules >/dev/null 2>&1 || true
+    udevadm trigger --name-match=uinput >/dev/null 2>&1 || true
+    udevadm settle --timeout=5 >/dev/null 2>&1 || true
+}
+
+post_install() {
+    _apply_udev
+    # The stamp is the record that this installation happened; the per-user
+    # enabler compares its own against it, and post_remove drops it.
+    mkdir -p /var/lib/w11 && : > "$_stamp"
+    # `|| true`: pacman is routinely run with its output down a pipe whose
+    # reader leaves (`pacman -U ... | tail`), `cat` then dies of SIGPIPE, and a
+    # scriptlet that fails over a banner nobody was reading is a package that
+    # reports its own installation as broken.  Fix 55 on the dpkg side
+    # (tests/test_debian_scripts.py), applied here before it could happen.
+    cat <<'EOM' || true
+
+w11: wdotool, wwmctl, wxprop, wxrandr, warandr and wmirror are on PATH.
+
+  * On GNOME, the window commands need the bridge extension, and gnome-shell
+    only scans extension directories at login: LOG OUT AND BACK IN ONCE.
+  * /dev/uinput is now open to the user at the active seat (udev rule
+    60-w11-uinput.rules).  Anyone who can open it can type as you.
+  * On an X11 session the tools hand over to the real ones:
+    pacman -S xdotool wmctrl xorg-xprop xorg-xrandr
+
+EOM
+}
+
+post_upgrade() {
+    # The udev half only: the stamp stays, so nobody's dconf choice is
+    # disturbed and no user is set up a second time.
+    _apply_udev
+}
+
+post_remove() {
+    rm -f "$_stamp" 2>/dev/null || true
+    rmdir /var/lib/w11 2>/dev/null || true
+    [ -e /dev/uinput ] || return 0
+    if command -v udevadm >/dev/null 2>&1; then
+        udevadm control --reload-rules >/dev/null 2>&1 || true
+        rm -f /run/udev/static_node-tags/uaccess/uinput 2>/dev/null || true
+        maj=$(udevadm info -q property /dev/uinput 2>/dev/null | sed -n 's/^MAJOR=//p') || maj=
+        min=$(udevadm info -q property /dev/uinput 2>/dev/null | sed -n 's/^MINOR=//p') || min=
+        if [ -n "$maj" ] && [ -n "$min" ]; then
+            rm -f "/run/udev/data/c$maj:$min" /run/udev/tags/*/"c$maj:$min" 2>/dev/null || true
+        fi
+    fi
+    # setfacl is in core on Arch and is pulled in by systemd, so the fallback
+    # never runs here -- it is kept because this is one procedure with three
+    # packagings, and Fedora's cloud image has no acl at all.  The ACL entry
+    # has to go rather than be masked by the 0600: the uaccess builtin only
+    # ever ADDS entries, so a left-over one makes a later reinstall a no-op.
+    if command -v setfacl >/dev/null 2>&1; then
+        setfacl -b /dev/uinput 2>/dev/null || true
+    elif command -v python3 >/dev/null 2>&1; then
+        python3 -c 'import os; os.removexattr("/dev/uinput", "system.posix_acl_access")' 2>/dev/null || true
+    fi
+    chown root:root /dev/uinput 2>/dev/null || true
+    chmod 0600 /dev/uinput 2>/dev/null || true
+}

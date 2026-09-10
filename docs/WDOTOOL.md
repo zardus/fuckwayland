@@ -35,7 +35,7 @@ interface.
   numeric ids (sway: node id; GNOME: `Meta.Window.get_id()`), printed in decimal
   like xdotool.
 - **Running under sudo / as root over ssh**: the session's sockets, bus and X cookie
-  are found for us by `fwcommon/session.py`. What it looks at, in which order, and
+  are found for us by `w11common/session.py`. What it looks at, in which order, and
   why `session.py` and `passthrough.py` answer different questions, is
   [Technical.md § Session discovery](Technical.md#2-session-discovery-and-the-x11-handover).
 - **On an X11 session wdotool does not run at all**: it `execve`s the real `xdotool`
@@ -202,7 +202,7 @@ of a fresh session could already be typing the wrong characters. (`current` look
 the answer and is not: `gsettings describe` calls it "deprecated and ignored" on both
 generations, the shell never writes it, and setting it switches nothing.) Nothing to
 install and no new dependency: `xdg-desktop-portal` and `xdg-desktop-portal-gnome` are
-both in the default Ubuntu desktop, and `fwcommon/dbus_mini.py` speaks the call as it
+both in the default Ubuntu desktop, and `w11common/dbus_mini.py` speaks the call as it
 stands. It costs 1.2 ms a command as you, 6.3 ms as root — where the read has to
 happen in a forked child, because the portal answers the session user and nobody
 else — and neither is visible next to the rest of a `wdotool type`. It is `Settings.ReadAll`, which is the one portal interface with no consent
@@ -958,7 +958,7 @@ positionals from the remaining argv and returns how many tokens it consumed:
 def cmd_foo(ctx: Context, args: list[str]) -> int   # tokens consumed, excluding command name
 ```
 
-Failure: `raise CmdError(msg)` (`fwcommon/errors.py`, because every tool raises and catches it) — driver prints to stderr, aborts the chain, exits 1.
+Failure: `raise CmdError(msg)` (`w11common/errors.py`, because every tool raises and catches it) — driver prints to stderr, aborts the chain, exits 1.
 Non-fatal failure (`search` with no matches): set `ctx.exit_code = 1`, consume args
 normally. `Context` (`ctx.py`) provides `stack`, `resolve_window(arg|None)`,
 `resolve_windows` (`%@` → whole stack), lazy `backend()` and `daemon()`.
@@ -1333,7 +1333,7 @@ Daemon notes:
   bus policy), so **nothing has to be installed**, unlike the GNOME bridge. One
   generated script per command (`wdotool/kwin_js.py`, the whole 5.27↔6 divergence
   lives there); it answers with the JS global `callDBus()` to a name we own
-  (`org.fuckwayland.KWin` / `/org/fuckwayland/KWin` / `org.fuckwayland.KWin1`,
+  (`org.w11.KWin` / `/org/w11/KWin` / `org.w11.KWin1`,
   members `Result(token, json)` and `Event(token, uuid, change)`), which
   `dbus_mini` serves with `serve_calls`. `Script::run()` is a delayed reply sent
   only after `evaluate()` returns and `callDBus` rides the same connection, so the
@@ -1417,10 +1417,10 @@ Daemon notes:
   X11 client. `w.output` is read on 6 only — on 5.27 it is a `KWin::Output*`,
   a datatype QJSEngine has no converter for, and merely reading it logs a
   `QMetaProperty::read` warning to the journal once per window per command.
-- **gnome**: the fuckwayland bridge extension (`gnome/fuckwayland-bridge@fuckwayland`,
+- **gnome**: the w11 bridge extension (`gnome/w11-bridge@w11`,
   installer `gnome/install-bridge.sh`) exports Mutter over the session bus — name
-  `org.fuckwayland.Bridge`, path `/org/fuckwayland/Bridge`, interface
-  `org.fuckwayland.Bridge1`, JSON strings for structured results — and
+  `org.w11.Bridge`, path `/org/w11/Bridge`, interface
+  `org.w11.Bridge1`, JSON strings for structured results — and
   `backend_gnome.py` is a thin `dbus_mini` client for it (no gdbus, no Eval, no
   Window Calls). Ids = `Meta.Window.get_id()`. `class_` = `wm_class` (Mutter reports
   the Wayland app_id there), else `gtk_app_id`; geometry = `get_frame_rect()` in
@@ -1454,7 +1454,7 @@ Daemon notes:
   drift from the generic rule. **`org.gnome.Shell` on the bus is not proof of GNOME
   Shell**, and detection reaches this backend only when one of GNOME's own two names is
   beside it — `org.gnome.Mutter.DisplayConfig` (gnome-shell's own, and what wxrandr's
-  mutter backend drives) or `org.fuckwayland.Bridge` (which can only be owned from inside
+  mutter backend drives) or `org.w11.Bridge` (which can only be owned from inside
   gnome-shell). With neither, the registry decides, and a compositor publishing a
   foreign-toplevel protocol is not Mutter, which publishes none. Measured on the
   `resolute-budgie` golden (Ubuntu Budgie 10.10.2 over labwc 0.9.3, 2026-09-09, `busctl
@@ -1715,7 +1715,7 @@ the eight backend modules — gnome and kwin reach none of them.
 `WDOTOOL_BACKEND=sway` is also i3's spelling (`i3` is an alias of it; the dialect is
 detected off `GET_VERSION`, not off the variable), and on i3 the backend answers what it
 used to get wrong. None of it is what an i3 user gets by default — the four tools hand over
-to the originals there — so this section is about `FUCKWAYLAND_PASSTHROUGH=never`.
+to the originals there — so this section is about `W11_PASSTHROUGH=never`.
 
 * every id is the window's **X id**, the same number `wmctrl -l`, `xwininfo` and
   `xprop -id` use. i3's own container ids are 47-bit pointers; the one this printed
@@ -1747,7 +1747,7 @@ Measured on `noble-gnome-x11` (GNOME Shell 46.0, mutter 46.2, 2026-09-09) and tr
 Wayland too:
 
 * An extension the running shell already knows can be taken out and put back **in that
-  process**: `gnome-extensions disable` releases `org.fuckwayland.Bridge` (`NameHasOwner`
+  process**: `gnome-extensions disable` releases `org.w11.Bridge` (`NameHasOwner`
   → `(false,)` about 3 s later), `enable` takes it back (about 4 s later), and
   gnome-shell's pid never changes. That is what the package's autostart uses.
 * The logout is for a shell that has never **scanned** the extension directory, i.e. a

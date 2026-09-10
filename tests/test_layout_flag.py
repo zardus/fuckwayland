@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # every test file carries this itself: the suite is run file by file, where
 # conftest.py never loads, and a tool that hands itself over would not be
 # the code under test
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
 from wdotool import cli, ctx as ctxmod, daemon, xkbmap
 

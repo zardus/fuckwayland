@@ -46,35 +46,35 @@ import zipfile
 # The suite never hands a tool over to the real X11 one: see tests/conftest.py
 # (which covers pytest) and tests/test_passthrough.py.  This line is what
 # covers `python3 tests/<file>.py`, where conftest is not loaded.
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-from fwcommon import VERSION, passthrough                          # noqa: E402
+from w11common import VERSION, passthrough                          # noqa: E402
 
-PACKAGES = ("fwcommon", "wdotool", "wwmctl", "wxprop", "wxrandr", "warandr",
+PACKAGES = ("w11common", "wdotool", "wwmctl", "wxprop", "wxrandr", "warandr",
             "wmirror")
 TOOLS = ("wdotool", "wwmctl", "wxprop", "wxrandr", "warandr", "wmirror")
 
 #: What each zipapp is supposed to contain, out of build-pyz.sh's own `build`
-#: lines and the comments above them.  `fwcommon` is in all six (session
+#: lines and the comments above them.  `w11common` is in all six (session
 #: discovery, the X11 handover, CmdError, stdio, procs); `wdotool` rides with
 #: the two tools that import its window backends and its X wire client; the
 #: three display tools carry none of it.
 BUNDLES = {
-    "wdotool": {"fwcommon", "wdotool"},
-    "wwmctl": {"fwcommon", "wdotool", "wwmctl"},
-    "wxprop": {"fwcommon", "wdotool", "wxprop"},
-    "wxrandr": {"fwcommon", "wxrandr"},
-    "warandr": {"fwcommon", "wxrandr", "warandr"},
-    "wmirror": {"fwcommon", "wxrandr", "wmirror"},
+    "wdotool": {"w11common", "wdotool"},
+    "wwmctl": {"w11common", "wdotool", "wwmctl"},
+    "wxprop": {"w11common", "wdotool", "wxprop"},
+    "wxrandr": {"w11common", "wxrandr"},
+    "warandr": {"w11common", "wxrandr", "warandr"},
+    "wmirror": {"w11common", "wxrandr", "wmirror"},
 }
 
 
 def tree_copy(cls_or_case, extra=("scripts",)):
     """A temporary copy of the packages plus `extra` directories."""
-    tmp = tempfile.mkdtemp(prefix="fw-build-")
+    tmp = tempfile.mkdtemp(prefix="w11-build-")
     cls_or_case.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
     for d in PACKAGES + tuple(extra):
         shutil.copytree(os.path.join(ROOT, d), os.path.join(tmp, d),
@@ -88,7 +88,7 @@ class TheZipapps(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.tmp = tempfile.mkdtemp(prefix="fw-pyz-")
+        cls.tmp = tempfile.mkdtemp(prefix="w11-pyz-")
         for d in PACKAGES + ("scripts",):
             shutil.copytree(os.path.join(ROOT, d), os.path.join(cls.tmp, d),
                             ignore=shutil.ignore_patterns("__pycache__"))
@@ -125,13 +125,13 @@ class TheZipapps(unittest.TestCase):
             with self.subTest(name):
                 self.assertEqual(self.top_level(name), want)
 
-    def test_fwcommon_is_in_all_six(self):
+    def test_w11common_is_in_all_six(self):
         """Every tool here finds its session, hands over to the original on an
         X11 one, raises the same exception when it fails and flushes through
-        the same stdout on the way out -- all of which is fwcommon."""
+        the same stdout on the way out -- all of which is w11common."""
         for name in TOOLS:
             with self.subTest(name):
-                self.assertIn("fwcommon", self.top_level(name))
+                self.assertIn("w11common", self.top_level(name))
 
     def test_no_display_tool_carries_the_input_stack(self):
         for name in ("wxrandr", "warandr", "wmirror"):
@@ -139,7 +139,7 @@ class TheZipapps(unittest.TestCase):
                 self.assertNotIn("wdotool", self.top_level(name))
 
     def test_the_marker_and_the_stamp_are_in_the_first_four_kilobytes(self):
-        """`fwcommon.passthrough.is_us()` sniffs the head of a file to decide
+        """`w11common.passthrough.is_us()` sniffs the head of a file to decide
         whether an executable it is about to `execve` is one of ours -- the only
         "not us" guard that survives two copies under two names in two PATH
         directories.  zipapp stores members uncompressed and `__main__.py`
@@ -149,8 +149,8 @@ class TheZipapps(unittest.TestCase):
             with self.subTest(name):
                 with open(self.pyz(name), "rb") as fh:
                     head = fh.read(4096)
-                self.assertIn(b"fuckwayland-clone:", head, name)
-                self.assertIn(b"_fuckwayland_marker", head, name)
+                self.assertIn(b"w11-clone:", head, name)
+                self.assertIn(b"_w11_marker", head, name)
 
     def test_the_guard_itself_says_each_of_them_is_us(self):
         """Not a re-implementation of the sniff: the shipped function, run over
@@ -165,7 +165,7 @@ class TheZipapps(unittest.TestCase):
         program version and then, with no display, xrandr's own `Can't open
         display` and exit 1 -- which is the original's behaviour verbatim, so
         the assertion is on the line it did print."""
-        env = dict(os.environ, FUCKWAYLAND_PASSTHROUGH="never",
+        env = dict(os.environ, W11_PASSTHROUGH="never",
                    WWMCTL_WMCTRL_GENERATION="1.07", LC_ALL="C")
         env.pop("PYTHONPATH", None)
         for argv, first in (("wmirror --version", "wmirror "),
@@ -289,7 +289,7 @@ class BuildDebRefuses(unittest.TestCase):
     def test_help_is_the_scripts_own_header(self):
         got = self.run_build("--help")
         self.assertEqual(got.returncode, 0, got.stderr)
-        self.assertIn("release/fuckwayland_<version>_all.deb", got.stdout)
+        self.assertIn("release/w11_<version>_all.deb", got.stdout)
         self.assertIn("--no-deps", got.stdout)
         self.assertEqual(self.calls(), [])
 
@@ -382,12 +382,12 @@ class SiblingCase(unittest.TestCase):
 class BuildRpmRefuses(SiblingCase):
     """build-rpm.sh's four exits, and the two halves of its version gate."""
 
-    SPEC = "packaging/rpm/fuckwayland.spec"
-    #: What the rpmbuild stub leaves behind.  Built from fwcommon.VERSION and
+    SPEC = "packaging/rpm/w11.spec"
+    #: What the rpmbuild stub leaves behind.  Built from w11common.VERSION and
     #: not typed, because a test that pins 0.4.0 goes red at the 0.5 bump for a
     #: reason that is not the script's -- the rule the .deb half of this file
     #: already states over `dch -v`.
-    RPM_NAME = "fuckwayland-%s-1.fc44.noarch.rpm" % VERSION
+    RPM_NAME = "w11-%s-1.fc44.noarch.rpm" % VERSION
 
     def setUp(self):
         super().setUp()
@@ -462,7 +462,7 @@ class BuildRpmRefuses(SiblingCase):
         self.assertEqual(got.returncode, 0, got.stderr)
         self.assertIn("--no-deps", got.stdout)
         self.assertIn("--lint", got.stdout)
-        self.assertIn("dist/fuckwayland-<version>", got.stdout)
+        self.assertIn("dist/w11-<version>", got.stdout)
         self.assertNotIn("set -eu", got.stdout, "the slice ran past the header")
         self.assertEqual(self.calls(), [])
 
@@ -476,7 +476,7 @@ class BuildRpmRefuses(SiblingCase):
         self.assertEqual(got.returncode, 0, got.stderr)
         with open(os.path.join(self.tmp, self.SPEC), encoding="utf-8") as fh:
             shipped = fh.read()
-        with open(os.path.join(ROOT, "packaging", "rpm", "fuckwayland.spec"),
+        with open(os.path.join(ROOT, "packaging", "rpm", "w11.spec"),
                   encoding="utf-8") as fh:
             self.assertEqual(shipped, fh.read(), "the build edited the spec in the tree")
         self.assertTrue(os.path.exists(os.path.join(self.tmp, "dist", self.RPM_NAME)))
@@ -519,7 +519,7 @@ class BuildPkgbuildRefuses(SiblingCase):
 
     RECIPE = "packaging/arch/PKGBUILD"
     #: What the makepkg stub leaves behind; see BuildRpmRefuses.RPM_NAME.
-    PKG_NAME = "fuckwayland-%s-1-any.pkg.tar.zst" % VERSION
+    PKG_NAME = "w11-%s-1-any.pkg.tar.zst" % VERSION
 
     def setUp(self):
         super().setUp()
@@ -582,7 +582,7 @@ class BuildPkgbuildRefuses(SiblingCase):
         m = re.search(r"^sha256sums=\('([0-9a-f]{64})'\)$", recipe, re.M)
         self.assertTrue(m, recipe)
         tarball = os.path.join(self.tmp, "dist", "pkgbuild",
-                               "fuckwayland-%s.tar.gz" % VERSION)
+                               "w11-%s.tar.gz" % VERSION)
         with open(tarball, "rb") as fh:
             self.assertEqual(hashlib.sha256(fh.read()).hexdigest(), m.group(1))
 
@@ -592,7 +592,7 @@ class BuildPkgbuildRefuses(SiblingCase):
         job builds the commit it is testing.  Three lines differ and no more --
         source, sha256sums and _srcdir."""
         _got, recipe = self.generated()
-        self.assertIn('source=("fuckwayland-%s.tar.gz")' % VERSION, recipe)
+        self.assertIn('source=("w11-%s.tar.gz")' % VERSION, recipe)
         self.assertIn('_srcdir="$pkgname-$pkgver"', recipe)
         with open(os.path.join(ROOT, "packaging", "arch", "PKGBUILD"),
                   encoding="utf-8") as fh:
@@ -605,8 +605,8 @@ class BuildPkgbuildRefuses(SiblingCase):
         a build does not leave a file `git status` has to explain."""
         self.generated()
         left = sorted(os.listdir(os.path.join(self.tmp, "packaging", "arch")))
-        self.assertEqual(left, ["PKGBUILD", "README.Arch", "fuckwayland.install",
-                                "namcap.expected"])
+        self.assertEqual(left, ["PKGBUILD", "README.Arch", "namcap.expected",
+                                "w11.install"])
 
     def test_a_recipe_tagged_with_terms_the_license_left_behind_stops_the_build(self):
         """build-rpm.sh's licence gate, in its Arch form.  `pacman -Qi` prints

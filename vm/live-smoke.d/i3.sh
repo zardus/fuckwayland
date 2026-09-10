@@ -8,7 +8,7 @@
 # originals.  `WDOTOOL_BACKEND=sway` does not defeat that either -- the policy is settled by session
 # type before any backend is detected [M recon2/i3.md 2a].
 #
-# `i3ipc` is what is underneath, reached only by FUCKWAYLAND_PASSTHROUGH=never, and it is where this
+# `i3ipc` is what is underneath, reached only by W11_PASSTHROUGH=never, and it is where this
 # flavor earns its build.  Against a real 4.25.1 the sway backend used to call itself sway and get four
 # things wrong, every one of them measured [M recon2/i3.md 2b, 2c]:
 #
@@ -51,7 +51,7 @@ SMOKE_PHASES="install passthrough i3ipc"
 
 #: What the phase below runs its tools with: our own code, and no environment variable handing it the
 #: socket.  `never` is the documented escape hatch; `env -u I3SOCK` is what makes the discovery a claim.
-OURS="FUCKWAYLAND_PASSTHROUGH=never env -u I3SOCK"
+OURS="W11_PASSTHROUGH=never env -u I3SOCK"
 
 phase_i3ipc() {
     editor_start
@@ -62,14 +62,14 @@ phase_i3ipc() {
 I3SOCK=$(guest 'echo $I3SOCK' | tr -d '\r' || true)"
     want "an i3 IPC socket does not defeat the handover: --version is the installed xdotool's" \
          "^xdotool version 3\." "$(guest 'wdotool --version' || true)"
-    out=$(await 30 '[0-9]' "wdotool search --name fwsmoke | head -1" || true)
+    out=$(await 30 '[0-9]' "wdotool search --name w11smoke | head -1" || true)
     win=$(printf '%s\n' "$out" | grep -E '^[0-9]+$' | head -1)
-    if [ -z "$win" ]; then fail "no fwsmoke xterm to work on [$(ev "$out")]"; return 1; fi
-    pass "wdotool search --name fwsmoke -> $win (through the real xdotool)"
+    if [ -z "$win" ]; then fail "no w11smoke xterm to work on [$(ev "$out")]"; return 1; fi
+    pass "wdotool search --name w11smoke -> $win (through the real xdotool)"
 
     # 1. The socket, found by the scan alone.  A window id back is the whole proof: without a socket the
     # backend cannot be built at all and the tool exits 2 naming every route it tried.
-    local ours; ours=$(guest "$OURS wdotool search --name fwsmoke 2>&1 | head -1" || true)
+    local ours; ours=$(guest "$OURS wdotool search --name w11smoke 2>&1 | head -1" || true)
     want "find_sway_socket() finds \$XDG_RUNTIME_DIR/i3/ipc-socket.* with no \$I3SOCK" "^[0-9]+$" "$ours"
     # 2. ...and the id it hands back is the X id, not a 47-bit pointer.  The number is compared against
     # 2^32 rather than against the X id, because what must never come back is the truncation.
@@ -89,11 +89,11 @@ I3SOCK=$(guest 'echo $I3SOCK' | tr -d '\r' || true)"
          "$(guest "$OURS wdotool getwindowpid $ours 2>&1 | head -1" || true)"
     # 5. --onlyvisible, which matched nothing at all because i3 nodes carry no `visible` key.
     want "search --onlyvisible matches the window on the visible workspace" "^[0-9]+$" \
-         "$(guest "$OURS wdotool search --onlyvisible --name fwsmoke 2>&1 | head -1" || true)"
+         "$(guest "$OURS wdotool search --onlyvisible --name w11smoke 2>&1 | head -1" || true)"
 
     # 6. The floating window that would not move.  i3 itself moves it (the same criteria, run by i3-msg,
     # is the control), so a refusal here is ours and nobody else's.
-    guest "i3-msg '[title=\"fwsmoke\"] floating enable'" >/dev/null 2>&1 || true
+    guest "i3-msg '[title=\"w11smoke\"] floating enable'" >/dev/null 2>&1 || true
     sleep 1
     local g0 g1 mv
     g0=$(guest "wdotool getwindowgeometry $win" | tr -d '\r' | tr '\n' ' ' || true)
@@ -106,7 +106,7 @@ I3SOCK=$(guest 'echo $I3SOCK' | tr -d '\r' || true)"
     else
         pass "windowmove moved it: $(ev "$g0") -> $(ev "$g1")"
     fi
-    guest "i3-msg '[title=\"fwsmoke\"] floating disable'" >/dev/null 2>&1 || true
+    guest "i3-msg '[title=\"w11smoke\"] floating disable'" >/dev/null 2>&1 || true
 
     # 7. getdisplaygeometry, which used to refuse on a session with a perfectly good layout.
     out=$(guest "$OURS wdotool getdisplaygeometry 2>&1" || true)

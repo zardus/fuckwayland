@@ -12,14 +12,14 @@
 #     is 330.9 MiB of the closure: the same source without
 #     gobject-introspection/wrapGAppsHook3/gtk3/pygobject3 measures 215.1 MiB
 #     against 546.2 with [recon2/nixos §8], and the split built here comes out
-#     at 216.0 MiB for packages.fuckwayland and 546.9 for packages.warandr
+#     at 216.0 MiB for packages.w11 and 546.9 for packages.warandr
 #     (`nix path-info -Sh`, 2026-09-08).  Only warandr needs `gi`.
 #   * the five shadow symlinks made `packages.default` collide with
 #     xdotool/xorg.xprop/xorg.xrandr/arandr in environment.systemPackages.
 #     system-path builds with ignoreCollisions = true, so nothing fails --
 #     the ORIGINALS win silently, and /run/current-system/sw/bin/xdotool
 #     resolved to xdotool-3.20211022.1 on a Wayland session [recon2/nixos].
-#     They are their own package now, and `programs.fuckwayland.shadowOriginals`
+#     They are their own package now, and `programs.w11.shadowOriginals`
 #     is the lib.hiPrio that makes them win on purpose.
 #
 # Everything here is derived from `src`: the extensions, the udev rule and the
@@ -37,7 +37,7 @@
 }:
 
 let
-  homepage = "https://github.com/emolabs/fuckwayland";
+  homepage = "https://github.com/emolabs/w11";
 
   commonMeta = {
     inherit homepage;
@@ -52,14 +52,14 @@ let
     license = lib.licenses.bsd2;
   };
 
-  bridgeUuid = "fuckwayland-bridge@fuckwayland";
-  overlapUuid = "fuckwayland-overlap@fuckwayland";
+  bridgeUuid = "w11-bridge@w11";
+  overlapUuid = "w11-overlap@w11";
 
   # `@` is not a legal character in a nix path literal, so the extension
-  # directories are never named as one: `../gnome/fuckwayland-bridge@fuckwayland`
+  # directories are never named as one: `../gnome/w11-bridge@w11`
   # does not parse, and interpolating `src + "/gnome/<uuid>"` copies that one
   # directory into the store under its own name, where nix refuses it --
-  # `name 'fuckwayland-bridge@fuckwayland' contains illegal character '@'`.
+  # `name 'w11-bridge@w11' contains illegal character '@'`.
   # So the whole source goes in and the shell walks into it.
   gnome = name: src + ("/gnome/" + name);
 
@@ -85,8 +85,8 @@ let
     build-system = [ python3Packages.setuptools ];
   };
 
-  fuckwayland = python3Packages.buildPythonApplication (base // {
-    pname = "fuckwayland";
+  w11 = python3Packages.buildPythonApplication (base // {
+    pname = "w11";
 
     # No GTK anywhere in this one.  bin/ is FIVE of the six console scripts of
     # pyproject.toml [project.scripts]: the shadow names are
@@ -109,8 +109,8 @@ let
 
     meta = commonMeta // {
       description = "xdotool, wmctrl, xprop and xrandr as drop-in clones for Wayland";
-      # `nix run .` died with `unable to execute .../bin/fuckwayland: No such
-      # file or directory` because pname is fuckwayland and no script is
+      # `nix run .` died with `unable to execute .../bin/w11: No such
+      # file or directory` because pname is w11 and no script is
       # [recon2/pkg-nix §1 defect 1].
       mainProgram = "wdotool";
     };
@@ -131,14 +131,14 @@ let
   # is a bin/ and a .desktop pointing INTO this, and the reason is the same
   # collision the file's header is about, one level deeper than bin/: two
   # buildPythonApplications of the same source both install
-  # lib/python3.14/site-packages/fwcommon, and `pkgs.buildEnv` without
+  # lib/python3.14/site-packages/w11common, and `pkgs.buildEnv` without
   # ignoreCollisions -- which is what home-manager's home.path is -- refuses
   # the pair outright:
   #
   #   pkgs.buildEnv error: two given paths contain a conflicting subpath:
-  #     `...-fuckwayland-0.4.0/lib/python3.14/site-packages/fwcommon/
+  #     `...-w11-0.4.0/lib/python3.14/site-packages/w11common/
   #      __pycache__/__init__.cpython-314.pyc' and
-  #     `...-fuckwayland-warandr-app-0.4.0/lib/.../__init__.cpython-314.pyc'
+  #     `...-w11-warandr-app-0.4.0/lib/.../__init__.cpython-314.pyc'
   #
   # (measured here on 2026-09-08, building buildEnv over the two packages).
   # environment.systemPackages hides it -- ignoreCollisions = true -- by
@@ -146,7 +146,7 @@ let
   # would end up beside the wrapper of the other.  So only one of the two
   # installable packages carries lib/ at all.
   warandrApp = python3Packages.buildPythonApplication (base // {
-    pname = "fuckwayland-warandr-app";
+    pname = "w11-warandr-app";
 
     # The GTK arrangement is the old flake's, unchanged, because it was right:
     # gobject-introspection collects every buildInput's typelib directory into
@@ -167,7 +167,7 @@ let
     # prefixed PATH at all, and that was not true: buildPythonApplication
     # prefixes PATH
     # regardless, and the built wrapper's makeCWrapper line reads
-    # `--prefix 'PATH' ':' '...python3-3.14.7/bin:...fuckwayland-0.4.0/bin:
+    # `--prefix 'PATH' ':' '...python3-3.14.7/bin:...w11-0.4.0/bin:
     # ...gobject-introspection-wrapped-1.86.0-dev/bin:...glib-2.88.3-dev/bin:
     # ...gettext-1.0/bin:...glib-2.88.3-bin/bin'` (read out of the compiled
     # wrapper [recon2/pkg-nix §1 defect 3]).  The intent survives for two
@@ -193,13 +193,13 @@ let
   });
 
   # ... and this is what gets installed: one symlink and one desktop entry,
-  # disjoint from packages.fuckwayland down to the last path.  The symlink
+  # disjoint from packages.w11 down to the last path.  The symlink
   # target is warandrApp's compiled C wrapper, which execs
   # `.warandr-wrapped` by ABSOLUTE path with $GI_TYPELIB_PATH and
   # $XDG_DATA_DIRS already set, so nothing is lost by reaching it through a
   # link.  The closure is warandrApp's -- the 546.9 MiB is still here, it is
   # just no longer in the way of the 216.0 MiB package.
-  warandr = runCommand "fuckwayland-warandr-${version}"
+  warandr = runCommand "w11-warandr-${version}"
     {
       passthru.app = warandrApp;
       meta = warandrApp.meta;
@@ -212,16 +212,16 @@ let
     '';
 in
 {
-  inherit fuckwayland warandr;
+  inherit w11 warandr;
 
   gnome-bridge = mkExtension {
-    pname = "fuckwayland-gnome-bridge";
+    pname = "w11-gnome-bridge";
     uuid = bridgeUuid;
-    description = "GNOME Shell extension: org.fuckwayland.Bridge, the window half of wwmctl on Mutter";
+    description = "GNOME Shell extension: org.w11.Bridge, the window half of wwmctl on Mutter";
   };
 
   gnome-overlap = mkExtension {
-    pname = "fuckwayland-gnome-overlap";
+    pname = "w11-gnome-overlap";
     uuid = overlapUuid;
     description = "GNOME Shell extension: the overlap route for wxrandr, installed and enabled for nobody";
   };
@@ -236,28 +236,28 @@ in
   # 50.4 guest: /dev/uinput came out `crw-rw----+ root root` with
   # `user:alice:rw-`, `group::---` -- the uaccess ACL and no standing group
   # channel [recon2/pkg-nix §7].
-  udev-rules = runCommand "fuckwayland-udev-rules-${version}"
+  udev-rules = runCommand "w11-udev-rules-${version}"
     { meta = commonMeta // { description = "uaccess rule and modules-load entry for /dev/uinput"; }; }
     ''
       install -D -m 644 \
-        ${writeText "60-fuckwayland-uinput.rules"
-          (builtins.readFile (gnome "60-fuckwayland-uinput.rules"))} \
-        "$out/lib/udev/rules.d/60-fuckwayland-uinput.rules"
+        ${writeText "60-w11-uinput.rules"
+          (builtins.readFile (gnome "60-w11-uinput.rules"))} \
+        "$out/lib/udev/rules.d/60-w11-uinput.rules"
       install -D -m 644 \
-        ${writeText "fuckwayland-uinput.conf"
+        ${writeText "w11-uinput.conf"
           (builtins.readFile (gnome "modules-load-uinput.conf"))} \
-        "$out/lib/modules-load.d/fuckwayland-uinput.conf"
+        "$out/lib/modules-load.d/w11-uinput.conf"
     '';
 
   # The five names the README calls "installing over the originals".  On
   # Debian that is /usr/local/bin winning over /usr/bin; NixOS has no such
   # precedence, so the honest form is a package of its own and
-  # `programs.fuckwayland.shadowOriginals = true`, which wraps it in
+  # `programs.w11.shadowOriginals = true`, which wraps it in
   # lib.hiPrio.  arandr points into packages.warandr because that is the only
   # output with a bin/warandr in it -- a shadow of arandr that refuses to
   # start would be worse than no shadow -- and that is why this package drags
   # the GTK closure in behind it.
-  x11-shadows = runCommand "fuckwayland-x11-shadows-${version}"
+  x11-shadows = runCommand "w11-x11-shadows-${version}"
     {
       meta = commonMeta // {
         description = "xdotool/wmctrl/xprop/xrandr/arandr, as links onto the clones";
@@ -265,10 +265,10 @@ in
     }
     ''
       mkdir -p "$out/bin"
-      ln -s ${fuckwayland}/bin/wdotool "$out/bin/xdotool"
-      ln -s ${fuckwayland}/bin/wwmctl  "$out/bin/wmctrl"
-      ln -s ${fuckwayland}/bin/wxprop  "$out/bin/xprop"
-      ln -s ${fuckwayland}/bin/wxrandr "$out/bin/xrandr"
+      ln -s ${w11}/bin/wdotool "$out/bin/xdotool"
+      ln -s ${w11}/bin/wwmctl  "$out/bin/wmctrl"
+      ln -s ${w11}/bin/wxprop  "$out/bin/xprop"
+      ln -s ${w11}/bin/wxrandr "$out/bin/xrandr"
       ln -s ${warandr}/bin/warandr     "$out/bin/arandr"
     '';
 }

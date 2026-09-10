@@ -28,7 +28,7 @@ from warandr.model import Layout, LayoutError, Mode, Output
 # tests/conftest.py (which covers pytest) and tests/test_passthrough.py.
 # This line is what covers `python3 tests/<file>.py`, where conftest is
 # not loaded, and it reaches every subprocess a test spawns.
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
 ARANDR_SAVED = os.path.join(FIXTURES, "arandr-saved.sh")
 ARANDR_LINE = ("xrandr --output DP-1 --primary --mode 1920x1080 --pos 0x0 "
@@ -825,7 +825,7 @@ class BackendChoice(unittest.TestCase):
         self.assertTrue(b.wayland)
 
     def test_the_passthrough_escape_hatch_is_not_a_session_type(self):
-        """FUCKWAYLAND_PASSTHROUGH=never means "run our own code instead of
+        """W11_PASSTHROUGH=never means "run our own code instead of
         handing over to the original" — and warandr never hands over. Read as
         a session type it would select wxrandr on an X11 box (rc 1, "Can't
         open display" on every Apply) for anyone who exported it, which the
@@ -833,10 +833,10 @@ class BackendChoice(unittest.TestCase):
         for value in ("never", "always"):
             b = randr.choose({"XDG_SESSION_TYPE": "x11", "DISPLAY": ":0",
                               "PATH": "/nonexist",
-                              "FUCKWAYLAND_PASSTHROUGH": value})
+                              "W11_PASSTHROUGH": value})
             self.assertEqual(b.argv, ["xrandr"], value)
             self.assertFalse(b.wayland, value)
-        w = randr.choose(self.wayland_env(FUCKWAYLAND_PASSTHROUGH="never"))
+        w = randr.choose(self.wayland_env(W11_PASSTHROUGH="never"))
         self.assertTrue(w.wayland)
 
     def test_snapshot_through_fake(self):
@@ -1426,7 +1426,7 @@ class BuildScript(unittest.TestCase):
     def test_pyz(self):
         import shutil
         with tempfile.TemporaryDirectory(prefix="warandr-build-") as tmp:
-            for d in ("fwcommon", "wdotool", "wwmctl", "wxprop", "wxrandr",
+            for d in ("w11common", "wdotool", "wwmctl", "wxprop", "wxrandr",
                       "warandr", "wmirror", "scripts"):
                 shutil.copytree(os.path.join(ROOT, d), os.path.join(tmp, d),
                                 ignore=shutil.ignore_patterns("__pycache__"))

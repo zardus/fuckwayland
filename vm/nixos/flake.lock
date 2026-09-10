@@ -1,6 +1,6 @@
 {
   "nodes": {
-    "fuckwayland": {
+    "w11": {
       "inputs": {
         "nixpkgs": [
           "nixpkgs"
@@ -34,7 +34,7 @@
     },
     "root": {
       "inputs": {
-        "fuckwayland": "fuckwayland",
+        "w11": "w11",
         "nixpkgs": "nixpkgs"
       }
     }

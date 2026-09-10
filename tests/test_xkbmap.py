@@ -33,9 +33,9 @@ sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import wl_fake
-from fwcommon import dbus_mini
-from fwcommon import session as fw_session
-from fwcommon.dbus_mini import ERR, Bus, DBusError, Variant
+from w11common import dbus_mini
+from w11common import session as w11_session
+from w11common.dbus_mini import ERR, Bus, DBusError, Variant
 from support import FakeHypr, FakeWayfire, RecorderDev, env, fixture_json
 from test_dbus_mini import MockBus
 from wdotool import cli, daemon, keymap, keys_cmds, xkbmap
@@ -44,7 +44,7 @@ from wdotool import cli, daemon, keymap, keys_cmds, xkbmap
 # tests/conftest.py (which covers pytest) and tests/test_passthrough.py.
 # This line is what covers `python3 tests/<file>.py`, where conftest is
 # not loaded, and it reaches every subprocess a test spawns.
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
 KEYMAPS = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                        "fixtures", "keymaps")
@@ -2757,7 +2757,7 @@ class TestTheActiveGroupFromHyprland(unittest.TestCase):
             return None
 
         r = xkbmap.HyprLayouts()
-        with mock.patch.object(fw_session, "find_hypr_socket", no_socket):
+        with mock.patch.object(w11_session, "find_hypr_socket", no_socket):
             self.assertIsNone(r.group(text("kde_us_de")))
             self.assertIsNone(r.group(text("kde_us_de")))
         self.assertTrue(r.absent)
@@ -2770,7 +2770,7 @@ class TestTheActiveGroupFromHyprland(unittest.TestCase):
         r = self.reader()
         self.assertEqual(r.group(text("kde_us_de")), 2)
         r.sockpath = None
-        with mock.patch.object(fw_session, "find_hypr_socket", lambda: None):
+        with mock.patch.object(w11_session, "find_hypr_socket", lambda: None):
             self.assertIsNone(r.group(text("kde_us_de")))
         self.assertFalse(r.absent)
         self.assertGreater(r.retry_at, 0.0)
@@ -2888,7 +2888,7 @@ class TestTheActiveGroupFromWayfire(unittest.TestCase):
             return None
 
         r = xkbmap.WayfireLayouts()
-        with mock.patch.object(fw_session, "find_wayfire_socket", no_socket):
+        with mock.patch.object(w11_session, "find_wayfire_socket", no_socket):
             self.assertIsNone(r.group(text("kde_us_de")))
             self.assertIsNone(r.group(text("kde_us_de")))
         self.assertTrue(r.absent)
@@ -2900,7 +2900,7 @@ class TestTheActiveGroupFromWayfire(unittest.TestCase):
         r = self.reader(WF_US_DE)
         self.assertEqual(r.group(text("kde_us_de")), 1)
         r.sockpath = None
-        with mock.patch.object(fw_session, "find_wayfire_socket", lambda: None):
+        with mock.patch.object(w11_session, "find_wayfire_socket", lambda: None):
             self.assertIsNone(r.group(text("kde_us_de")))
         self.assertFalse(r.absent)
         self.assertGreater(r.retry_at, 0.0)

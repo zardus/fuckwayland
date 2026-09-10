@@ -16,7 +16,7 @@
 #   * The handover: the four tools ARE xdotool/wmctrl/xprop/xrandr here, argv byte for byte, with
 #     $I3SOCK set and an i3 IPC socket sitting right there.  The policy is settled by session type
 #     before any backend is detected, so an X11 session with an IPC socket is still an X11 session.
-#   * The dialect underneath it, which only `FUCKWAYLAND_PASSTHROUGH=never` reaches: i3's tree carries
+#   * The dialect underneath it, which only `W11_PASSTHROUGH=never` reaches: i3's tree carries
 #     47-bit pointer con ids (`97479943571072`), no `pid`, no `visible`, and wraps a floating view in a
 #     `floating_con`.  Every one of those was a wrong answer until wave 1 (U01-U06); the smoke's `i3ipc`
 #     phase is where they are re-measured on a real session instead of an Xvfb.

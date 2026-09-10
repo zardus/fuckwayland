@@ -26,8 +26,8 @@ beats a success that did not happen."""
 
 import os
 
-from fwcommon import session
-from fwcommon.errors import CmdError
+from w11common import session
+from w11common.errors import CmdError
 from wdotool.backend import View, Window, WindowBackend, Workspace, mint_id, mint_map, warn
 from wdotool.ctx import SoftCmdError
 from wdotool.hypr_ipc import HyprIPC

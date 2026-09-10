@@ -14,10 +14,23 @@ bottom are a separate thing and say what they are). They are the recorded half o
 smoke's own checks can be run — and shown to fail — without booting anything,
 which `vm/live-smoke.d/selftest-offline.sh` does in about two seconds.
 
+One class of byte in here is **not** the desktop's any more. On 2026-09-10 the
+project was renamed from `fuckwayland` to `w11`, and the rename rewrote our own
+names inside every recording so that the replays still match the renamed steps:
+the package and the .deb file name in the `dpkg`/apt lines, the extension UUIDs
+and their `Name:`/`Description:` text, the bus names, and `W11_PASSTHROUGH` in
+the command lines. Those bytes are ours, not a capture, until each flavor is
+re-recorded — and the widths went with them, because `dpkg -l` sized its name
+column for an eleven-character package (`ii  fuckwayland    0.4.0` became
+`ii  w11    0.4.0` in `noble-gnome-46.0-capture.txt`, which is not what dpkg
+would print for `w11`). Everything the compositors, the portals and the distro
+printed about themselves is untouched, and all seven `*-replay.txt` files still
+replay with no failure.
+
 ### `noble-gnome-46.0-capture.txt`
 
 From instance `gnome46` (noble-gnome golden, GNOME Shell 46.0 on Ubuntu
-24.04.4, `fuckwayland 0.4.0` out of `release/`, three heads), 2026-09-08 02:34
+24.04.4, `w11 0.4.0` out of `release/`, three heads), 2026-09-08 02:34
 UTC. It holds the shapes every GNOME step asserts against: `getwindowgeometry`
 before and after the maximize pair, `wwmctl -l` / `-l -G` / `-d`, `wxprop -id`
 and `-root`, `wxrandr --listmonitors` / `--query` / `--backends` /

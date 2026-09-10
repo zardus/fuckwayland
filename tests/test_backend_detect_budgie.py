@@ -3,9 +3,9 @@
 
 CI run 34308982263 (commit 4d6fd40) failed every window check on resolute-budgie with one line:
 
-    gnome backend: the fuckwayland bridge extension is installed in
-    /usr/share/gnome-shell/extensions/fuckwayland-bridge@fuckwayland but the running GNOME Shell has not
-    loaded it (it knows nothing about fuckwayland-bridge@fuckwayland): log out and back in
+    gnome backend: the w11 bridge extension is installed in
+    /usr/share/gnome-shell/extensions/w11-bridge@w11 but the running GNOME Shell has not
+    loaded it (it knows nothing about w11-bridge@w11): log out and back in
 
 There is no GNOME Shell on that flavor.  Ubuntu Budgie 10.10.2 is labwc under a panel, and
 `busctl --user list --no-pager --acquired` in the guest on 2026-09-09 (recorded whole in
@@ -30,16 +30,16 @@ from unittest import mock
 # The suite never hands a tool over to the real X11 one: see tests/conftest.py (which covers pytest) and
 # tests/test_passthrough.py.  This line is what covers `python3 tests/<file>.py`, where conftest is not
 # loaded, and it reaches every subprocess a test spawns.
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import wl_fake
-from fwcommon import session
-from fwcommon.dbus_mini import Bus
-from fwcommon.errors import CmdError
+from w11common import session
+from w11common.dbus_mini import Bus
+from w11common.errors import CmdError
 from support import env
 from test_dbus_mini import MockBus
 from wdotool import backend_detect
@@ -142,7 +142,7 @@ class BudgieIsNotGnome(unittest.TestCase):
                           "a GNOME session paid for a registry round trip it does not need")
 
     def test_our_bridge_alone_keeps_the_gnome_arm(self):
-        """org.fuckwayland.Bridge can only be owned from inside gnome-shell, so it answers on its own --
+        """org.w11.Bridge can only be owned from inside gnome-shell, so it answers on its own --
         which is what a session whose Mutter name is somehow not up yet needs."""
         self.own(backend_detect.GNOME_NAME, backend_detect.BRIDGE_NAME)
         self.compositor("budgie")

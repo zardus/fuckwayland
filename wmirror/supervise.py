@@ -1,6 +1,6 @@
 """The detached supervisor that owns one wl-mirror process.
 
-The detaching, the status pipe and the /proc identity checks are fwcommon.procs -- the same protocol the gamma
+The detaching, the status pipe and the /proc identity checks are w11common.procs -- the same protocol the gamma
 holder runs on, written once and documented there.
 
 One thing the holder does not have: the thing we spawn is not us, it is wl-mirror. So the record carries TWO
@@ -21,10 +21,10 @@ import subprocess
 import tempfile
 import time
 
-from fwcommon import procs
+from w11common import procs
 # the detach protocol and the pid-reuse guards, imported rather than copied: one implementation of "is that
 # still the process we started?", and one of "start something that outlives us", in the tree.
-from fwcommon.procs import alive, proc_starttime
+from w11common.procs import alive, proc_starttime
 from wxrandr import core as wxcore
 
 from . import core
@@ -352,7 +352,7 @@ def _open_watch(wayland_socket):
     if not wayland_socket:
         return None
     try:
-        from fwcommon.wayland_mini import WlConn
+        from w11common.wayland_mini import WlConn
         conn = WlConn(wayland_socket)
         return wxcore.WlrOutputs(conn=conn)
     except Exception:

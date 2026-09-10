@@ -29,15 +29,15 @@ from collections import deque
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-from fwcommon import dbus_mini
-from fwcommon.dbus_mini import (Bus, DBusError, Message, Variant,
-                                marshal, split_signature, unmarshal)
+from w11common import dbus_mini
+from w11common.dbus_mini import (Bus, DBusError, Message, Variant,
+                                 marshal, split_signature, unmarshal)
 
 # The suite never hands a tool over to the real X11 one: see
 # tests/conftest.py (which covers pytest) and tests/test_passthrough.py.
 # This line is what covers `python3 tests/<file>.py`, where conftest is
 # not loaded, and it reaches every subprocess a test spawns.
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
 ERR = dbus_mini.ERR
 
@@ -1595,7 +1595,7 @@ class RealBus(unittest.TestCase):
         self.assertIn("org.freedesktop.DBus", names)
         self.assertIn(self.bus.unique_name, names)
         self.assertTrue(self.bus.name_has_owner("org.freedesktop.DBus"))
-        self.assertFalse(self.bus.name_has_owner("org.fuckwayland.NoSuchName"))
+        self.assertFalse(self.bus.name_has_owner("org.w11.NoSuchName"))
         self.assertEqual(self.bus.get_name_owner(self.bus.unique_name), self.bus.unique_name)
 
     def test_ping_and_errors(self):
@@ -1604,7 +1604,7 @@ class RealBus(unittest.TestCase):
             self.bus._bus("NameHasOwner", "i", (1,))
         self.assertIn(cm.exception.name, (ERR + "InvalidArgs", ERR + "UnknownMethod"))
         with self.assertRaises(DBusError) as cm:
-            self.bus.call("org.fuckwayland.NoSuchName", "/", "x.y", "Z")
+            self.bus.call("org.w11.NoSuchName", "/", "x.y", "Z")
         self.assertEqual(cm.exception.name, ERR + "ServiceUnknown")
 
     def test_properties_and_introspect(self):
@@ -1619,7 +1619,7 @@ class RealBus(unittest.TestCase):
         self.assertIsInstance(feats.get("Interfaces"), list)
 
     def test_name_owner_changed_via_wait_signal(self):
-        name = "org.fuckwayland.DbusMiniTest%d" % os.getpid()
+        name = "org.w11.DbusMiniTest%d" % os.getpid()
         self.bus.add_match(f"type='signal',sender='org.freedesktop.DBus',"
                            f"interface='org.freedesktop.DBus',member='NameOwnerChanged',"
                            f"arg0='{name}'")
@@ -1688,7 +1688,7 @@ class NoBusText(unittest.TestCase):
         is the user's) "no session D-Bus found" alone does not say which one
         was looked at, and the address is the whole of the difference."""
         addr = "unix:path=%s" % os.path.join(tempfile.gettempdir(),
-                                             "fuckwayland-no-such-bus-%d" % os.getpid())
+                                             "w11-no-such-bus-%d" % os.getpid())
         with self.assertRaises(DBusError) as cm:
             Bus(addr, timeout=2.0)
         self.assertEqual(cm.exception.name, ERR + "NoServer")
@@ -1715,7 +1715,7 @@ class RealBusUnderItsOwnDaemon(unittest.TestCase):
         p = subprocess.run(["dbus-run-session", "--", sys.executable, "-m",
                             "unittest", "-v", "tests.test_dbus_mini.RealBus"],
                            cwd=ROOT, capture_output=True, text=True, timeout=300,
-                           env=dict(os.environ, FUCKWAYLAND_PASSTHROUGH="never"))
+                           env=dict(os.environ, W11_PASSTHROUGH="never"))
         self.assertEqual(p.returncode, 0, p.stderr[-3000:])
         self.assertIn("Ran 5 tests", p.stderr)
         self.assertNotIn("skipped", p.stderr)

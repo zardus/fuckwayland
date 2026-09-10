@@ -1,4 +1,4 @@
-fuckwayland (0.4.0) unstable; urgency=medium
+w11 (0.4.0) unstable; urgency=medium
 
   * The input daemon ends itself: when its socket is gone or has been replaced,
     and after fifteen minutes with no client.  A logout that clears the runtime
@@ -26,7 +26,7 @@ fuckwayland (0.4.0) unstable; urgency=medium
 
  -- Antonio Bianchi <antonio.bianchi.333@gmail.com>  Sun, 06 Sep 2026 09:00:00 +0000
 
-fuckwayland (0.3.0) unstable; urgency=medium
+w11 (0.3.0) unstable; urgency=medium
 
   * Initial packaging: the six tools in /usr/bin, the GNOME Shell bridge
     extension, the /dev/uinput udev rule and the warandr desktop entry, in one

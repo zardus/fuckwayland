@@ -33,15 +33,15 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from fwcommon import session as wsession
-from fwcommon.wayland_mini import Cursor
+from w11common import session as wsession
+from w11common.wayland_mini import Cursor
 from wl_fake import msg, wstr
 from wxrandr import cli, core, kwin, mutter
 from wxrandr.core import Mode, State
 
 # The suite never hands a tool over to the real X11 one: see tests/conftest.py
 # (which covers pytest). This line covers `python3 tests/<file>.py`.
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
 DEV, REG, MGMT, ORDER = kwin.DEV, kwin.REG, kwin.MGMT, kwin.ORDER
 GAMMA = kwin.GAMMA
@@ -766,7 +766,7 @@ class Helpers(unittest.TestCase):
         self.assertEqual(kwin.from_fixed(332 / 256.0), 1.3)
 
     def test_untouched_shared_fixed_point_marshalling(self):
-        from fwcommon import wayland_mini
+        from w11common import wayland_mini
         self.assertEqual(wayland_mini._marshal([("f", 1.3)]),
                          struct.pack("<i", 332))
 

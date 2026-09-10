@@ -31,7 +31,7 @@ which no unittest can arrange from inside the session it would end, so it lives
 in vm/live-smoke.sh (T63) instead of as a cell that can only skip.
 
 Measured on the rig at 0.4, GNOME 46.0 / noble-gnome, package route: the six
-checks pass with the shipped FwOverlap14; the first apply with no agreement
+checks pass with the shipped W11Overlap14; the first apply with no agreement
 recorded APPLIED (Virtual-2 to +1000+0, screenshots show head 1 repeating head
 0's pixels from x=1000); `--gnome-overlap-allow` recorded {"agreed", "format":
 1, "how", "libmutter": "14", "libmutter_build": ..., "shell": "46.0",
@@ -54,7 +54,7 @@ import unittest
 # tests/conftest.py (which covers pytest) and tests/test_passthrough.py.
 # This line is what covers `python3 tests/<file>.py`, where conftest is
 # not loaded, and it reaches every subprocess a test spawns.
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
@@ -76,7 +76,7 @@ STATUS = gnome_overlap.STATUS_FLAG
 def wxrandr(*argv, env=None, timeout=120):
     """`python3 -m wxrandr ...` as a real process, against whatever session the
     environment describes."""
-    e = dict(os.environ, PYTHONPATH=ROOT, FUCKWAYLAND_PASSTHROUGH="never")
+    e = dict(os.environ, PYTHONPATH=ROOT, W11_PASSTHROUGH="never")
     e.update(env or {})
     return subprocess.run([sys.executable, "-m", "wxrandr"] + list(argv),
                           capture_output=True, text=True, env=e, timeout=timeout)
@@ -99,7 +99,7 @@ def shell_owns_its_name():
     if not os.environ.get("DBUS_SESSION_BUS_ADDRESS"):
         return False
     try:
-        from fwcommon.dbus_mini import Bus
+        from w11common.dbus_mini import Bus
         bus = Bus()
     except Exception:
         return False

@@ -888,7 +888,7 @@ def sh_function(path, name):
 # The state file is lines:
 #     schemas=org.gnome.shell org.gnome.desktop.interface
 #     org.gnome.shell/enabled-extensions=['a@b']
-#     loaded=fuckwayland-bridge@fuckwayland
+#     loaded=w11-bridge@w11
 # `schemas=` is what `gsettings list-schemas` prints (the check that decides
 # whether this is a GNOME session at all); a `loaded=` line is an extension the
 # running shell has seen, which is exactly what decides whether
@@ -928,7 +928,7 @@ has_schema() {
 items() {               # a GVariant array of strings -> one per line
     # printf with the newline, not without: sed keeps a missing final newline,
     # and a list whose last item had none used to be concatenated with the next
-    # one ("other@x" + "fuckwayland-bridge@fuckwayland" as a single uuid).
+    # one ("other@x" + "w11-bridge@w11" as a single uuid).
     printf '%s\n' "$1" | tr ',' '\n' | sed -n "s/.*'\([^']*\)'.*/\1/p"
 }
 
@@ -1261,8 +1261,8 @@ GJS_DIR = os.path.join(ROOT, "tests", "fixtures", "gjs")
 GJS_STUBS = os.path.join(GJS_DIR, "stubs")
 GJS_LOADER = os.path.join(GJS_DIR, "loader.mjs")
 
-BRIDGE_EXT = os.path.join(ROOT, "gnome", "fuckwayland-bridge@fuckwayland")
-OVERLAP_EXT = os.path.join(ROOT, "gnome", "fuckwayland-overlap@fuckwayland")
+BRIDGE_EXT = os.path.join(ROOT, "gnome", "w11-bridge@w11")
+OVERLAP_EXT = os.path.join(ROOT, "gnome", "w11-overlap@w11")
 
 skip_without_node = unittest.skipIf(NODE is None,
                                     "no node to run the GNOME extensions")
@@ -1440,7 +1440,7 @@ class FakeSway(UnixServer):
                      (`active: false`) covering the X screen
       GET_WORKSPACES the one workspace, with i3's 47-bit `id`
       GET_TREE       `get_tree_floating.json`: 47-bit con ids, `window` carrying the X id, no `app_id`, no
-                     `pid`, no `visible`, and the floated `fwsmoke` xterm (X id 8388621) wrapped
+                     `pid`, no `visible`, and the floated `w11smoke` xterm (X id 8388621) wrapped
                      `floating_con -> con`. Pass `tree=fixture_json("i3", "get_tree.json")` for the same
                      session with nothing floating.
       RUN_COMMAND    i3's 30-token parse error to any `output ...`, which is what every wxrandr apply died
@@ -1756,7 +1756,7 @@ class FakeWayfire(UnixServer):
 class leader_process:
     """A real process whose /proc/<pid>/comm is `name`, holding `env`.
 
-    fwcommon.session finds the X display and the X authority cookie by walking
+    w11common.session finds the X display and the X authority cookie by walking
     /proc for the session's leader -- SDDM writes /tmp/xauth_<random>, which is
     in nobody's runtime directory and is not ~/.Xauthority, so on Plasma X11
     the leader's own environ is the only thing that knows where the cookie is.
@@ -1817,7 +1817,7 @@ class leader_process:
 
     def environ(self):
         """/proc/<pid>/environ, parsed -- the environment at execve, which is
-        what fwcommon.session reads out of a session leader."""
+        what w11common.session reads out of a session leader."""
         try:
             with open("/proc/%d/environ" % self.pid, "rb") as f:
                 raw = f.read().decode("utf-8", "replace")

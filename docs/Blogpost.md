@@ -371,7 +371,7 @@ kills, became one module both of them call. Two copies of the Wayland to RandR
 transform table became one. Four display backends that each had their own shape grew
 the same six methods, so the session object holds one backend instead of four handles
 and six name tests. Everything more than one tool needed became a package,
-`fwcommon`, which is also why the single file builds of the display tools shrank by
+`w11common`, which is also why the single file builds of the display tools shrank by
 more than half.
 
 Seven fake Wayland servers became a marshaller library plus a server base: three of
@@ -472,5 +472,5 @@ why I am not happy about it either. But the four-line script works again, on GNO
 on KDE and on sway and on X11, and it does not know which. That was the entire
 requirement.
 
-The tools are at [github.com/antoniobianchi333/fuckwayland](https://github.com/antoniobianchi333/fuckwayland).
+The tools are at [github.com/zardus/w11](https://github.com/zardus/w11).
 [Technical.md](Technical.md) is where to start if you want to change something.

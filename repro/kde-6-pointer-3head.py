@@ -34,7 +34,7 @@ import dbus.mainloop.glib
 import dbus.service
 from gi.repository import GLib
 
-BUS_NAME = "org.fuckwayland.PtrOracle"
+BUS_NAME = "org.w11.PtrOracle"
 OBJ = "/oracle"
 
 dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)

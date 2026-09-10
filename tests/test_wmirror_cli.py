@@ -24,18 +24,18 @@ sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import wl_fake
-from fwcommon import distro
-from fwcommon.wayland_mini import WlConn
-from fwcommon import passthrough
-from fwcommon import session
-from fwcommon import procs
+from w11common import distro
+from w11common.wayland_mini import WlConn
+from w11common import passthrough
+from w11common import session
+from w11common import procs
 from wmirror import cli, core
 from wmirror import supervise
 from wxrandr import core as wxcore
 
 # The suite never hands a tool over to the real X11 one: see
 # tests/conftest.py (which covers pytest) and tests/test_passthrough.py.
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
 
 def out(name, enabled=True, x=0, y=0, w=1920, h=1080):
@@ -435,7 +435,7 @@ class Detection(Base):
                 self.assertEqual(core.missing_helper_lines()[1], line, fam)
 
     def test_an_x11_session_is_told_it_is_one(self):
-        from fwcommon import passthrough
+        from w11common import passthrough
         passthrough.reset_cache()
         self.addCleanup(passthrough.reset_cache)
         with mock.patch.object(passthrough, "session_kind",
@@ -449,7 +449,7 @@ class Detection(Base):
         X11 and a capture on GNOME/KDE are both things this toolbox does not do YET, and a user who reads
         `there is no route` stops looking -- so each line ends in the work that would close it and what that
         work costs, and none of them stops at what a compositor lacks."""
-        from fwcommon import passthrough
+        from w11common import passthrough
         passthrough.reset_cache()
         self.addCleanup(passthrough.reset_cache)
         with mock.patch.object(passthrough, "session_kind", return_value="x11"):
@@ -471,10 +471,10 @@ class Detection(Base):
         self.assertIn("not yet here", layout)
 
     def test_the_escape_hatch_does_not_decide_this(self):
-        """FUCKWAYLAND_PASSTHROUGH is about handing over to an X11 original,
+        """W11_PASSTHROUGH is about handing over to an X11 original,
         and wmirror has none -- it must not turn an X11 box into a Wayland
         one here (the reasoning warandr's randr.choose() uses)."""
-        from fwcommon import passthrough
+        from w11common import passthrough
         passthrough.reset_cache()
         self.addCleanup(passthrough.reset_cache)
         with mock.patch.object(passthrough, "session_kind") as sk:
@@ -828,7 +828,7 @@ class Separation(Base):
         """The feature is one new command. If a backend, the daemon or the
         GUI had to learn a new word for it, it went in the wrong place."""
         offenders = []
-        for pkg in ("fwcommon", "wdotool", "wxrandr", "warandr", "wwmctl",
+        for pkg in ("w11common", "wdotool", "wxrandr", "warandr", "wwmctl",
                     "wxprop"):
             base = os.path.join(ROOT, pkg)
             for name in sorted(os.listdir(base)):

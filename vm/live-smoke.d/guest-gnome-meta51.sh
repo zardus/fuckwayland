@@ -3,7 +3,7 @@
 #
 # On stonking-gnome (GNOME Shell 51.beta) the shipped extension declares
 # shell-version ["45".."50"], so the shell marks it OUT OF DATE and every window
-# tool prints "the fuckwayland bridge extension is marked out of date for this
+# tool prints "the w11 bridge extension is marked out of date for this
 # GNOME Shell"; with "51" appended and one reboot the bridge is ACTIVE and every
 # window/desktop/input/display operation works (measured 2026-09-08, fresh
 # instance, package route, nothing else touched).
@@ -12,7 +12,7 @@
 # .deb installed, inside a throw-away VM.  The repo's gnome/ is never touched by
 # anything in this directory: that decision is not a smoke run's to make.
 set -eu
-M=/usr/share/gnome-shell/extensions/fuckwayland-bridge@fuckwayland/metadata.json
+M=/usr/share/gnome-shell/extensions/w11-bridge@w11/metadata.json
 [ -f "$M" ] || { echo "no $M (is the package installed?)" >&2; exit 2; }
 python3 - "$M" "${1:?usage: guest-gnome-meta51.sh <shell-major>}" <<'PY'
 import json

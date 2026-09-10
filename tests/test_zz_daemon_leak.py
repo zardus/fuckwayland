@@ -34,7 +34,7 @@ from support import (compositor_pids, daemon_pids, daemon_runtime_dir,
 # tests/conftest.py (which covers pytest) and tests/test_passthrough.py.
 # This line is what covers `python3 tests/<file>.py`, where conftest is
 # not loaded, and it reaches every subprocess a test spawns.
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
 #: the name `wxrandr/gamma.py` gives the anonymous file it ships the ramp in
 #: (`os.memfd_create("wxrandr-gamma")`), which is what /proc/<pid>/fd calls it

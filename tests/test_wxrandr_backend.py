@@ -28,9 +28,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # tests/conftest.py (which covers pytest) and tests/test_passthrough.py.
 # This line is what covers `python3 tests/<file>.py`, where conftest is
 # not loaded, and it reaches every subprocess a test spawns.
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
-from fwcommon import dbus_mini, distro, passthrough, session
+from w11common import dbus_mini, distro, passthrough, session
 import wl_fake
 from support import env as support_env
 from test_dbus_mini import MockBus
@@ -923,7 +923,7 @@ class CinnamonProbe(unittest.TestCase):
         reference either way and CPython's refcounting would close the socket for us -- which would make the
         socket-count version of this test unable to fail.
 
-        The name patched is `wxrandr.mutter.Bus`, not `fwcommon.dbus_mini.Bus`: since 2026-09-09 the two
+        The name patched is `wxrandr.mutter.Bus`, not `w11common.dbus_mini.Bus`: since 2026-09-09 the two
         flavours share one probe (`mutter.probe(flavor=MUFFIN)`), which binds `Bus` at import time, and
         mutter.py is where the close now happens."""
         opened = []

@@ -6,7 +6,7 @@ should be a default desktop unless the example is about some other configuration
 
 | file | what it shows | head | length |
 |---|---|---|---|
-| `media/install-demo.gif` | `sudo apt install ./fuckwayland_0.4.0_all.deb`, the package's own post-install note, then the six tools answering `--version` | 0 | ~28 s |
+| `media/install-demo.gif` | `sudo apt install ./w11_0.4.0_all.deb`, the package's own post-install note, then the six tools answering `--version` | 0 | ~28 s |
 | `media/warandr-demo.gif` | warandr on a two head layout: the second monitor dragged under the first, Apply, a window sent down onto the monitor that is now below, then `warandr --save` and the script it wrote | 0 | ~32 s |
 | `media/wdotool-demo.gif` | wdotool and wwmctl on the same desktop: a window placed and sized, text typed into it, `wwmctl -l -G`, fullscreen on and off, pointer moved and clicked | 0 | ~34 s |
 
@@ -67,11 +67,11 @@ bridge extension is loaded:
 
 ```sh
 sh scripts/build-deb.sh
-vm/vmctl scp demo release/fuckwayland_0.4.0_all.deb demo:/home/test/
-vm/vmctl ssh demo -- 'chown test:test /home/test/fuckwayland_0.4.0_all.deb'
+vm/vmctl scp demo release/w11_0.4.0_all.deb demo:/home/test/
+vm/vmctl ssh demo -- 'chown test:test /home/test/w11_0.4.0_all.deb'
 
 # take 1, on a machine without the tools
-vm/vmctl ssh demo -- 'apt-get -qq purge -y fuckwayland'
+vm/vmctl ssh demo -- 'apt-get -qq purge -y w11'
 vm/demo/record.sh install 0 83 420
 vm/demo/encode.sh ~/vm-data/frames/install 0 12 960 media/install-demo.gif 3 340
 

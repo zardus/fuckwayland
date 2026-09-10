@@ -1,16 +1,16 @@
 #!/bin/sh
-# Build the fuckwayland rpms.  One command, from a clean clone, on Fedora 43
+# Build the w11 rpms.  One command, from a clean clone, on Fedora 43
 # or 44:
 #
 #     sh scripts/build-rpm.sh
 #
-# -> dist/fuckwayland-<version>-1.fc<n>.noarch.rpm and the two
-#    gnome-shell-extension-fuckwayland-{bridge,overlap} rpms beside it
+# -> dist/w11-<version>-1.fc<n>.noarch.rpm and the two
+#    gnome-shell-extension-w11-{bridge,overlap} rpms beside it
 #    (nothing is committed: unlike the .deb, an rpm is one file per Fedora
 #    release, so release/ carries none)
 #
 #   --no-deps     do not dnf anything; fail if a build tool is missing
-#   --lint        run rpmlint with packaging/rpm/fuckwayland.rpmlintrc
+#   --lint        run rpmlint with packaging/rpm/w11.rpmlintrc
 #   --keep        keep the scratch topdir under dist/rpmbuild
 #
 # build-deb.sh's option shape, and build-deb.sh's first gate: the version in
@@ -36,8 +36,8 @@ for a in "$@"; do
     esac
 done
 
-SPEC=packaging/rpm/fuckwayland.spec
-RPMLINTRC=packaging/rpm/fuckwayland.rpmlintrc
+SPEC=packaging/rpm/w11.spec
+RPMLINTRC=packaging/rpm/w11.rpmlintrc
 
 # --- the SPDX id, from a LICENSE file ----------------------------------------
 # HEAD 375d815 put a LICENSE at the root; its first line is
@@ -112,7 +112,7 @@ Edit $SPEC: set Version: to $pver and add a %changelog entry ending "- $pver-1".
 EOM
     exit 1
 fi
-echo "build-rpm.sh: building fuckwayland $pver"
+echo "build-rpm.sh: building w11 $pver"
 
 # --- the spec's licence tag, against the licence the tree ships --------------
 # The spec carries `License: BSD-2-Clause` and %files carries `%license
@@ -177,7 +177,7 @@ fi
 
 # --- the source tarball ------------------------------------------------------
 # git archive, so the tarball is a commit and not a developer's scratch state;
-# %autosetup unpacks fuckwayland-<version>/ and every path in %install is
+# %autosetup unpacks w11-<version>/ and every path in %install is
 # relative to it.
 top=$(pwd)/dist/rpmbuild
 rm -rf "$top"
@@ -185,12 +185,12 @@ mkdir -p "$top/SOURCES" "$top/SPECS" dist
 if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
     echo "build-rpm.sh: the tree is dirty; the tarball is HEAD, not what is on disk" >&2
 fi
-git archive --format=tar.gz --prefix="fuckwayland-$pver/" \
-    -o "$top/SOURCES/fuckwayland-$pver.tar.gz" HEAD
-cp "$SPEC" "$top/SPECS/fuckwayland.spec"
+git archive --format=tar.gz --prefix="w11-$pver/" \
+    -o "$top/SOURCES/w11-$pver.tar.gz" HEAD
+cp "$SPEC" "$top/SPECS/w11.spec"
 
 # --- build -------------------------------------------------------------------
-rpmbuild -bb --define "_topdir $top" "$top/SPECS/fuckwayland.spec"
+rpmbuild -bb --define "_topdir $top" "$top/SPECS/w11.spec"
 
 built=''
 for f in "$top"/RPMS/noarch/*.rpm; do
@@ -216,5 +216,5 @@ if [ "$CLEAN" = 1 ]; then
 fi
 
 echo
-echo "Install them with:  sudo dnf install ./dist/fuckwayland-$pver-*.rpm \\"
-echo "                        ./dist/gnome-shell-extension-fuckwayland-*.rpm"
+echo "Install them with:  sudo dnf install ./dist/w11-$pver-*.rpm \\"
+echo "                        ./dist/gnome-shell-extension-w11-*.rpm"

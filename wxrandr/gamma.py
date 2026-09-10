@@ -13,7 +13,7 @@ with the linear shortcut when gamma == 1 and brightness == 1.
 
 Holder liveness is tracked in the wxrandr state file as (pid, starttime) —
 starttime from /proc/pid/stat guards against pid reuse. The detaching, the
-status pipe and the /proc identity checks are fwcommon.procs, which is where
+status pipe and the /proc identity checks are w11common.procs, which is where
 that protocol lives for the whole tree."""
 
 import os
@@ -22,7 +22,7 @@ import struct
 import sys
 import time
 
-from fwcommon import procs
+from w11common import procs
 
 MANAGER = "zwlr_gamma_control_manager_v1"
 
@@ -138,8 +138,8 @@ def holder_main(output: str, brightness: float, gamma_rgb,
     emit("pid %d %s" % (os.getpid(), procs.proc_starttime(os.getpid()) or "?"))
 
     try:
-        from fwcommon import session
-        from fwcommon.wayland_mini import WlConn
+        from w11common import session
+        from w11common.wayland_mini import WlConn
         if wayland_socket is None:
             hit = session.find_wayland_socket()
             if hit is None:

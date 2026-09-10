@@ -2,7 +2,7 @@
 # layout-5, in the GNOME guest as user `test`:  $1 = before|after
 T=$1
 cd /home/test/$T || exit 2
-export PYTHONPATH=/home/test/$T FUCKWAYLAND_PASSTHROUGH=never
+export PYTHONPATH=/home/test/$T W11_PASSTHROUGH=never
 W="python3 -m wxrandr"
 echo "########## TREE=$T ##########"
 $W --output Virtual-1 --auto --pos 0x0 \

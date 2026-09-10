@@ -74,7 +74,7 @@ which is the shape `_send` catches. Hence: ONE connection and ONE pointer
 object for the life of anything held down.
 """
 
-from fwcommon.wayland_mini import now_ms as _now_ms, roundtrip
+from w11common.wayland_mini import now_ms as _now_ms, roundtrip
 
 MANAGER = "zwlr_virtual_pointer_manager_v1"
 # sway advertises v2; we bind v1 on purpose. The only thing v2 adds is `create_virtual_pointer_with_output`, and
@@ -152,8 +152,8 @@ class VirtualPointer:
              timeout: float = 2.0) -> "VirtualPointer":
         """Connect and create the pointer. Raises VptrError for every
         failure, including "this compositor does not have it"."""
-        from fwcommon import session
-        from fwcommon.wayland_mini import WlConn
+        from w11common import session
+        from w11common.wayland_mini import WlConn
 
         if socket_path is None:
             hit = session.find_wayland_socket()

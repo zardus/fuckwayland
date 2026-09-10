@@ -23,7 +23,7 @@ Selection (first match wins):
 5. ``xrandr``.
 
 warandr never hands its process over to the real tool (no ``execve``, see
-``fwcommon.passthrough``): it *chooses* which one to run and runs it as a
+``w11common.passthrough``): it *chooses* which one to run and runs it as a
 child, which is what makes the choice switchable while the window is open.
 """
 
@@ -34,7 +34,7 @@ import shutil
 import subprocess
 import sys
 
-from fwcommon import passthrough
+from w11common import passthrough
 
 from . import xrandr_parse
 from .model import Layout
@@ -81,7 +81,7 @@ OVERLAP_UNKNOWN = (True, "This backend has not been measured here; Apply "
 #: agreed to anything yet.
 OVERLAP_MUTTER_EXT = (
     True, "GNOME's Mutter refuses monitors that are not edge-adjacent, so "
-          "warandr places these through the fuckwayland-overlap extension "
+          "warandr places these through the w11-overlap extension "
           "instead; the layout is temporary and is gone at the next login.")
 
 #: what warandr adds to the Apply command line for an overlapping layout on
@@ -440,7 +440,7 @@ def choose(env=None, forced=None):
         argv = base
         wayland = any("wxrandr" in os.path.basename(a) for a in argv)
         source = "WARANDR_XRANDR"
-    # respect_override=False: $FUCKWAYLAND_PASSTHROUGH says what to do about *handing over to the original*, and
+    # respect_override=False: $W11_PASSTHROUGH says what to do about *handing over to the original*, and
     # warandr never hands over -- it only picks a command word. Honouring `never` here would answer "wayland" on
     # an X11 box and select wxrandr, i.e. break warandr for exactly the developers the variable is documented
     # for.

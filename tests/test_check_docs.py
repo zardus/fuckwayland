@@ -43,7 +43,7 @@ from unittest import mock
 # The suite never hands a tool over to the real X11 one: see tests/conftest.py
 # (which covers pytest) and tests/test_passthrough.py.  This line is what
 # covers `python3 tests/<file>.py`, where conftest is not loaded.
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
@@ -266,7 +266,7 @@ class CommentsAreNotCode(Harness):
         `options_in_code` walks a directory: a docstring and a comment naming
         `--not-a-real-option`, and nothing else."""
         import tempfile
-        tmp = tempfile.mkdtemp(prefix="fw-codeonly-")
+        tmp = tempfile.mkdtemp(prefix="w11-codeonly-")
         self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
         pkg = os.path.join(tmp, "wmirror")
         os.makedirs(pkg)

@@ -58,7 +58,7 @@ byte-parity oracles.
 
 ## GNOME
 
-On GNOME the compositor plane is the fuckwayland bridge
+On GNOME the compositor plane is the w11 bridge
 (`wdotool.backend_gnome.GnomeBackend`, `gnome/README.md`); wxprop uses its
 typed hooks — `views()`, `workspaces()`, `x_info()`, `events()`,
 `select_window()` — ahead of the sway tree path, which is unchanged.
@@ -105,7 +105,7 @@ typed hooks — `views()`, `workspaces()`, `x_info()`, `events()`,
 * **The X plane** is opened with the `DISPLAY`/`XAUTHORITY` the bridge
   reports (`x_info()`: gnome-shell's own, else Mutter's
   `$XDG_RUNTIME_DIR/.mutter-Xwaylandauth.*` cookie found by
-  `fwcommon.session`), which is what makes `ssh root@`, `sudo` and a GNOME
+  `w11common.session`), which is what makes `ssh root@`, `sudo` and a GNOME
   custom-shortcut process all work; `-display` still wins and then uses
   `$XAUTHORITY`/the session cookie. Mutter spawns Xwayland **on demand**,
   so wxprop connects only when an XWayland window is listed or an
@@ -175,7 +175,7 @@ typed hooks — `views()`, `workspaces()`, `x_info()`, `events()`,
   — when Xwayland is up, then exact title, then exact app id over the
   bridge's windows.
 * **Errors** are one line, exit 1: without the bridge, click-to-select
-  says `can't select a window: gnome backend: the fuckwayland bridge
+  says `can't select a window: gnome backend: the w11 bridge
   extension is not running in GNOME Shell; run gnome/install-bridge.sh …`,
   `-id N` for a window the X server does not have says `cannot look up
   window id # 0x…: gnome backend: …`, `-root` without Xwayland `cannot

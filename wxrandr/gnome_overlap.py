@@ -12,7 +12,7 @@ discards the whole file at every boot for ever.
 What is left is a GNOME Shell extension that loads a type description of its own
 for the symbols libmutter exports but does not introspect, and writes the new
 positions into the configuration object before asking Mutter to apply it.  That
-extension is `gnome/fuckwayland-overlap@fuckwayland`; this module is its client
+extension is `gnome/w11-overlap@w11`; this module is its client
 and its gatekeeper.  The dangerous half is 8 bytes per monitor written inside
 gnome-shell, and on Wayland a dead compositor is the whole session, so:
 
@@ -48,13 +48,13 @@ import re
 import textwrap
 import time
 
-from fwcommon.dbus_mini import Bus, DBusError
+from w11common.dbus_mini import Bus, DBusError
 
 FLAG = "--unsafe-gnome-overlap"
-UUID = "fuckwayland-overlap@fuckwayland"
-BUS_NAME = "org.fuckwayland.Overlap"
-OBJECT_PATH = "/org/fuckwayland/Overlap"
-IFACE = "org.fuckwayland.Overlap1"
+UUID = "w11-overlap@w11"
+BUS_NAME = "org.w11.Overlap"
+OBJECT_PATH = "/org/w11/Overlap"
+IFACE = "org.w11.Overlap1"
 SHELL_NAME = "org.gnome.Shell"
 SHELL_PATH = "/org/gnome/Shell"
 CALL_TIMEOUT = 30.0
@@ -64,7 +64,7 @@ CALL_TIMEOUT = 30.0
 #: and the only place in this file a version-specific fact lives.
 #:
 #: It is the same table as
-#: `gnome/fuckwayland-overlap@fuckwayland/generations.json`, which is what the
+#: `gnome/w11-overlap@w11/generations.json`, which is what the
 #: extension itself reads; `tests/test_overlap_force.py` proves the two
 #: identical, field for field, and names the file to fix when they are not.
 #: Two copies rather than one because the extension is installed into
@@ -84,7 +84,7 @@ GENERATIONS = (
      "libmutter": "14",
      "soname": "libmutter-14.so.0",
      "meta_typelib": "14",
-     "namespace": "FwOverlap14",
+     "namespace": "W11Overlap14",
      "struct_size": 72,
      "tail_slots": 1,
      "measured_on": "Ubuntu 24.04, GNOME Shell 46.0, mutter 46.0 and 46.2"},
@@ -92,7 +92,7 @@ GENERATIONS = (
      "libmutter": "18",
      "soname": "libmutter-18.so.0",
      "meta_typelib": "18",
-     "namespace": "FwOverlap18",
+     "namespace": "W11Overlap18",
      "struct_size": 80,
      "tail_slots": 3,
      "measured_on": "Ubuntu 26.04, GNOME Shell 50.1, mutter 50.1"},
@@ -100,7 +100,7 @@ GENERATIONS = (
      "libmutter": "51",
      "soname": "libmutter-51.so.0",
      "meta_typelib": "51",
-     "namespace": "FwOverlap51",
+     "namespace": "W11Overlap51",
      "struct_size": 80,
      "tail_slots": 3,
      "measured_on": "Ubuntu 26.10, GNOME Shell 51.beta, mutter 51~beta-1ubuntu2 "
@@ -136,7 +136,7 @@ INSTALL_HINT = (
 #: where a maintainer puts the answer, and what has to be run afterwards.  It is
 #: in the refusal itself because somebody meeting this for the first time is
 #: looking at a terminal, not at a document, and the document is one line down.
-TABLE_FILES = ("gnome/fuckwayland-overlap@fuckwayland/generations.json",
+TABLE_FILES = ("gnome/w11-overlap@w11/generations.json",
                "wxrandr/gnome_overlap.py  (GENERATIONS)")
 TABLE_DOC = 'docs/Technical.md section 6, "Adding a GNOME generation"'
 
@@ -592,7 +592,7 @@ class OverlapError(Exception):
 
 
 class Overlap:
-    """Client of org.fuckwayland.Overlap1.  Every call is a JSON string in and a
+    """Client of org.w11.Overlap1.  Every call is a JSON string in and a
     JSON string out; the extension answers with `ok: false` and a named check
     rather than a D-Bus error, so a refusal reads the same wherever it came
     from."""
@@ -742,7 +742,7 @@ def applied_text(reply, quiet=False):
 # what they agreed to, and withdrawing it has to be possible with `rm` from a
 # console when the session will not start.
 
-CONSENT_DIR = "fuckwayland"
+CONSENT_DIR = "w11"
 CONSENT_NAME = "overlap-consent.json"
 CONSENT_FORMAT = 1
 ALLOW_FLAG = "--gnome-overlap-allow"
@@ -751,8 +751,8 @@ STATUS_FLAG = "--gnome-overlap-status"
 
 
 def consent_path(env=None):
-    """`$XDG_CONFIG_HOME/fuckwayland/overlap-consent.json`, else
-    `~/.config/fuckwayland/overlap-consent.json`.
+    """`$XDG_CONFIG_HOME/w11/overlap-consent.json`, else
+    `~/.config/w11/overlap-consent.json`.
 
     Per user, never per system: it is the user's own session that a wrong offset
     ends, so root's answer must not stand in for anybody else's.  The XDG rule is

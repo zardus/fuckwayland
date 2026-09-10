@@ -1,6 +1,6 @@
 # take 1: the one command install, then the six tools answering their version
 ~ 1.4
-> sudo apt install ./fuckwayland_0.3.0_all.deb
+> sudo apt install ./w11_0.3.0_all.deb
 ? password for	4	test
 ? ontinue\?	4	Y
 @ \$ $ 180

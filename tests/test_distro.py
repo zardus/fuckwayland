@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""fwcommon/distro.py: which family this box is, and the install line that follows from it.
+"""w11common/distro.py: which family this box is, and the install line that follows from it.
 
 Every "install the original and I will hand over to it" message named a Debian package and `apt`, on every
 distribution, and three of the four families this project now ships for were measured being told something
@@ -28,9 +28,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # The suite never hands a tool over to the real X11 one: see tests/conftest.py
 # (which covers pytest) and tests/test_passthrough.py.
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
-from fwcommon import distro
+from w11common import distro
 
 #: os-release bodies, as the distributions themselves write them. Ubuntu and
 #: Rocky are here because neither says its own family in `ID`.
@@ -50,7 +50,7 @@ class Base(unittest.TestCase):
     """A planted /etc/os-release and a NixOS marker that is not there."""
 
     def setUp(self):
-        self.tmp = tempfile.mkdtemp(prefix="fw_distro_")
+        self.tmp = tempfile.mkdtemp(prefix="w11_distro_")
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         self.path = os.path.join(self.tmp, "os-release")
         self.marker = os.path.join(self.tmp, "NIXOS")
@@ -183,9 +183,9 @@ class Hints(Base):
                               distro.hint(what, family))
 
     def test_the_four_tool_names_are_the_ones_passthrough_already_prints(self):
-        """The Debian column is not a new opinion: it is `fwcommon/passthrough.py:_PACKAGE` copied, which is
+        """The Debian column is not a new opinion: it is `w11common/passthrough.py:_PACKAGE` copied, which is
         why the exit-127 line does not move on Debian when its consumer starts reading this table."""
-        from fwcommon import passthrough
+        from w11common import passthrough
         for tool, package in passthrough._PACKAGE.items():
             self.assertEqual(distro.package(tool, "debian"), package, tool)
 

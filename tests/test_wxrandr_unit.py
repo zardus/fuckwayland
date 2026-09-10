@@ -28,7 +28,7 @@ from wxrandr.core import (Mode, OutputState, Stanza, State,
 # tests/conftest.py (which covers pytest) and tests/test_passthrough.py.
 # This line is what covers `python3 tests/<file>.py`, where conftest is
 # not loaded, and it reaches every subprocess a test spawns.
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
 
 def run_cli(*argv):
@@ -898,7 +898,7 @@ class Rendering(unittest.TestCase):
         self.assertIn("\tBrightness: 1.0", lines)
 
     def test_verbose_gamma_reports_live_holder(self):
-        from fwcommon import procs
+        from w11common import procs
         st = mk_state()
         o = mk_output("H", 1280, 720)
         pid = os.getpid()

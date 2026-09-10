@@ -30,7 +30,7 @@ import unittest
 # The suite never hands a tool over to the real X11 one: see tests/conftest.py
 # (which covers pytest) and tests/test_passthrough.py.  This line is what
 # covers `python3 tests/<file>.py`, where conftest is not loaded.
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
@@ -192,12 +192,12 @@ class TheImagesAndTheContainers(unittest.TestCase):
                          ["24.04", "26.04", "26.10", "fedora44", "arch"])
 
     def test_every_container_names_a_distro_the_image_job_builds(self):
-        """A container image is `fuckwayland-ci:<distro>-<key>`; the distro is
+        """A container image is `w11-ci:<distro>-<key>`; the distro is
         either a literal or `${{ matrix.distro }}`/`${{ matrix.image }}`, and
         each of those matrices is checked here too."""
         built = set(re.findall(r"^          - distro: \"?([^\"\n]+)\"?$",
                                jobs()["image"], re.M))
-        literals = re.findall(r"fuckwayland-ci:([a-z0-9.]+)-\$\{\{", text())
+        literals = re.findall(r"w11-ci:([a-z0-9.]+)-\$\{\{", text())
         self.assertTrue(literals)
         for distro in literals:
             with self.subTest(distro):
@@ -236,7 +236,7 @@ class TheImagesAndTheContainers(unittest.TestCase):
         for name, distro in (("rpm", "fedora44"), ("pkgbuild", "arch"),
                              ("parity-arch", "arch")):
             with self.subTest(name):
-                self.assertIn("fuckwayland-ci:%s-" % distro, jobs()[name])
+                self.assertIn("w11-ci:%s-" % distro, jobs()[name])
 
 
 class ContinueOnError(unittest.TestCase):
@@ -310,11 +310,11 @@ class ThePackagingJobs(unittest.TestCase):
         scriptlet that edits a file it does not own shows up as a job."""
         rpm = jobs()["rpm-install"]
         self.assertIn('rpm -V "$p"', rpm)
-        for package in ("fuckwayland", "gnome-shell-extension-fuckwayland-bridge",
-                        "gnome-shell-extension-fuckwayland-overlap"):
+        for package in ("w11", "gnome-shell-extension-w11-bridge",
+                        "gnome-shell-extension-w11-overlap"):
             with self.subTest(package):
                 self.assertIn(package, rpm)
-        self.assertIn("pacman -Qkk fuckwayland", jobs()["pkgbuild"])
+        self.assertIn("pacman -Qkk w11", jobs()["pkgbuild"])
 
     def test_each_installer_lists_the_four_paths_the_package_owns(self):
         """The extension directory, the udev rule, the autostart entry and the
@@ -322,11 +322,11 @@ class ThePackagingJobs(unittest.TestCase):
         that differs: rpm puts it under %{_libexecdir}, and debian/rules and
         the PKGBUILD under /usr/lib."""
         common = ("/usr/share/gnome-shell/extensions/",
-                  "/usr/lib/udev/rules.d/60-fuckwayland-uinput.rules",
-                  "/etc/xdg/autostart/fuckwayland-enable-bridge.desktop")
-        for name, enabler in (("rpm-install", "/usr/libexec/fuckwayland/enable-bridge"),
-                              ("pkgbuild", "/usr/lib/fuckwayland/enable-bridge"),
-                              ("deb-install", "/usr/lib/fuckwayland/enable-bridge")):
+                  "/usr/lib/udev/rules.d/60-w11-uinput.rules",
+                  "/etc/xdg/autostart/w11-enable-bridge.desktop")
+        for name, enabler in (("rpm-install", "/usr/libexec/w11/enable-bridge"),
+                              ("pkgbuild", "/usr/lib/w11/enable-bridge"),
+                              ("deb-install", "/usr/lib/w11/enable-bridge")):
             block = jobs()[name]
             for path in common + (enabler,):
                 with self.subTest("%s: %s" % (name, path)):
@@ -353,10 +353,10 @@ class ThePackagingJobs(unittest.TestCase):
         self.assertIn("sh scripts/build-pkgbuild.sh --no-deps --lint", block)
 
     def test_the_nix_job_runs_the_live_half_of_test_flake(self):
-        """tests/test_flake.py skips its build cases unless FW_NIX_LIVE=1, so
+        """tests/test_flake.py skips its build cases unless W11_NIX_LIVE=1, so
         the job that has nix is the only place they ever run."""
         block = jobs()["nix"]
-        self.assertIn("FW_NIX_LIVE=1", block)
+        self.assertIn("W11_NIX_LIVE=1", block)
         self.assertIn("python3 tests/test_flake.py", block)
         self.assertIn("checks.x86_64-linux.nixos-sway", block)
 
@@ -445,7 +445,7 @@ class TheGoldenRepository(unittest.TestCase):
             script = fh.read()
         m = re.search(r"repo=\$\{GOLDEN_REPO:-(ghcr\.io)/\$owner/(\S+)\}", script)
         self.assertIsNotNone(m, "ci-golden.sh no longer defaults GOLDEN_REPO")
-        self.assertEqual(m.group(2), "fuckwayland-golden")
+        self.assertEqual(m.group(2), "w11-golden")
         self.assertIn("oras login %s" % m.group(1), jobs()["vm"])
 
     def test_the_rig_job_installs_oras_because_the_script_needs_it(self):

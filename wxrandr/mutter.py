@@ -1,4 +1,4 @@
-"""wxrandr GNOME backend: org.gnome.Mutter.DisplayConfig over fwcommon.dbus_mini.
+"""wxrandr GNOME backend: org.gnome.Mutter.DisplayConfig over w11common.dbus_mini.
 
 Mutter (gnome-shell's compositor) has no zwlr_output_management; its display
 API is the session-bus object /org/gnome/Mutter/DisplayConfig, callable by
@@ -62,8 +62,8 @@ Mapping to the wxrandr model (core.OutputState / core.Target):
 import collections
 import struct
 
-from fwcommon import session as wsession
-from fwcommon.dbus_mini import Bus, DBusError, Variant
+from w11common import session as wsession
+from w11common.dbus_mini import Bus, DBusError, Variant
 from wxrandr import core, gnome_overlap, monitors_xml
 from wxrandr.core import Fatal, Mode, OutputState, round_half_away, warn  # noqa: F401
 
@@ -335,7 +335,7 @@ def wl_output_info(sock_path: str | None = None) -> dict:
     which is what XWayland's RandR shows; reading it keeps the header/--listmonitors mm byte-identical. Never
     raises: {} when there is no reachable Wayland socket."""
     try:
-        from fwcommon.wayland_mini import WlConn
+        from w11common.wayland_mini import WlConn
         if sock_path is None:
             hit = wsession.find_wayland_socket()
             if hit is None:
@@ -845,11 +845,11 @@ class MutterOutputs:
         monitors all along.  Measured: `--gnome-overlap-status` on a GNOME-on-Xorg session answered
         `unavailable / shell: 46.0 / reason: the overlap extension is not running...`, pointing at an install
         that would change nothing [M recon2/gnome-xorg.md §4 item 7].  The session kind is asked the way
-        every other caller asks it, so `FUCKWAYLAND_PASSTHROUGH` still means what it means everywhere else.
+        every other caller asks it, so `W11_PASSTHROUGH` still means what it means everywhere else.
 
         The apply path is deliberately NOT given the x11 answer: `--unsafe-gnome-overlap` on an X11 session
-        is refused before the handover, in these same words, by fwcommon/passthrough.py's caller in cli.py."""
-        from fwcommon import passthrough
+        is refused before the handover, in these same words, by w11common/passthrough.py's caller in cli.py."""
+        from w11common import passthrough
         ov = gnome_overlap.Overlap(self.bus)
         version = ov.shell_version() if self.flavor is MUTTER else None
         why = gnome_overlap.not_gnome_reason(

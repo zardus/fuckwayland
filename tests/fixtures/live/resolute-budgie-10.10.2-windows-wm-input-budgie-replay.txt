@@ -1,10 +1,10 @@
 ### true
 ### rc=0
-### cp /tmp/fw-oracle.py $HOME/fw-oracle.py && chmod 0755 $HOME/fw-oracle.py
+### cp /tmp/w11-oracle.py $HOME/w11-oracle.py && chmod 0755 $HOME/w11-oracle.py
 ### rc=0
-### rm -f $HOME/fw-smoke.txt; touch $HOME/fw-smoke.txt
+### rm -f $HOME/w11-smoke.txt; touch $HOME/w11-smoke.txt
 ### rc=0
-### rm -f $HOME/fw-smoke.txt; setsid nohup foot -- sh -c 'cat >> $HOME/fw-smoke.txt'            >/dev/null 2>&1 </dev/null & sleep 3; true
+### rm -f $HOME/w11-smoke.txt; setsid nohup foot -- sh -c 'cat >> $HOME/w11-smoke.txt'            >/dev/null 2>&1 </dev/null & sleep 3; true
 ### rc=0
 ### wdotool search --class foot | head -1
 1000000
@@ -122,32 +122,32 @@ WM_CLASS(STRING) = "xterm", "XTerm"
 ### rc=0
 ### wdotool windowactivate --sync 1000000
 ### rc=0
-### wdotool key ctrl+u; : > $HOME/fw-smoke.txt
+### wdotool key ctrl+u; : > $HOME/w11-smoke.txt
 ### rc=0
 ### wdotool type --delay 30 -- 'us: yz@'
 ### rc=0
 ### wdotool key Return
 ### rc=0
-### cat $HOME/fw-smoke.txt 2>/dev/null
+### cat $HOME/w11-smoke.txt 2>/dev/null
 us: yz@
 ### rc=0
-### wdotool key ctrl+u; : > $HOME/fw-smoke.txt
+### wdotool key ctrl+u; : > $HOME/w11-smoke.txt
 ### rc=0
 ### wdotool type --delay 30 -- abc; wdotool key Return; wdotool type --delay 30 -- def
 ### rc=0
 ### wdotool key Return
 ### rc=0
-### cat $HOME/fw-smoke.txt 2>/dev/null
+### cat $HOME/w11-smoke.txt 2>/dev/null
 abc
 def
 ### rc=0
-### wdotool key ctrl+u; : > $HOME/fw-smoke.txt
+### wdotool key ctrl+u; : > $HOME/w11-smoke.txt
 ### rc=0
 ### wdotool --vkbd on type --delay 30 -- 'vkbd: yz@'
 ### rc=0
 ### wdotool key Return
 ### rc=0
-### cat $HOME/fw-smoke.txt 2>/dev/null
+### cat $HOME/w11-smoke.txt 2>/dev/null
 vkbd: yz@
 ### rc=0
 ### wdotool keys explain yz@ 2>&1
@@ -167,7 +167,7 @@ note: this layout is plain US: wdotool uses its built-in table and never reads t
     wdotool key 50+11                          (keycodes)
     wdotool type '@'                           (characters)
 ### rc=0
-### python3 $HOME/fw-oracle.py budgie
+### python3 $HOME/w11-oracle.py budgie
 Virtual-3 3840,0
 Virtual-2 1920,0
 Virtual-1 0,0
@@ -185,22 +185,22 @@ org.buddiesofbudgie.budgie-desktop-view       2666 org.buddiesofbu test :1.83   
 ### rc=0
 ### wxrandr --output Virtual-3 --below Virtual-2
 ### rc=0
-### python3 $HOME/fw-oracle.py budgie
+### python3 $HOME/w11-oracle.py budgie
 Virtual-3 1920,1080
 Virtual-2 1920,0
 Virtual-1 0,0
 ### rc=0
-### python3 $HOME/fw-oracle.py budgie
+### python3 $HOME/w11-oracle.py budgie
 Virtual-3 1920,1080
 Virtual-2 1920,0
 Virtual-1 0,0
 ### rc=0
-### python3 $HOME/fw-oracle.py budgie
+### python3 $HOME/w11-oracle.py budgie
 Virtual-3 1920,1080
 Virtual-2 1920,0
 Virtual-1 0,0
 ### rc=0
-### python3 $HOME/fw-oracle.py budgie
+### python3 $HOME/w11-oracle.py budgie
 Virtual-3 1920,1080
 Virtual-2 1920,0
 Virtual-1 0,0

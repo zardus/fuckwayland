@@ -1,0 +1,52 @@
+#!/bin/sh
+# Undo what the udev rule granted, once dpkg has taken the rule file away.
+#
+# This has to happen *after* removal, not in prerm: udev preserves permissions
+# and ACLs that no rule asks it to change, and its tags are sticky in its own
+# database, so a node re-triggered while 60-w11-uinput.rules is still
+# on disk simply gets the uaccess ACL back.  Dropping the node's database
+# entry and tag links makes udev start from scratch at the node's next event,
+# as after a boot, and the node goes back to the stock root:root 0600 with no
+# ACL.  Same sequence as `gnome/install-bridge.sh --udev --uninstall`.
+set -e
+
+case "$1" in
+remove)
+    # The package is going away, so the next install is a fresh start for this
+    # machine and postinst says its piece again.
+    rm -f "${DPKG_ROOT:-}/var/lib/w11/installed" 2>/dev/null || true
+    rmdir "${DPKG_ROOT:-}/var/lib/w11" 2>/dev/null || true
+
+    if [ -z "${DPKG_ROOT:-}" ] && [ -e /dev/uinput ]; then
+        if command -v udevadm >/dev/null 2>&1; then
+            udevadm control --reload-rules >/dev/null 2>&1 || true
+            rm -f /run/udev/static_node-tags/uaccess/uinput 2>/dev/null || true
+            maj=$(udevadm info -q property /dev/uinput 2>/dev/null | sed -n 's/^MAJOR=//p') || maj=
+            min=$(udevadm info -q property /dev/uinput 2>/dev/null | sed -n 's/^MINOR=//p') || min=
+            if [ -n "$maj" ] && [ -n "$min" ]; then
+                rm -f "/run/udev/data/c$maj:$min" /run/udev/tags/*/"c$maj:$min" 2>/dev/null || true
+            fi
+        fi
+        # The ACL entry has to go, not merely be masked by the 0600 below: the
+        # uaccess builtin only ever *adds* entries, so a left-over one would
+        # make a later reinstall a no-op and leave input broken.  setfacl is
+        # in the `acl` package, which is not on every desktop; python3 is a
+        # dependency of this package, so it is always here.
+        if command -v setfacl >/dev/null 2>&1; then
+            setfacl -b /dev/uinput 2>/dev/null || true
+        elif command -v python3 >/dev/null 2>&1; then
+            python3 -c 'import os; os.removexattr("/dev/uinput", "system.posix_acl_access")' \
+                2>/dev/null || true
+        fi
+        chown root:root /dev/uinput 2>/dev/null || true
+        chmod 0600 /dev/uinput 2>/dev/null || true
+    fi
+    ;;
+purge)
+    rm -f "${DPKG_ROOT:-}/var/lib/w11/installed" 2>/dev/null || true
+    rmdir "${DPKG_ROOT:-}/var/lib/w11" 2>/dev/null || true
+    ;;
+esac
+
+#DEBHELPER#
+exit 0

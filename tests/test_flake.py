@@ -7,7 +7,7 @@ symlinks and no `share/` at all.  `nix flake show` said so, `nix eval
 .#nixosModules` answered "does not provide attribute", and `nix flake check`
 printed "all checks passed!" after running zero tests [recon2/pkg-nix §1].
 Four separate claims in the tree were false against it: `nix run .` died
-(`unable to execute .../bin/fuckwayland`, no meta.mainProgram),
+(`unable to execute .../bin/w11`, no meta.mainProgram),
 scripts/parity-oracle.sh told the reader to `nix build .#xdotool` (no such
 attribute), the postInstall comment said "No --prefix PATH here" while the
 built wrapper's own makeCWrapper line prefixed PATH with six store bins, and
@@ -17,7 +17,7 @@ extension and no .desktop file in it.
 So most of this file is text over nix source, in the shape of
 tests/test_release_deb.py: the .deb's payload list is the specification, and
 every path in it has to be named by some nix output.  The half that needs a
-nix on the box is gated on FW_NIX_LIVE=1 (the `nix` CI job sets it): it builds
+nix on the box is gated on W11_NIX_LIVE=1 (the `nix` CI job sets it): it builds
 every package, counts the two bin/ directories, runs `nix run`, lists the
 checks, and provokes the module's one assertion.
 """
@@ -33,15 +33,15 @@ import unittest
 # The suite never hands a tool over to the real X11 one: see tests/conftest.py
 # (which covers pytest) and tests/test_passthrough.py.  This line is what
 # covers `python3 tests/<file>.py`, where conftest is not loaded.
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import fwcommon                                                   # noqa: E402
+import w11common                                                   # noqa: E402
 
-VERSION = fwcommon.VERSION
+VERSION = w11common.VERSION
 NIX = os.path.join(ROOT, "nix")
 FLAKE = os.path.join(ROOT, "flake.nix")
 MODULE = os.path.join(NIX, "module.nix")
@@ -52,13 +52,13 @@ PACKAGE = os.path.join(NIX, "package.nix")
 #: five shadow names collide with xdotool/xorg.xprop/xorg.xrandr/arandr in
 #: environment.systemPackages and the GTK stack is 330.9 MiB nobody using
 #: wdotool needs.
-PACKAGES = ("fuckwayland", "warandr", "gnome-bridge", "gnome-overlap",
+PACKAGES = ("w11", "warandr", "gnome-bridge", "gnome-overlap",
             "udev-rules", "x11-shadows")
 
 #: The six console scripts of pyproject.toml [project.scripts].
 TOOLS = ("wdotool", "wwmctl", "wxprop", "wxrandr", "warandr", "wmirror")
 
-#: What packages.fuckwayland ships of them: five.  `warandr` is removed in its
+#: What packages.w11 ships of them: five.  `warandr` is removed in its
 #: postInstall, because packages.warandr installs a bin/warandr of its own and
 #: two packages with the same name in bin/ collide -- silently in
 #: environment.systemPackages (buildEnv, ignoreCollisions = true, first one
@@ -138,15 +138,15 @@ class Outputs(unittest.TestCase):
         cls.flake = read(FLAKE)
 
     def test_every_package_is_declared_by_name(self):
-        """Declared and exported: `fuckwayland` and `warandr` are `let`
+        """Declared and exported: `w11` and `warandr` are `let`
         bindings (x11-shadows links into both), so a package can exist in the
         file and be in no attribute set."""
         pkg = read(PACKAGE)
         for name in PACKAGES:
             with self.subTest(name):
                 self.assertRegex(pkg, r"(?m)^\s*%s = " % re.escape(name))
-        self.assertRegex(pkg, r"(?m)^\s*inherit fuckwayland warandr;")
-        self.assertRegex(self.flake, r"default = fw\.fuckwayland;")
+        self.assertRegex(pkg, r"(?m)^\s*inherit w11 warandr;")
+        self.assertRegex(self.flake, r"default = w11pkgs\.w11;")
 
     def test_the_two_oracle_attributes_the_parity_script_names_exist(self):
         """scripts/parity-oracle.sh has documented `nix build .#xdotool` /
@@ -158,8 +158,8 @@ class Outputs(unittest.TestCase):
         named = set()
         # Every `.#attr` in the file, wherever it is written.  An earlier
         # version only read lines containing "nix build", with a second clause
-        # for a FW_ORACLE_PATH continuation line -- which was dead, because
-        # the FW_ORACLE_PATH line in that script contains "nix build" itself
+        # for a W11_ORACLE_PATH continuation line -- which was dead, because
+        # the W11_ORACLE_PATH line in that script contains "nix build" itself
         # and the first clause always fired.  A continuation line that names
         # a third attribute has to be read too.
         for line in script.splitlines():
@@ -175,7 +175,7 @@ class Outputs(unittest.TestCase):
     def test_the_two_installable_packages_share_no_path(self):
         """The split exists so that installing both cannot go wrong, and
         there are two ways they would have overlapped: bin/warandr, which
-        packages.fuckwayland removes, and the Python tree, which only ONE of
+        packages.w11 removes, and the Python tree, which only ONE of
         the two carries -- packages.warandr is a runCommand holding a symlink
         and a .desktop file, and the buildPythonApplication behind it
         (warandrApp) is not an output at all.  Live builds both and looks;
@@ -183,13 +183,13 @@ class Outputs(unittest.TestCase):
         pkg = read(PACKAGE)
         self.assertRegex(pkg, r'(?m)^\s*rm "\$out"/bin/warandr$')
         self.assertRegex(pkg, r'rm "\$out"/bin/wdotool "\$out"/bin/wwmctl')
-        self.assertRegex(pkg, r'(?m)^  warandr = runCommand "fuckwayland-warandr-\$\{version\}"')
+        self.assertRegex(pkg, r'(?m)^  warandr = runCommand "w11-warandr-\$\{version\}"')
 
     def test_the_license_is_the_one_in_the_license_file(self):
         """meta.license was lib.licenses.unfree while there was no LICENSE,
         which nix enforces by refusing to EVALUATE the package -- a
         nixosSystem carrying the module answered `Refusing to evaluate
-        package 'fuckwayland-0.4.0'`, so the flake carried an
+        package 'w11-0.4.0'`, so the flake carried an
         allowUnfreePredicate to get its own outputs back.  LICENSE exists
         now; both halves of that arrangement have to go together, and a
         package still marked unfree with no predicate would be a flake
@@ -229,10 +229,10 @@ class Outputs(unittest.TestCase):
                      "shadowOriginals", "wlMirror.enable"):
             with self.subTest(name):
                 self.assertRegex(module, r"(?m)^    %s = lib\.mk" % re.escape(name))
-        self.assertRegex(module, r"(?m)^\s*\+\+ lib\.optional cfg\.warandr\.enable fw\.warandr")
+        self.assertRegex(module, r"(?m)^\s*\+\+ lib\.optional cfg\.warandr\.enable w11pkgs\.warandr")
 
     def test_main_program_is_declared_so_nix_run_works(self):
-        """Without it `nix run .` looked for $out/bin/fuckwayland, which is
+        """Without it `nix run .` looked for $out/bin/w11, which is
         the pname and not a script: "unable to execute ...: No such file or
         directory" [recon2/pkg-nix §1 defect 1]."""
         self.assertRegex(read(PACKAGE), r'mainProgram = "wdotool";')
@@ -256,7 +256,7 @@ class Outputs(unittest.TestCase):
 class DebPayloadIsCovered(unittest.TestCase):
     """R20: the .deb <-> flake coherence gate this repo did not have.
 
-    debian/fuckwayland.install is the list of everything the Debian package
+    debian/w11.install is the list of everything the Debian package
     ships beyond the Python modules.  Not one of those paths was in the nix
     output: `find $out -maxdepth 4 -type d` named only site-packages, and
     there was no `share/` at all [recon2/pkg-nix §1].  A file added to the
@@ -265,7 +265,7 @@ class DebPayloadIsCovered(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.rows = []
-        for line in read(os.path.join(ROOT, "debian", "fuckwayland.install")).splitlines():
+        for line in read(os.path.join(ROOT, "debian", "w11.install")).splitlines():
             line = line.strip()
             if line and not line.startswith("#"):
                 cls.rows.append(line.split()[0])
@@ -296,14 +296,14 @@ class DebPayloadIsCovered(unittest.TestCase):
         and it is half of what makes /dev/uinput carry its ACL from the
         first login."""
         self.assertIn("modules-load-uinput.conf", self.pkg)
-        self.assertIn("lib/modules-load.d/fuckwayland-uinput.conf", self.pkg)
+        self.assertIn("lib/modules-load.d/w11-uinput.conf", self.pkg)
 
 
 class UdevRule(unittest.TestCase):
     """R20: one rule, one copy of it, and never nixpkgs' uinput module."""
 
     def test_the_rule_is_read_from_gnome_and_not_retyped(self):
-        self.assertIn('builtins.readFile (gnome "60-fuckwayland-uinput.rules")', read(PACKAGE))
+        self.assertIn('builtins.readFile (gnome "60-w11-uinput.rules")', read(PACKAGE))
 
     def test_the_rule_text_appears_in_no_nix_file(self):
         """The rule's comment IS the threat model, so a second copy under
@@ -340,8 +340,8 @@ class UdevRule(unittest.TestCase):
         packages.udev-rules puts the file exactly there.  Measured end to
         end on the GNOME guest: crw-rw----+ root root with user:alice:rw-
         and group::--- [recon2/pkg-nix §7]."""
-        self.assertRegex(read(MODULE), r"services\.udev\.packages = \[ fw\.udev-rules \];")
-        self.assertIn("lib/udev/rules.d/60-fuckwayland-uinput.rules", read(PACKAGE))
+        self.assertRegex(read(MODULE), r"services\.udev\.packages = \[ w11pkgs\.udev-rules \];")
+        self.assertIn("lib/udev/rules.d/60-w11-uinput.rules", read(PACKAGE))
 
 
 class HomeManagerModule(unittest.TestCase):
@@ -365,7 +365,7 @@ class HomeManagerModule(unittest.TestCase):
         extension at $out/share/gnome-shell/extensions/<id>, which is why
         the extension packages set that passthru [recon2/pkg-nix §3]."""
         self.assertRegex(self.code, r"(?m)^\s*programs\.gnome-shell\.extensions =")
-        self.assertIn("package = fw.gnome-bridge", self.code)
+        self.assertIn("package = w11pkgs.gnome-bridge", self.code)
         self.assertIn("passthru.extensionUuid", read(PACKAGE))
 
     def test_it_turns_the_gnome_shell_module_on_or_the_extension_is_inert(self):
@@ -376,8 +376,8 @@ class HomeManagerModule(unittest.TestCase):
         and gnomeBridge.enable = true: `programs.gnome-shell.enable` false,
         no `dconf.settings."org/gnome/shell"` at all, and a home.packages
         with no extension in it.  With the line: true,
-        `['fuckwayland-bridge@fuckwayland']`, and
-        fuckwayland-gnome-bridge-0.4.0 in home.packages.  A text test cannot
+        `['w11-bridge@w11']`, and
+        w11-gnome-bridge-0.4.0 in home.packages.  A text test cannot
         see any of that, which is why it pins the line itself."""
         self.assertRegex(self.code, r"(?m)^\s*programs\.gnome-shell\.enable = "
                                     r"lib\.mkIf cfg\.gnomeBridge\.enable")
@@ -397,13 +397,13 @@ class Live(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        if not os.environ.get("FW_NIX_LIVE"):
-            raise unittest.SkipTest("needs nix: set FW_NIX_LIVE=1")
+        if not os.environ.get("W11_NIX_LIVE"):
+            raise unittest.SkipTest("needs nix: set W11_NIX_LIVE=1")
         if not shutil.which("nix"):
-            raise unittest.SkipTest("FW_NIX_LIVE is set and there is no nix on PATH")
+            raise unittest.SkipTest("W11_NIX_LIVE is set and there is no nix on PATH")
         args = [flake_ref(p) for p in PACKAGES]
         r = nix("build", "--no-link", "--print-out-paths", *args)
-        # Not a skip: FW_NIX_LIVE is opt-in, and a build that fails on a box
+        # Not a skip: W11_NIX_LIVE is opt-in, and a build that fails on a box
         # that asked for the live half is the finding, not a reason to be
         # quiet.  The first version of this file skipped here and hid an
         # `unrecognised flag` for a whole run.
@@ -423,7 +423,7 @@ class Live(unittest.TestCase):
         `.NAME-wrapped` truncated to fifteen characters instead of a plain
         `pgrep -x name`: on NixOS the wrapper is what ends up in /proc/comm
         [recon2/nixos §6.1]."""
-        names = sorted(os.listdir(os.path.join(self.out["fuckwayland"], "bin")))
+        names = sorted(os.listdir(os.path.join(self.out["w11"], "bin")))
         self.assertEqual([n for n in names if not n.startswith(".")], sorted(CLI_TOOLS))
         self.assertEqual([n for n in names if n.startswith(".")],
                          sorted(".%s-wrapped" % t for t in CLI_TOOLS))
@@ -444,14 +444,14 @@ class Live(unittest.TestCase):
               p = flake.packages."x86_64-linux";
           in pkgs.buildEnv { name = "both"; paths = [ p.%s p.%s ]; }
         """
-        for first, second in (("fuckwayland", "warandr"), ("warandr", "fuckwayland")):
+        for first, second in (("w11", "warandr"), ("warandr", "w11")):
             with self.subTest("%s then %s" % (first, second)):
                 r = nix("build", "--impure", "--no-link", "--print-out-paths",
                         "--expr", expr % (flake_ref(), first, second))
                 self.assertEqual(r.returncode, 0, r.stderr[-2000:])
                 link = os.path.join(r.stdout.strip(), "bin", "warandr")
                 self.assertTrue(os.path.islink(link) or os.path.exists(link), link)
-                self.assertIn("-fuckwayland-warandr-", os.path.realpath(link))
+                self.assertIn("-w11-warandr-", os.path.realpath(link))
 
     def test_the_shadow_package_is_the_five_links_alone(self):
         binned = os.path.join(self.out["x11-shadows"], "bin")
@@ -464,7 +464,7 @@ class Live(unittest.TestCase):
 
     def test_the_gui_package_is_one_link_and_its_desktop_entry(self):
         """Two files, and no lib/ at all.  packages.warandr and
-        packages.fuckwayland are both installed on a machine that wants the
+        packages.w11 are both installed on a machine that wants the
         GUI, so every path either one owns is a path the other must not:
         bin/warandr is a link into the private GTK build, and the Python tree
         that build carries stays there rather than colliding with this
@@ -476,14 +476,14 @@ class Live(unittest.TestCase):
         link = os.path.join(out, "bin", "warandr")
         self.assertTrue(os.path.islink(link))
         target = os.path.realpath(link)
-        self.assertIn("-fuckwayland-warandr-app-", target)
+        self.assertIn("-w11-warandr-app-", target)
         self.assertTrue(os.path.exists(os.path.join(os.path.dirname(target), ".warandr-wrapped")))
         self.assertEqual(sorted(os.listdir(out)), ["bin", "share"])
         self.assertTrue(os.path.exists(os.path.join(out, "share/applications/warandr.desktop")))
 
     def test_the_extension_packages_are_where_gnome_shell_looks(self):
-        for pkg, uuid in (("gnome-bridge", "fuckwayland-bridge@fuckwayland"),
-                          ("gnome-overlap", "fuckwayland-overlap@fuckwayland")):
+        for pkg, uuid in (("gnome-bridge", "w11-bridge@w11"),
+                          ("gnome-overlap", "w11-overlap@w11")):
             with self.subTest(pkg):
                 d = os.path.join(self.out[pkg], "share/gnome-shell/extensions", uuid)
                 self.assertTrue(os.path.isdir(d), d)
@@ -491,17 +491,17 @@ class Live(unittest.TestCase):
 
     def test_the_udev_package_is_the_rule_and_the_modules_load_entry(self):
         out = self.out["udev-rules"]
-        rule = os.path.join(out, "lib/udev/rules.d/60-fuckwayland-uinput.rules")
+        rule = os.path.join(out, "lib/udev/rules.d/60-w11-uinput.rules")
         self.assertTrue(os.path.exists(rule))
-        self.assertEqual(read(rule), read(os.path.join(ROOT, "gnome", "60-fuckwayland-uinput.rules")))
-        self.assertTrue(os.path.exists(os.path.join(out, "lib/modules-load.d/fuckwayland-uinput.conf")))
+        self.assertEqual(read(rule), read(os.path.join(ROOT, "gnome", "60-w11-uinput.rules")))
+        self.assertTrue(os.path.exists(os.path.join(out, "lib/modules-load.d/w11-uinput.conf")))
 
     def test_nix_run_prints_the_clone_version(self):
         """`nix run .` died before meta.mainProgram existed.  With the
         escape hatch set it prints our own string; without it, it would hand
         over to whatever xdotool is on this box, which is the behaviour the
         recon measured (3.20160805.1 from /usr/bin) [recon2/pkg-nix §2a]."""
-        env = dict(os.environ, FUCKWAYLAND_PASSTHROUGH="never")
+        env = dict(os.environ, W11_PASSTHROUGH="never")
         r = nix("run", flake_ref(), "--", "--version", env=env)
         self.assertEqual(r.returncode, 0, r.stderr[-2000:])
         from wdotool import cli
@@ -558,7 +558,7 @@ class Live(unittest.TestCase):
               boot.loader.grub.device = "nodev";
               fileSystems."/" = { device = "/dev/vda1"; fsType = "ext4"; };
               system.stateVersion = "25.11";
-              programs.fuckwayland.enable = true;
+              programs.w11.enable = true;
               hardware.uinput.enable = %s;
             }) ];
           }).config.system.build.toplevel.drvPath

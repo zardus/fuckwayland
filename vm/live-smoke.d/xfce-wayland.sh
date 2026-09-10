@@ -30,7 +30,7 @@ SMOKE_PHASES="busrec install passthrough windows wm input display mirror root no
 #: Where the shims record a call.  The same path xfce.sh uses, on purpose: the two files are
 #: the two halves of one measurement and a reader comparing their logs should not have to
 #: translate a path.
-ARGV_LOG=/tmp/fw-argv.log
+ARGV_LOG=/tmp/w11-argv.log
 
 # xfce.sh's install_shims, re-stated rather than sourced.  Sourcing that file would also bring
 # its SMOKE_PHASES, its EDITOR_CLASS=xterm and its editor_start, every one of which is wrong
@@ -43,7 +43,7 @@ install_shims() {
     root 'for t in xdotool wmctrl xprop xrandr; do
             [ -x /usr/bin/$t ] || continue
             { echo "#!/bin/sh"
-              echo "echo \"$t:\$*\" >> /tmp/fw-argv.log"
+              echo "echo \"$t:\$*\" >> /tmp/w11-argv.log"
               echo "exec /usr/bin/$t \"\$@\""
             } > /usr/local/bin/$t
             chmod 0755 /usr/local/bin/$t
@@ -78,7 +78,7 @@ phase_passthrough() {
     want "wmirror --check finds a capture protocol rather than announcing an X11 session" \
          "capture: " "$(guest 'wmirror --check 2>&1' || true)"
     # Recorded, not asserted: the session leader's environment, which is where
-    # fwcommon/passthrough.py's session_kind() and vmctl's USER_WRAPPER both look.  Measured
+    # w11common/passthrough.py's session_kind() and vmctl's USER_WRAPPER both look.  Measured
     # in the recon on this very session: XDG_SESSION_TYPE=wayland, XDG_CURRENT_DESKTOP=XFCE,
     # DESKTOP_SESSION=xfce, WAYLAND_DISPLAY and DISPLAY set, and NO XAUTHORITY at all -- labwc
     # starts Xwayland without -auth, exactly as sway does [recon2/xfce-wayland 1].

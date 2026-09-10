@@ -3,7 +3,7 @@
 # the one shell generation between the rig's 46 and 50 that nothing in this project has ever
 # run.  GDM autologin, Mutter's DisplayConfig as the oracle, everything else as fedora44-gnome.
 #
-# On demand, and the honest expectation is a REFUSAL: gnome/fuckwayland-overlap@fuckwayland/
+# On demand, and the honest expectation is a REFUSAL: gnome/w11-overlap@w11/
 # generations.json carries records for 46, 50 and 51 and none for 49, and the extension refuses
 # any generation it has no measurement for.  That refusal is the thing worth seeing once per
 # release -- it is the difference between "the overlap route declines politely on an unmeasured

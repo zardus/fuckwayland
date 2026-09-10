@@ -7,24 +7,24 @@
 # the /dev/uinput grant is system state and does not.  Saying so in a module
 # `warnings` entry is the whole point of the file -- the alternative is a user
 # reaching for `gnome/install-bridge.sh --udev`, which writes
-# /etc/udev/rules.d/60-fuckwayland-uinput.rules and
-# /etc/modules-load.d/fuckwayland-uinput.conf (install-bridge.sh:35,37), both
+# /etc/udev/rules.d/60-w11-uinput.rules and
+# /etc/modules-load.d/w11-uinput.conf (install-bridge.sh:35,37), both
 # of which NixOS generates from the store [recon2/pkg-nix §3].
 { self }:
 { config, lib, pkgs, ... }:
 
 let
-  cfg = config.programs.fuckwayland;
-  fw = self.packages.${pkgs.stdenv.hostPlatform.system};
+  cfg = config.programs.w11;
+  w11pkgs = self.packages.${pkgs.stdenv.hostPlatform.system};
 in
 {
-  options.programs.fuckwayland = {
-    enable = lib.mkEnableOption "the fuckwayland tools in this user's profile";
+  options.programs.w11 = {
+    enable = lib.mkEnableOption "the w11 tools in this user's profile";
 
     package = lib.mkOption {
       type = lib.types.package;
-      default = fw.fuckwayland;
-      defaultText = lib.literalExpression "fuckwayland.packages.\${system}.fuckwayland";
+      default = w11pkgs.w11;
+      defaultText = lib.literalExpression "w11.packages.\${system}.w11";
       description = "The stdlib CLI package (the six tools, no GTK).";
     };
 
@@ -53,14 +53,14 @@ in
         option also turns {option}`programs.gnome-shell.enable` on with
         `mkDefault`.  Without that one line the entry below is inert, and
         inert silently: measured here on 2026-09-08 against home-manager
-        2c0350c and this flake, a configuration whose only fuckwayland
+        2c0350c and this flake, a configuration whose only w11
         settings were `enable` and `gnomeBridge.enable` evaluated to
         `programs.gnome-shell.enable = false`,
         `dconf.settings."org/gnome/shell"` absent, and a `home.packages`
-        holding `fuckwayland-0.4.0` and no extension at all.  With it, the
+        holding `w11-0.4.0` and no extension at all.  With it, the
         same configuration answers `true`,
-        `['fuckwayland-bridge@fuckwayland']` and a `home.packages` that has
-        `fuckwayland-gnome-bridge-0.4.0` in it.
+        `['w11-bridge@w11']` and a `home.packages` that has
+        `w11-gnome-bridge-0.4.0` in it.
       '';
     };
 
@@ -74,7 +74,7 @@ in
   config = lib.mkIf cfg.enable {
     home.packages =
       [ cfg.package ]
-      ++ lib.optional cfg.warandr.enable fw.warandr
+      ++ lib.optional cfg.warandr.enable w11pkgs.warandr
       ++ lib.optional cfg.wlMirror.enable pkgs.wl-mirror;
 
     # mkDefault, and mkIf on the option and not on the value: a user who has
@@ -82,7 +82,7 @@ in
     # gets the module that reads the line below.
     programs.gnome-shell.enable = lib.mkIf cfg.gnomeBridge.enable (lib.mkDefault true);
     programs.gnome-shell.extensions =
-      lib.optional cfg.gnomeBridge.enable { package = fw.gnome-bridge; };
+      lib.optional cfg.gnomeBridge.enable { package = w11pkgs.gnome-bridge; };
 
     # Not an error and not silence: the input half of wdotool works on the
     # wlroots family with no grant at all (it falls back to the compositor's
@@ -94,7 +94,7 @@ in
       NixOS and the rule that changes that is system state.  On GNOME or KDE,
       wdotool's key/type/click commands will run as root or not at all until
       the NixOS module is used instead
-      (programs.fuckwayland.enable = true, which sets uinput.enable by
+      (programs.w11.enable = true, which sets uinput.enable by
       default).  On sway, Hyprland, labwc, river, Wayfire and COSMIC nothing
       is needed: the tools inject through the compositor's virtual-input
       protocols.  gnome/install-bridge.sh --udev is not a way around this --

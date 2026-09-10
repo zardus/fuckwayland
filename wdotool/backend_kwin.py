@@ -7,9 +7,9 @@ the session bus may push JavaScript into KWin. The script (wdotool.kwin_js)
 cannot register a D-Bus object or return a value, so it answers with the JS
 global callDBus() to a name *we* own:
 
-    name  org.fuckwayland.KWin   path /org/fuckwayland/KWin
-    iface org.fuckwayland.KWin1  members Result(s token, s json),
-                                         Event(s token, s uuid, s change)
+    name  org.w11.KWin   path /org/w11/KWin
+    iface org.w11.KWin1  members Result(s token, s json),
+                                Event(s token, s uuid, s change)
 
 Wire sequence per command (four round trips, one temp file):
 
@@ -72,10 +72,10 @@ import struct
 import tempfile
 import time
 
-from fwcommon import session
-from fwcommon.dbus_mini import (ERR, METHOD_CALL, NAME_FLAG_DO_NOT_QUEUE,
-                                NO_REPLY_EXPECTED, Bus, DBusError, no_bus_text)
-from fwcommon.errors import CmdError
+from w11common import session
+from w11common.dbus_mini import (ERR, METHOD_CALL, NAME_FLAG_DO_NOT_QUEUE,
+                                 NO_REPLY_EXPECTED, Bus, DBusError, no_bus_text)
+from w11common.errors import CmdError
 from wdotool import kwin_js
 from wdotool.backend import ID_BASE as _ID_BASE, ID_MASK as _ID_MASK, ID_SALT_STEP
 from wdotool.backend import View, Window, WindowBackend, Workspace, warn as _warn
@@ -93,10 +93,10 @@ SCRIPT_IFACE = "org.kde.kwin.Script"
 VD_PATH = "/VirtualDesktopManager"
 VD_IFACE = "org.kde.KWin.VirtualDesktopManager"
 
-BUS_NAME = "org.fuckwayland.KWin"
-EVENTS_NAME = "org.fuckwayland.KWin.Events"
-OBJECT_PATH = "/org/fuckwayland/KWin"
-IFACE = "org.fuckwayland.KWin1"
+BUS_NAME = "org.w11.KWin"
+EVENTS_NAME = "org.w11.KWin.Events"
+OBJECT_PATH = "/org/w11/KWin"
+IFACE = "org.w11.KWin1"
 
 CALL_TIMEOUT = 10.0             # plain KWin D-Bus calls answer in milliseconds
 SCRIPT_TIMEOUT = 10.0           # load + run + the script's own reply

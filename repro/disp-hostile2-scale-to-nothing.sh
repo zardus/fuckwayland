@@ -2,7 +2,7 @@
 # hostile-2 reproducer: a --scale that truncates the logical size to 0 must be
 # refused before anything is sent (the Screen line advertises a 16x16 minimum).
 cd "$(dirname "$0")/.." || exit 1
-export FUCKWAYLAND_PASSTHROUGH=never PYTHONPATH=$PWD
+export W11_PASSTHROUGH=never PYTHONPATH=$PWD
 rm -f /tmp/fakewl-minsize.sock
 setsid python3 tests/fixtures/fake_wlr.py /tmp/fakewl-minsize.sock normal </dev/null >/dev/null 2>&1 &
 sleep 1

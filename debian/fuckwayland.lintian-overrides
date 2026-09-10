@@ -1,6 +1,0 @@
-# 60-fuckwayland-uinput.rules matches a kernel misc device by name
-# (KERNEL=="uinput", SUBSYSTEM=="misc") to tag it `uaccess`.  It does not match
-# a piece of hardware, so there is no modalias for an AppStream <provides> to
-# name, and no software-centre "plug this in and we offer you a package"
-# story to support.  The check is aimed at rules that match USB/PCI ids.
-fuckwayland: appstream-metadata-missing-modalias-provide

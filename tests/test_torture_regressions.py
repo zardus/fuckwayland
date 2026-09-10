@@ -16,7 +16,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from fwcommon.errors import CmdError
+from w11common.errors import CmdError
 from support import RecorderDev
 from wdotool import cli, daemon, input_cmds, keymap, uinput
 from wdotool.ctx import Context
@@ -25,7 +25,7 @@ from wdotool.ctx import Context
 # tests/conftest.py (which covers pytest) and tests/test_passthrough.py.
 # This line is what covers `python3 tests/<file>.py`, where conftest is
 # not loaded, and it reaches every subprocess a test spawns.
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
 # B13: the injection tests pin the *fixed US table* as the source of
 # keycodes. Without this a developer running the suite inside a German or

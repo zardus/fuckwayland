@@ -1,0 +1,11 @@
+gnome/60-w11-uinput.rules                   usr/lib/udev/rules.d
+gnome/w11-bridge@w11/extension.js           usr/share/gnome-shell/extensions/w11-bridge@w11
+gnome/w11-bridge@w11/metadata.json          usr/share/gnome-shell/extensions/w11-bridge@w11
+gnome/w11-bridge@w11/org.w11.Bridge1.xml    usr/share/gnome-shell/extensions/w11-bridge@w11
+gnome/w11-overlap@w11/extension.js          usr/share/gnome-shell/extensions/w11-overlap@w11
+gnome/w11-overlap@w11/metadata.json         usr/share/gnome-shell/extensions/w11-overlap@w11
+gnome/w11-overlap@w11/rules.js              usr/share/gnome-shell/extensions/w11-overlap@w11
+gnome/w11-overlap@w11/org.w11.Overlap1.xml  usr/share/gnome-shell/extensions/w11-overlap@w11
+gnome/w11-overlap@w11/generations.json      usr/share/gnome-shell/extensions/w11-overlap@w11
+warandr.desktop                             usr/share/applications
+gnome/w11-overlap@w11/typelib/*             usr/share/gnome-shell/extensions/w11-overlap@w11/typelib

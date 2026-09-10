@@ -19,7 +19,7 @@
 set -u
 
 MX="${XDG_CONFIG_HOME:-$HOME/.config}/monitors.xml"
-BR='--session -d org.fuckwayland.Bridge -o /org/fuckwayland/Bridge -m org.fuckwayland.Bridge1'
+BR='--session -d org.w11.Bridge -o /org/w11/Bridge -m org.w11.Bridge1'
 
 q() { wxrandr --query 2>/dev/null; }
 # `<name> connected [primary] <W>x<H>+<X>+<Y> (...)`: the geometry field.

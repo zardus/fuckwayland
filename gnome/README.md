@@ -1,6 +1,6 @@
-# fuckwayland bridge — the GNOME Shell extension
+# w11 bridge — the GNOME Shell extension
 
-`fuckwayland-bridge@fuckwayland` is a small GNOME Shell extension that exports
+`w11-bridge@w11` is a small GNOME Shell extension that exports
 Mutter's window, workspace and monitor state — and the actions on them — over
 the session D-Bus. It is what lets `wdotool`, `wwmctl` and `wxprop` work on a
 stock GNOME Wayland session (Ubuntu 24.04 / GNOME 46 and Ubuntu 26.04 / GNOME
@@ -30,13 +30,13 @@ spawns on the hot path.
 
 ```
 gnome/
-  fuckwayland-bridge@fuckwayland/
+  w11-bridge@w11/
     metadata.json                 uuid, and the shell-version list, written by hand
                                   (45 to 51 today; the other extension's is generated)
     extension.js                  the extension (ESM)
-    org.fuckwayland.Bridge1.xml   introspection XML (also embedded in extension.js)
+    org.w11.Bridge1.xml   introspection XML (also embedded in extension.js)
   install-bridge.sh               POSIX sh installer / checker / uninstaller (+ --udev)
-  60-fuckwayland-uinput.rules     udev rule: /dev/uinput for the active seat user (uaccess)
+  60-w11-uinput.rules     udev rule: /dev/uinput for the active seat user (uaccess)
   modules-load-uinput.conf        loads uinput at boot (installed with the rule)
   README.md                       this file
 ```
@@ -50,7 +50,7 @@ interface; every backend method maps to one call) and
 ```sh
 sh gnome/install-bridge.sh            # ~/.local/share/gnome-shell/extensions/<uuid>
 sh gnome/install-bridge.sh --system   # /usr/share/gnome-shell/extensions/<uuid> (sudo)
-sh gnome/install-bridge.sh --check    # is it loaded? is org.fuckwayland.Bridge owned? udev rule?
+sh gnome/install-bridge.sh --check    # is it loaded? is org.w11.Bridge owned? udev rule?
 sh gnome/install-bridge.sh --uninstall
 sudo sh gnome/install-bridge.sh --udev  # /dev/uinput for the logged-in user (see below)
 ```
@@ -110,15 +110,15 @@ so a stale bridge only differs on the toggle. Reinstall and log back in to get
 the whole fix.
 
 Debugging: `journalctl --user -f -o cat _COMM=gnome-shell | grep -i
-fuckwayland`. Enable/disable, bus-name changes and unexpected (`.Failed`)
+w11`. Enable/disable, bus-name changes and unexpected (`.Failed`)
 errors are logged at message level and always show up; expected errors
 (`NotFound`, `InvalidArgs`, `Unsupported`) and per-call tracing are at debug
 level and need `G_MESSAGES_DEBUG=all` in the shell's environment. `--check`
 prints the extension state and any load error.
 
-## The other extension: fuckwayland-overlap
+## The other extension: w11-overlap
 
-`fuckwayland-overlap@fuckwayland` is a **second** extension in this directory, and it
+`w11-overlap@w11` is a **second** extension in this directory, and it
 is not the one above. Everything above is the bridge: feature-detected JavaScript
 against public API, six Shell versions, needed by `wdotool`, `wwmctl` and `wxprop`,
 safe to install and forget. The overlap extension is a different kind of thing and is
@@ -127,8 +127,8 @@ kept apart from it on purpose — its own uuid, its own installer
 carries its files, and carries nothing that turns it on: no autostart entry enables it
 the way one enables the bridge, so on a machine installed from the .deb it sits in
 `/usr/share/gnome-shell/extensions` doing nothing until somebody enables it by hand
-(`gnome-extensions enable fuckwayland-overlap@fuckwayland`, then log out and back in).
-Nobody gets this one by accident, and nothing else in fuckwayland needs it.
+(`gnome-extensions enable w11-overlap@w11`, then log out and back in).
+Nobody gets this one by accident, and nothing else in w11 needs it.
 
 Why separate, in one line each:
 
@@ -152,7 +152,7 @@ then asks Mutter to apply the result.
 
 ```
 gnome/
-  fuckwayland-overlap@fuckwayland/
+  w11-overlap@w11/
     generations.json              THE TABLE: one record per measured GNOME, holding
                                   the soname, the Meta typelib version, the
                                   namespace, the struct size and where it was
@@ -162,11 +162,11 @@ gnome/
     extension.js                  the guards, the bounded reader, the write
     rules.js                      the pure decisions (no gi: node can run it, and the
                                   tests do)
-    org.fuckwayland.Overlap1.xml  Probe / ApplyOverlap, JSON in, JSON out
-    typelib/FwOverlap14-1.0.typelib   the description for libmutter 14 (GNOME 46)
-    typelib/FwOverlap18-1.0.typelib   ... for libmutter 18 (GNOME 50)
-    typelib/FwOverlap51-1.0.typelib   ... and for libmutter 51 (GNOME 51), which is
-                                      mutter 18's layout under a new soname
+    org.w11.Overlap1.xml          Probe / ApplyOverlap, JSON in, JSON out
+    typelib/W11Overlap14-1.0.typelib   the description for libmutter 14 (GNOME 46)
+    typelib/W11Overlap18-1.0.typelib   ... for libmutter 18 (GNOME 50)
+    typelib/W11Overlap51-1.0.typelib   ... and for libmutter 51 (GNOME 51), which is
+                                       mutter 18's layout under a new soname
   overlap-typelib/gen-gir.py      reads the table and writes all three of those:
                                   the .gir, the .typelib and metadata.json.
                                   `--check` proves none of them has gone stale
@@ -210,8 +210,8 @@ sh gnome/install-overlap.sh --uninstall
 measured on: it runs every guard against the running libmutter and changes nothing the
 session can see, the only write anywhere being the sentinel into a throwaway
 configuration object of the extension's own making. On
-a stock 26.04 it says `FwOverlap18, MetaMonitorsConfig 80 bytes as declared`, on
-24.04 `FwOverlap14 … 72 bytes`, and on 26.10 `FwOverlap51 … 80 bytes` — GNOME 51 keeps
+a stock 26.04 it says `W11Overlap18, MetaMonitorsConfig 80 bytes as declared`, on
+24.04 `W11Overlap14 … 72 bytes`, and on 26.10 `W11Overlap51 … 80 bytes` — GNOME 51 keeps
 mutter 18's private layout under a library called something else entirely. On a GNOME
 that is in none of those records it says `OUT_OF_DATE` until the installer has been run
 once on that build, because gnome-shell will not load an extension whose
@@ -240,11 +240,11 @@ does inside a stable release: with it, the first overlapping run after such an u
 says which build replaced which and asks in full again next time.
 
 To get rid of it from a text console, when there is no desktop to do it from:
-`gnome-extensions disable fuckwayland-overlap@fuckwayland` works from a real login
+`gnome-extensions disable w11-overlap@w11` works from a real login
 (one with `XDG_RUNTIME_DIR`), but in a bare shell with no session bus it prints
 `dconf-WARNING … failed to commit` and exits **0 having changed nothing** — measured,
 and a `gnome-extensions` behaviour rather than something this project can fix. Deleting
-`~/.local/share/gnome-shell/extensions/fuckwayland-overlap@fuckwayland` always works,
+`~/.local/share/gnome-shell/extensions/w11-overlap@w11` always works,
 which is why the tool prints that too.
 
 It cannot write `~/.config/monitors.xml`: its type description does not name Mutter's
@@ -283,7 +283,7 @@ If you do not want any process on the bus to have this power, do not install
 the extension — there is no partial mode.
 
 **The overlap extension is a second grant, and a narrower one.** Installing
-`fuckwayland-overlap` puts `org.fuckwayland.Overlap` on the same session bus, so any
+`w11-overlap` puts `org.w11.Overlap` on the same session bus, so any
 process that can reach the bus can ask it to move the logical monitors around and, in
 doing so, to run its write. What that caller cannot do bounds the damage: it names
 connectors and positions and nothing else, never an address (every address comes from
@@ -298,15 +298,15 @@ step precisely so that this grant is a second decision.
 
 ## The interface
 
-Bus name `org.fuckwayland.Bridge` (the object also answers to
+Bus name `org.w11.Bridge` (the object also answers to
 `org.gnome.Shell`, because it lives on gnome-shell's own connection), object
-path `/org/fuckwayland/Bridge`, interface `org.fuckwayland.Bridge1`.
+path `/org/w11/Bridge`, interface `org.w11.Bridge1`.
 Structured results are JSON strings; every method is wrapped so a broken call
 returns a D-Bus error instead of taking the shell down.
 
 ```sh
-gdbus call --session --dest org.fuckwayland.Bridge --object-path /org/fuckwayland/Bridge \
-  --method org.fuckwayland.Bridge1.ListWindows | python3 -c 'import ast,json,sys; print(json.dumps(json.loads(ast.literal_eval(sys.stdin.read())[0]), indent=1))'
+gdbus call --session --dest org.w11.Bridge --object-path /org/w11/Bridge \
+  --method org.w11.Bridge1.ListWindows | python3 -c 'import ast,json,sys; print(json.dumps(json.loads(ast.literal_eval(sys.stdin.read())[0]), indent=1))'
 ```
 
 ### Windows
@@ -385,7 +385,7 @@ stable_sequence    get_stable_sequence() (creation counter)
   (position or size), `urgent`, `workspace` (also when stickiness changes),
   plus `minimized`.
 * Signal `WorkspaceEvent(s change)`: `switch`, `add`, `remove`.
-* Errors: `org.fuckwayland.Bridge1.NotFound` (bad window/workspace id),
+* Errors: `org.w11.Bridge1.NotFound` (bad window/workspace id),
   `.Unsupported`, `.InvalidArgs`, `.Failed` (anything else, message included).
 
 ## Verified live
@@ -420,7 +420,7 @@ at y=32), `ListMonitors.connector = "Virtual-1"` (the `get_monitors()` +
 and the installer under sudo-rs. Extra checks there: 200 `ListWindows` calls
 take 0.21 s wall in total (~1 ms each) with gnome-shell at 366 MB RSS;
 **lock screen**: `loginctl lock-session` → the journal shows `disabled` and
-`org.fuckwayland.Bridge` is gone (the tools say "bridge is unavailable while
+`org.w11.Bridge` is gone (the tools say "bridge is unavailable while
 GNOME Shell is in 'unlock-dialog' mode"), unlock → `enabled`/`acquired` again
 within a second; **`--try-unsafe`**: after `--uninstall` + reboot (shell has
 never seen the uuid), `WDOTOOL=... sh gnome/install-bridge.sh --try-unsafe`
@@ -832,9 +832,9 @@ sudo sh gnome/install-bridge.sh --udev --uninstall
 sh gnome/install-bridge.sh --check                 # ...also prints the rule/driver/ACL state
 ```
 
-`--udev` copies `gnome/60-fuckwayland-uinput.rules` to `/etc/udev/rules.d/`
+`--udev` copies `gnome/60-w11-uinput.rules` to `/etc/udev/rules.d/`
 and `gnome/modules-load-uinput.conf` to
-`/etc/modules-load.d/fuckwayland-uinput.conf`, runs `modprobe uinput`,
+`/etc/modules-load.d/w11-uinput.conf`, runs `modprobe uinput`,
 `udevadm control --reload` and `udevadm trigger --name-match=uinput`:
 
 ```

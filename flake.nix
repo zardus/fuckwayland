@@ -1,5 +1,5 @@
 {
-  description = "fuckwayland - the X11 power tools (xdotool, wmctrl, xprop, xrandr) as drop-in clones for Wayland";
+  description = "w11 - the X11 power tools (xdotool, wmctrl, xprop, xrandr) as drop-in clones for Wayland";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
@@ -12,7 +12,7 @@
       # `allowUnfreePredicate` here for as long as meta.license was
       # lib.licenses.unfree, and it had to be: nix refuses to EVALUATE an
       # unfree package, so a nixosSystem carrying the module answered
-      # `Refusing to evaluate package 'fuckwayland-0.4.0' ... because it has
+      # `Refusing to evaluate package 'w11-0.4.0' ... because it has
       # an unfree license` and nothing built.  LICENSE exists now
       # (BSD-2-Clause, SPDX line first), meta.license is lib.licenses.bsd2,
       # and a consumer needs no nixpkgs config at all to use this flake.
@@ -32,7 +32,7 @@
           # `overrideDerivation` to whatever it returns, and this returns a
           # plain attrset of packages, so those two would show up in
           # `nix flake show` as outputs that are not packages.
-          fw = import ./nix/package.nix {
+          w11pkgs = import ./nix/package.nix {
             inherit (pkgs)
               lib runCommand writeText python3Packages gobject-introspection
               wrapGAppsHook3 gsettings-desktop-schemas gtk3;
@@ -40,8 +40,8 @@
             inherit version;
           };
         in
-        fw // {
-          default = fw.fuckwayland;
+        w11pkgs // {
+          default = w11pkgs.w11;
 
           # scripts/parity-oracle.sh has told the reader to build the oracles
           # with `nix build .#xdotool` / `.#wmctrl` since it was written, and
@@ -57,7 +57,7 @@
         });
 
       # `{ self }` rather than the packages themselves: a consumer whose flake
-      # sets `inputs.fuckwayland.inputs.nixpkgs.follows` gets the module built
+      # sets `inputs.w11.inputs.nixpkgs.follows` gets the module built
       # against THEIR nixpkgs, because self.packages is evaluated at their
       # system's attribute.  Both live NixOS releases (25.11 and 26.05) build
       # `.#default` unchanged, measured with --override-input [recon2/nixos].

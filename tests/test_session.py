@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""fwcommon/session.py over a temporary /run/user.
+"""w11common/session.py over a temporary /run/user.
 
 Every tool starts by answering "which graphical session am I aimed at?", and
 session.py answers it by walking /run/user. That walk was only ever exercised
@@ -34,8 +34,8 @@ sys.path.insert(0, ROOT)
 # repository root on sys.path (SuiteGuard in tests/test_passthrough.py).
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from fwcommon import session
-from fwcommon.errors import CmdError
+from w11common import session
+from w11common.errors import CmdError
 import support
 from support import env
 
@@ -43,14 +43,14 @@ from support import env
 # tests/conftest.py (which covers pytest) and tests/test_passthrough.py.
 # This line is what covers `python3 tests/<file>.py`, where conftest is
 # not loaded, and it reaches every subprocess a test spawns.
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
 
 class Tree(unittest.TestCase):
     """A temporary /run/user, and an environment that says nothing."""
 
     def setUp(self):
-        self.tmp = tempfile.mkdtemp(prefix="fw_session_")
+        self.tmp = tempfile.mkdtemp(prefix="w11_session_")
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         self.run_user = os.path.join(self.tmp, "run-user")
         os.mkdir(self.run_user)
@@ -359,29 +359,29 @@ class RuntimeDir(Tree):
         self.assertIn("cannot create", str(cm.exception))
 
 
-# -- what fwcommon is allowed to depend on ------------------------------------
+# -- what w11common is allowed to depend on ------------------------------------
 
 class Closure(unittest.TestCase):
-    """fwcommon is the shared floor: standard library only, and nothing from
+    """w11common is the shared floor: standard library only, and nothing from
     the rest of this tree.
 
-    It is not a style rule. `fwcommon/passthrough.py` runs BEFORE any tool
+    It is not a style rule. `w11common/passthrough.py` runs BEFORE any tool
     decides anything -- it is what hands `xdotool` over to the real one on an
-    X11 box -- and `fwcommon/session.py` is what a root shell uses to find
+    X11 box -- and `w11common/session.py` is what a root shell uses to find
     the session at all. An import of `wdotool` or a third-party package here
     would make those two paths fail on exactly the machine that needs them:
     a `sudo` with no user site-packages, a cron job, a .deb whose payload is
-    one directory, the `python3 -I -S` case below. The .deb ships fwcommon/
+    one directory, the `python3 -I -S` case below. The .deb ships w11common/
     as a plain directory beside the tools, and the tools import it by name."""
 
-    PACKAGE = os.path.join(ROOT, "fwcommon")
+    PACKAGE = os.path.join(ROOT, "w11common")
 
     def modules(self):
         return sorted(n for n in os.listdir(self.PACKAGE) if n.endswith(".py"))
 
     def test_nothing_outside_the_standard_library_is_imported(self):
         self.maxDiff = None
-        allowed = set(sys.stdlib_module_names) | {"fwcommon"}
+        allowed = set(sys.stdlib_module_names) | {"w11common"}
         outside = []
         for name in self.modules():
             with open(os.path.join(self.PACKAGE, name)) as f:
@@ -393,7 +393,7 @@ class Closure(unittest.TestCase):
                             outside.append("%s: import %s" % (name, alias.name))
                 elif isinstance(node, ast.ImportFrom):
                     # a relative import would work here but not in the .deb's
-                    # flat payload, where fwcommon is found by name on sys.path
+                    # flat payload, where w11common is found by name on sys.path
                     if node.level:
                         outside.append("%s: relative import (level %d)" % (name, node.level))
                     elif node.module and node.module.split(".")[0] not in allowed:
@@ -403,15 +403,15 @@ class Closure(unittest.TestCase):
     def test_it_imports_with_nothing_else_on_the_box(self):
         """`python3 -I -S` is the harshest form: no site-packages, no user
         site, no PYTHONPATH, no cwd -- and a temporary directory holding a
-        copy of fwcommon/ and nothing else. If every module here imports
+        copy of w11common/ and nothing else. If every module here imports
         under that, no machine's Python configuration can take the passthrough
         or the session scan away."""
-        tmp = tempfile.mkdtemp(prefix="fwcommon-closure-")
+        tmp = tempfile.mkdtemp(prefix="w11common-closure-")
         self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
-        shutil.copytree(self.PACKAGE, os.path.join(tmp, "fwcommon"))
-        names = ", ".join("fwcommon." + n[:-3] for n in self.modules()
+        shutil.copytree(self.PACKAGE, os.path.join(tmp, "w11common"))
+        names = ", ".join("w11common." + n[:-3] for n in self.modules()
                           if n != "__init__.py")
-        code = "import sys; sys.path.insert(0, %r); import %s; print(fwcommon.session.__file__)" % (tmp, names)
+        code = "import sys; sys.path.insert(0, %r); import %s; print(w11common.session.__file__)" % (tmp, names)
         p = subprocess.run([sys.executable, "-I", "-S", "-c", code],
                            cwd=tmp, capture_output=True, text=True, timeout=60)
         self.assertEqual(p.returncode, 0, p.stderr[-2000:])

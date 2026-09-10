@@ -1,0 +1,69 @@
+#!/bin/sh
+# What this script does, and just as importantly what it does not.
+#
+# DOES: apply the udev rule the package just installed to the /dev/uinput that
+# already exists, so that input injection works without a reboot -- exactly
+# what `gnome/install-bridge.sh --udev` does by hand (modprobe, reload,
+# trigger).  The rule itself only tags the node `uaccess`; systemd-logind then
+# gives the user of the *active seat* an ACL on it, at every login as well as
+# now.  The node stays root:root 0600; no group is involved.
+#
+# DOES NOT: touch any user's session.  Enabling a GNOME Shell extension is a
+# per-user dconf setting, dpkg runs as root, and at install time there may be
+# no session on the machine at all -- so the extension is installed
+# system-wide here and enabled by /usr/lib/w11/enable-bridge in the
+# user's own session at their next login.  Nothing here starts, stops or
+# restarts gnome-shell either: it scans extension directories only at login,
+# which is why the message below asks for one.
+set -e
+
+case "$1" in
+configure)
+    # A chroot/container image build has no udev and no /dev/uinput to fix up;
+    # the rule and the modules-load.d file are on disk and apply at boot.
+    if [ -z "${DPKG_ROOT:-}" ] && [ -d /run/udev ] && command -v udevadm >/dev/null 2>&1; then
+        modprobe uinput >/dev/null 2>&1 || true
+        udevadm control --reload-rules >/dev/null 2>&1 || true
+        udevadm trigger --name-match=uinput >/dev/null 2>&1 || true
+        udevadm settle --timeout=5 >/dev/null 2>&1 || true
+    fi
+
+    # The banner is for someone who has just acquired the tools: on the first
+    # install, and again after a remove and re-install (the extension and the
+    # rule went away with the package, so the relogin is due again).  A plain
+    # [ -z "$2" ] would not print it the second time -- dpkg passes the old
+    # version for a package left in `rc` state -- so the state is a stamp of
+    # our own, which postrm drops on remove.
+    stamp="${DPKG_ROOT:-}/var/lib/w11/installed"
+    if [ ! -e "$stamp" ]; then
+        mkdir -p "$(dirname "$stamp")" && : > "$stamp"
+        # `|| true`, because this whole script runs under `set -e` and dpkg is
+        # routinely run with its output down a pipe (`apt install ... | tail`,
+        # a progress filter, a log reader that has gone away).  `cat` then dies
+        # of SIGPIPE, exit 141, and dpkg reports the package's configuration as
+        # failed over a banner nobody was reading -- with the stamp already
+        # written, so a retry prints nothing and the failure looks arbitrary.
+        cat <<'EOM' || true
+
+w11: wdotool, wwmctl, wxprop, wxrandr, warandr and wmirror are on PATH.
+
+  * On GNOME, the window commands need the bridge extension, and gnome-shell
+    only scans extension directories at login: LOG OUT AND BACK IN ONCE.  The
+    extension is installed and is enabled for you automatically in that first
+    session.  wxrandr and warandr work already; until the relogin the window
+    commands say the bridge is not running and name gnome/install-bridge.sh,
+    which is the from-a-clone route -- this package has done that part.
+  * /dev/uinput is now open to the user at the active seat (udev rule
+    60-w11-uinput.rules), which is what lets wdotool type and click
+    without root.  Anyone who can open it can type as you -- see the threat
+    model in /usr/share/doc/w11/README.md.gz.
+  * On an X11 session the tools hand over to the real ones; install those
+    with: apt install xdotool wmctrl
+
+EOM
+    fi
+    ;;
+esac
+
+#DEBHELPER#
+exit 0

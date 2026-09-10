@@ -21,7 +21,7 @@ sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import support
-from fwcommon.errors import CmdError
+from w11common.errors import CmdError
 from wdotool import cli
 from wdotool.backend_sway import SwayBackend
 from wdotool.ctx import Context, NoSessionError
@@ -31,7 +31,7 @@ from wdotool.misc_cmds import _atof, _atoi, cmd_getdisplaygeometry
 # tests/conftest.py (which covers pytest) and tests/test_passthrough.py.
 # This line is what covers `python3 tests/<file>.py`, where conftest is
 # not loaded, and it reaches every subprocess a test spawns.
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
 EXEC_USAGE = (
     "Usage: exec [options] command [arg1 arg2 ...] [terminator]\n"

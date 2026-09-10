@@ -11,7 +11,7 @@ x11Tools/wlMirror options.  Nine places, one fact, and until now nothing
 connected them: the tools printed `apt install x11-utils` on Fedora, on Arch
 and on NixOS, which has no apt at all [recon2/fedora.md, arch.md, nixos.md].
 
-fwcommon/distro.py is the fifth column -- the table the running tool reads --
+w11common/distro.py is the fifth column -- the table the running tool reads --
 and this file is what keeps it and the four packagings saying the same thing.
 The last test is the sharp one: a packaging that names ANOTHER distribution's
 package (the spec saying x11-utils, the PKGBUILD saying xorg-x11-server-utils)
@@ -26,21 +26,21 @@ import unittest
 # The suite never hands a tool over to the real X11 one: see tests/conftest.py
 # (which covers pytest) and tests/test_passthrough.py.  This line is what
 # covers `python3 tests/<file>.py`, where conftest is not loaded.
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from fwcommon import distro                                       # noqa: E402
+from w11common import distro                                       # noqa: E402
 
 CONTROL = os.path.join(ROOT, "debian", "control")
-SPEC = os.path.join(ROOT, "packaging", "rpm", "fuckwayland.spec")
+SPEC = os.path.join(ROOT, "packaging", "rpm", "w11.spec")
 PKGBUILD = os.path.join(ROOT, "packaging", "arch", "PKGBUILD")
 MODULE = os.path.join(ROOT, "nix", "module.nix")
 
 #: The table.  Row = the thing a user needs; column = the family; cell = what
-#: that family calls it, exactly as fwcommon/distro.py says it, so the two are
+#: that family calls it, exactly as w11common/distro.py says it, so the two are
 #: comparable string for string.  Every cell was measured:
 #:
 #:   Fedora 44 (mdapi): /usr/bin/xprop -> `xprop` 1.2.8-5, /usr/bin/xrandr ->
@@ -51,7 +51,7 @@ MODULE = os.path.join(ROOT, "nix", "module.nix")
 #:   `xorg-xrandr` 1.5.4-1, `xdotool` 4.20260303.1-1, `wmctrl` 1.07-6,
 #:   `wl-mirror` 0.18.5-1 (in extra, not a third-party repo), `python-gobject`
 #:   3.56.3-1 + `gtk3` 1:3.24.52-1, and `acl` in core [recon2/pkg-arch.md 1].
-#:   Debian's four are today's bytes in fwcommon/passthrough.py, unchanged.
+#:   Debian's four are today's bytes in w11common/passthrough.py, unchanged.
 TABLE = {
     "xdotool":     {"debian": "xdotool", "fedora": "xdotool",
                     "arch": "xdotool", "nixos": "nixpkgs.xdotool"},
@@ -141,7 +141,7 @@ def arch_optdepends():
 
 
 class TheFifthColumn(unittest.TestCase):
-    """fwcommon/distro.py against the table above.
+    """w11common/distro.py against the table above.
 
     distro.py is the column the running tool reads -- the one that decides what
     `wxprop` prints on a box with no xprop -- so if it and the packagings ever

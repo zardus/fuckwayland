@@ -32,7 +32,7 @@ import re
 import struct
 import sys
 
-from fwcommon import passthrough, stdio
+from w11common import passthrough, stdio
 from wdotool import backend
 from wdotool.cnum import atoi as _atoi
 from wxprop import core

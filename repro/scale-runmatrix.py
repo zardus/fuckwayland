@@ -60,7 +60,7 @@ def main():
 
         probe_cfg = json.dumps({"label": label, "targets": cfg["targets"],
                                 "settle": cfg.get("settle", 0.35)})
-        p = as_root(vm, f"cd /root/fw && FW=/root/fw python3 probe.py {json.dumps(probe_cfg)}",
+        p = as_root(vm, f"cd /root/w11 && W11=/root/w11 python3 probe.py {json.dumps(probe_cfg)}",
                     timeout=cfg.get("timeout", 300))
         path = os.path.join(outdir, label.replace("/", "_") + ".json")
         with open(path, "w") as f:

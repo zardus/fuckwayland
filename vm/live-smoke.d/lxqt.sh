@@ -13,16 +13,16 @@
 #     Cannot open display.
 #
 # because SDDM 0.21 writes the cookie to /tmp/xauth_<random> -- neither ~/.Xauthority nor anything in a
-# runtime directory -- and fwcommon/session.py's _SESSION_LEADERS named no LXQt or Openbox process to
+# runtime directory -- and w11common/session.py's _SESSION_LEADERS named no LXQt or Openbox process to
 # read it from.  With `lxqt-session`, `lxsession`, `openbox` and `labwc` appended to that tuple and
 # nothing else touched, all four answered: `find_xauthority(1000)` -> /tmp/xauth_EfcmKF, `wwmctl -l` ->
-# the three windows, `wdotool search --name fwsmoke` -> 37748756, `wxrandr --query` -> the Screen 0
+# the three windows, `wdotool search --name w11smoke` -> 37748756, `wxrandr --query` -> the Screen 0
 # listing, `wxprop -root _NET_CLIENT_LIST` -> the three ids [recon2/openbox A].  That measurement was
 # taken by patching a file in a guest; this phase is the same claim against the shipped tuple, on the
 # display manager that bites.
 #
 # EDITOR_CLASS stays xfce.sh's xterm rather than the qterminal Lubuntu ships.  Every check here acts on
-# the window `editor_start` opens, and xfce.sh's editor_start is `xterm -T fwsmoke`: naming a class
+# the window `editor_start` opens, and xfce.sh's editor_start is `xterm -T w11smoke`: naming a class
 # nothing starts would be a class nobody matches.  qterminal is on the image (lubuntu-desktop pulls it)
 # and the day a phase needs LXQt's own client it can start one; the byte-parity measurement was taken
 # on an xterm [recon2/openbox A].
@@ -63,8 +63,8 @@ phase_x11root() {
     want "the real wmctrl, run the same way, cannot open a display" "annot open display|X connection" "$orig"
     # The other three tool families, because the recon measured all four broken and all four fixed by
     # the same four strings -- one working tool would not say the cookie was found.
-    want "root with an empty environment finds the fwsmoke window through us" "^[0-9]+$" \
-         "$(root 'w=$(command -v wdotool); env -i "$w" search --name fwsmoke 2>&1 | head -1' || true)"
+    want "root with an empty environment finds the w11smoke window through us" "^[0-9]+$" \
+         "$(root 'w=$(command -v wdotool); env -i "$w" search --name w11smoke 2>&1 | head -1' || true)"
     uu=$(guest "wxrandr --query | awk '\$2==\"connected\"{print \$1}'" | tr '\n' ' ' || true)
     ru=$(root 'w=$(command -v wxrandr); env -i "$w" --query 2>/dev/null | awk "\$2==\"connected\"{print \$1}"' \
          | tr '\n' ' ' || true)

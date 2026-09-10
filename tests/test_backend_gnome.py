@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""GNOME backend tests against a mock fuckwayland bridge served on
+"""GNOME backend tests against a mock w11 bridge served on
 dbus_mini's in-process mock bus (tests/test_dbus_mini.py MockBus): every
 GnomeBackend method, the Window/View/Workspace mapping, error mapping, the
 pointer hit-test, the (opt-in) Eval auto-load path, backend_detect's order
@@ -26,9 +26,9 @@ sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tests"))
 
-from fwcommon import dbus_mini, session
-from fwcommon.dbus_mini import Bus, DBusError, Variant
-from fwcommon.errors import CmdError
+from w11common import dbus_mini, session
+from w11common.dbus_mini import Bus, DBusError, Variant
+from w11common.errors import CmdError
 from support import env
 from test_dbus_mini import MockBus
 import wl_fake
@@ -43,7 +43,7 @@ from wdotool.ctx import NoSessionError
 # tests/conftest.py (which covers pytest) and tests/test_passthrough.py.
 # This line is what covers `python3 tests/<file>.py`, where conftest is
 # not loaded, and it reaches every subprocess a test spawns.
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
 XTERM, EDITOR, CALC, DESKTOP = 4194305, 4194306, 4194307, 4194301
 XTERM_XID = 0x400005
@@ -111,7 +111,7 @@ def _ext_info_variant(v):
 
 class MockBridge:
     """The extension's D-Bus surface on a Bus of its own (serve_calls),
-    owning org.gnome.Shell and/or org.fuckwayland.Bridge like the real shell
+    owning org.gnome.Shell and/or org.w11.Bridge like the real shell
     connection does. State lives in `windows` (bridge JSON shape) and is
     mutated by the actions; `calls` records (member, args)."""
 
@@ -199,7 +199,7 @@ class MockBridge:
         self.thread.join(3)
         self.bus.close()
         # Closing the socket is not the same event as the bus letting go of
-        # org.gnome.Shell and org.fuckwayland.Bridge: that happens in the
+        # org.gnome.Shell and org.w11.Bridge: that happens in the
         # bus's own thread when this connection's recv() returns nothing.
         # Return before it and the next bridge's RequestName is answered 3,
         # not 1 -- which is what made this file fail about one run in ten
@@ -1335,7 +1335,7 @@ class ConstructorTests(_Base):
         of is waiting for a new session, and the old text sent the reader to
         `gnome/install-bridge.sh` -- a script the .deb does not ship at all
         (measured on the package route, all three GNOME goldens: `apt install
-        ./fw.deb` puts the extension in /usr/share and there is no
+        ./w11.deb` puts the extension in /usr/share and there is no
         install-bridge.sh anywhere on the box). The message now names the
         directory it found and the one action that helps.
 
@@ -1612,7 +1612,7 @@ class ConstructorTests(_Base):
                 b = GnomeBackend()
             self.assertEqual(b.num_desktops(), 3)
             self.assertEqual([m for m, _ in bridge.calls][:2], ["Eval", "GetNWorkspaces"])
-            self.assertIn("fuckwayland-bridge@fuckwayland", bridge.calls[0][1][0])
+            self.assertIn("w11-bridge@w11", bridge.calls[0][1][0])
             b.bus.close()
         finally:
             bridge.close()
@@ -2061,12 +2061,12 @@ class ShippedFilesTests(unittest.TestCase):
     extension's embedded interface XML matches the .xml file (no WindowAt)."""
 
     GNOME = os.path.join(ROOT, "gnome")
-    EXT = os.path.join(GNOME, "fuckwayland-bridge@fuckwayland")
+    EXT = os.path.join(GNOME, "w11-bridge@w11")
 
     def test_udev_rule_is_uaccess_only(self):
         # review finding 1: MODE/GROUP would hand every `input` member a
         # standing injection channel; uaccess alone is what wdotool needs
-        with open(os.path.join(self.GNOME, "60-fuckwayland-uinput.rules")) as f:
+        with open(os.path.join(self.GNOME, "60-w11-uinput.rules")) as f:
             rules = [ln.strip() for ln in f
                      if ln.strip() and not ln.startswith("#")]
         self.assertEqual(len(rules), 1)
@@ -2312,7 +2312,7 @@ class ShippedFilesTests(unittest.TestCase):
 
     def test_the_method_table_the_xml_and_the_mock_bridge_name_the_same_calls(self):
         """Three copies of the bridge's surface -- the METHODS table in
-        extension.js, org.fuckwayland.Bridge1.xml beside it, and MockBridge's
+        extension.js, org.w11.Bridge1.xml beside it, and MockBridge's
         m_<Name> methods, which is what every test in this suite drives
         instead of the extension. A method that exists in one and not the
         others is a test that proves nothing about the shipped file, and the
@@ -2327,7 +2327,7 @@ class ShippedFilesTests(unittest.TestCase):
         js = self._extension_js()
         table = dict(re.findall(r"^    (\w+): \['\(([a-z]*)\)'", js, re.M))
         self.assertGreater(len(table), 20, table)
-        with open(os.path.join(self.EXT, "org.fuckwayland.Bridge1.xml")) as f:
+        with open(os.path.join(self.EXT, "org.w11.Bridge1.xml")) as f:
             root = ET.fromstring(f.read())
         iface = root.find("interface")
         xml_out = {}
@@ -2386,7 +2386,7 @@ class ShippedFilesTests(unittest.TestCase):
         window/desktop/input command refuses. With "51" appended to
         shell-version in the installed metadata.json and one reboot, on a
         fresh instance and nothing else touched, the bridge is ACTIVE
-        (`[fuckwayland-bridge] enabled (bridge v3, gnome-shell 51.beta)`) and
+        (`[w11-bridge] enabled (bridge v3, gnome-shell 51.beta)`) and
         every operation works, the maximize pair included through the 49+
         set_maximize_flags() path. So the whole gap is one line.
 
@@ -2408,7 +2408,7 @@ class ShippedFilesTests(unittest.TestCase):
         self.assertNotIn("51 is not in", readme)
 
     def test_embedded_xml_matches_file_and_has_no_hit_test(self):
-        with open(os.path.join(self.EXT, "org.fuckwayland.Bridge1.xml")) as f:
+        with open(os.path.join(self.EXT, "org.w11.Bridge1.xml")) as f:
             xml = f.read().strip()
         with open(os.path.join(self.EXT, "extension.js")) as f:
             js = f.read()

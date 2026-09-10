@@ -15,11 +15,11 @@
 #     session), and xfce.sh's own comment says the X11 half is "a separate measurement nobody has made".
 #     This is that measurement: with an EMPTY environment, root has no DISPLAY and no XAUTHORITY, so the
 #     tools have to learn both from a process of the seated session -- `cinnamon-session` (comm
-#     `cinnamon-sessio`, 16 bytes truncated to 15) and `cinnamon`, both in fwcommon/session.py's
+#     `cinnamon-sessio`, 16 bytes truncated to 15) and `cinnamon`, both in w11common/session.py's
 #     _SESSION_LEADERS.  The check is not that we answer, it is that we answer where the ORIGINAL, run
 #     the same way, cannot.
 #
-# The window every check here acts on is xfce.sh's `xterm -T fwsmoke`: the recon's byte-identical
+# The window every check here acts on is xfce.sh's `xterm -T w11smoke`: the recon's byte-identical
 # `wwmctl -lGpx` against `wmctrl -lGpx` was measured on an xterm on this very desktop, and gnome-terminal
 # -- which cinnamon-core puts on the image -- is the NATIVE client of the Wayland twin, where it belongs
 # [recon2/cinnamon 3.1].
@@ -33,10 +33,10 @@ SMOKE_PHASES="install passthrough muffin x11root"
 phase_muffin() {
     editor_start
     local out win
-    out=$(await 30 '[0-9]' "wdotool search --name fwsmoke | head -1" || true)
+    out=$(await 30 '[0-9]' "wdotool search --name w11smoke | head -1" || true)
     win=$(printf '%s\n' "$out" | grep -E '^[0-9]+$' | head -1)
-    if [ -z "$win" ]; then fail "no fwsmoke xterm to work on [$(ev "$out")]"; return 1; fi
-    pass "wdotool search --name fwsmoke -> $win (through the real xdotool)"
+    if [ -z "$win" ]; then fail "no w11smoke xterm to work on [$(ev "$out")]"; return 1; fi
+    pass "wdotool search --name w11smoke -> $win (through the real xdotool)"
     want "wwmctl -m names the window manager muffin's check window names" "^Name: Mutter \(Muffin\)$" \
          "$(guest 'wwmctl -m' || true)"
     note "muffin --version: $(guest 'muffin --version' | tr -d '\r' || true) (muffin calls itself mutter)"
@@ -44,17 +44,17 @@ phase_muffin() {
     # can move between the two reads.  On an X11 session the two are the same binary by construction --
     # which is the claim: the handover happened and nothing mangled the argv on the way.
     local diffrc
-    diffrc=$(guest 'wwmctl -lGpx > /tmp/fw-a.txt 2>&1; wmctrl -lGpx > /tmp/fw-b.txt 2>&1;
-                    diff /tmp/fw-a.txt /tmp/fw-b.txt >/dev/null 2>&1; echo $?' | tr -d ' \r\n' || true)
+    diffrc=$(guest 'wwmctl -lGpx > /tmp/w11-a.txt 2>&1; wmctrl -lGpx > /tmp/w11-b.txt 2>&1;
+                    diff /tmp/w11-a.txt /tmp/w11-b.txt >/dev/null 2>&1; echo $?' | tr -d ' \r\n' || true)
     same "wwmctl -lGpx is byte-identical to wmctrl -lGpx" "0" "$diffrc"
-    note "the list: $(ev "$(guest 'cat /tmp/fw-a.txt' || true)")"
+    note "the list: $(ev "$(guest 'cat /tmp/w11-a.txt' || true)")"
     # Shading: muffin kept it, so it is a live state here.  wmctrl does the work; what is asserted is
     # that the state STICKS, which is what a script that depends on it needs.
-    guest "wwmctl -r fwsmoke -b add,shaded" >/dev/null 2>&1 || true
+    guest "wwmctl -r w11smoke -b add,shaded" >/dev/null 2>&1 || true
     sleep 1
     want "-b add,shaded sets _NET_WM_STATE_SHADED (muffin kept what mutter dropped)" \
          "_NET_WM_STATE_SHADED" "$(guest "wxprop -id $win _NET_WM_STATE" || true)"
-    guest "wwmctl -r fwsmoke -b remove,shaded" >/dev/null 2>&1 || true
+    guest "wwmctl -r w11smoke -b remove,shaded" >/dev/null 2>&1 || true
     sleep 1
     wantnot "-b remove,shaded takes it off again" "_NET_WM_STATE_SHADED" \
             "$(guest "wxprop -id $win _NET_WM_STATE" || true)"
@@ -88,7 +88,7 @@ phase_x11root() {
     uu=$(guest 'wwmctl -l | wc -l' | tr -d ' \r\n' || true)
     ru=$(root 'w=$(command -v wwmctl); env -i "$w" -l | wc -l' | tr -d ' \r\n' || true)
     # The anchor first: two identical answers prove nothing when both are "no windows".  phase_muffin leaves
-    # its fwsmoke xterm up, so the seated user's list is >= 1 whenever this phase runs after it.
+    # its w11smoke xterm up, so the seated user's list is >= 1 whenever this phase runs after it.
     if [ "${uu:-0}" -gt 0 ]; then
         same "root with an EMPTY environment lists the seated user's windows" "$uu" "$ru"
     else

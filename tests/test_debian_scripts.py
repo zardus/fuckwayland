@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """dpkg's two maintainer scripts, run as processes, and the .deb into a scratch root.
 
-`debian/fuckwayland.postinst` and `debian/fuckwayland.postrm` are the only code
+`debian/w11.postinst` and `debian/w11.postrm` are the only code
 in this project that runs as root on a stranger's machine, and they had no test
 of any kind: what they do was read out of them, never executed.  Both are POSIX
 sh under `set -e` and both take `DPKG_ROOT`, which is what makes them runnable
@@ -10,7 +10,7 @@ their own first condition when it is set (a chroot has no /run/udev).
 
 One thing this found, and one half of the finding it leaves standing.  The
 banner is printed by `cat <<'EOM'` with the stamp already written, so
-`apt install ./fuckwayland.deb | tail -1` -- a pipe whose
+`apt install ./w11.deb | tail -1` -- a pipe whose
 reader leaves -- killed `cat` with SIGPIPE, `set -e` propagated 141, and dpkg
 reported the package's configuration as failed over a banner nobody was
 reading.  A retry then printed nothing, because the stamp was there, and the
@@ -36,17 +36,17 @@ import unittest
 # The suite never hands a tool over to the real X11 one: see tests/conftest.py
 # (which covers pytest) and tests/test_passthrough.py.  This line is what
 # covers `python3 tests/<file>.py`, where conftest is not loaded.
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-from fwcommon import VERSION                                      # noqa: E402
+from w11common import VERSION                                      # noqa: E402
 
-POSTINST = os.path.join(ROOT, "debian", "fuckwayland.postinst")
-POSTRM = os.path.join(ROOT, "debian", "fuckwayland.postrm")
+POSTINST = os.path.join(ROOT, "debian", "w11.postinst")
+POSTRM = os.path.join(ROOT, "debian", "w11.postrm")
 RELEASE = os.path.join(ROOT, "release")
-STAMP = "var/lib/fuckwayland/installed"
+STAMP = "var/lib/w11/installed"
 
 #: Everything postinst and postrm may reach for on a real machine.  Each is a
 #: stub that records and does nothing, so "it did not touch the node" is an
@@ -61,7 +61,7 @@ class Lifecycle(unittest.TestCase):
     dpkg would run them: same argument vectors, same DPKG_ROOT."""
 
     def setUp(self):
-        self.tmp = tempfile.mkdtemp(prefix="fw-deb-scripts-")
+        self.tmp = tempfile.mkdtemp(prefix="w11-deb-scripts-")
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         self.root = os.path.join(self.tmp, "root")
         self.bin = os.path.join(self.tmp, "bin")
@@ -230,7 +230,7 @@ class TheDebIntoAScratchRoot(unittest.TestCase):
         cls.deb = os.path.join(RELEASE, debs[0])
 
     def setUp(self):
-        self.tmp = tempfile.mkdtemp(prefix="fw-dpkg-root-")
+        self.tmp = tempfile.mkdtemp(prefix="w11-dpkg-root-")
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         self.root = os.path.join(self.tmp, "root")
         self.admin = os.path.join(self.root, "var/lib/dpkg")
@@ -267,8 +267,8 @@ class TheDebIntoAScratchRoot(unittest.TestCase):
         got = self.install()
         self.assertEqual(sorted(os.listdir(self.r("usr/bin"))),
                          ["warandr", "wdotool", "wmirror", "wwmctl", "wxprop", "wxrandr"])
-        link = self.r("etc/xdg/autostart/fuckwayland-enable-bridge.desktop")
-        self.assertEqual(os.readlink(link), "/usr/lib/fuckwayland/enable-bridge.desktop")
+        link = self.r("etc/xdg/autostart/w11-enable-bridge.desktop")
+        self.assertEqual(os.readlink(link), "/usr/lib/w11/enable-bridge.desktop")
         self.assertTrue(os.path.exists(self.r(STAMP)))
         self.assertEqual(got.stdout.count("LOG OUT AND BACK IN ONCE"), 1)
 
@@ -294,7 +294,7 @@ class TheDebIntoAScratchRoot(unittest.TestCase):
 
     def test_remove_leaves_nothing_under_usr_but_empty_directories(self):
         self.install()
-        got = self.dpkg("-r", "fuckwayland")
+        got = self.dpkg("-r", "w11")
         self.assertEqual(got.returncode, 0, got.stdout + got.stderr)
         left = []
         for base, _dirs, names in os.walk(self.r("usr")):
@@ -302,12 +302,12 @@ class TheDebIntoAScratchRoot(unittest.TestCase):
         self.assertEqual(left, [], left)
         self.assertFalse(os.path.exists(self.r(STAMP)))
         self.assertFalse(os.path.lexists(
-            self.r("etc/xdg/autostart/fuckwayland-enable-bridge.desktop")))
+            self.r("etc/xdg/autostart/w11-enable-bridge.desktop")))
 
     def test_purge_after_remove_exits_zero(self):
         self.install()
-        self.dpkg("-r", "fuckwayland")
-        got = self.dpkg("-P", "fuckwayland")
+        self.dpkg("-r", "w11")
+        got = self.dpkg("-P", "w11")
         self.assertEqual(got.returncode, 0, got.stdout + got.stderr)
 
     def test_removing_and_installing_again_prints_the_banner_again(self):
@@ -315,7 +315,7 @@ class TheDebIntoAScratchRoot(unittest.TestCase):
         remove takes the extension and the rule away, so the next install owes
         the user the relogin sentence a second time."""
         self.install()
-        self.dpkg("-r", "fuckwayland")
+        self.dpkg("-r", "w11")
         got = self.install()
         self.assertEqual(got.stdout.count("LOG OUT AND BACK IN ONCE"), 1)
 

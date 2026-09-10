@@ -34,15 +34,15 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # tests/conftest.py (which covers pytest) and tests/test_passthrough.py.
 # This line is what covers `python3 tests/<file>.py`, where conftest is
 # not loaded, and it reaches every subprocess a test spawns.
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
 import support
-from fwcommon import session
+from w11common import session
 from wdotool import x11_mini
 
 #: the same four pairs tests/test_i3_live.py compares, which are the report's own four
 PARITY = (
-    (["-m", "wdotool", "search", "--name", "fwsmoke"], ["xdotool", "search", "--name", "fwsmoke"]),
+    (["-m", "wdotool", "search", "--name", "w11smoke"], ["xdotool", "search", "--name", "w11smoke"]),
     (["-m", "wwmctl", "-l", "-G", "-p", "-x"], ["wmctrl", "-l", "-G", "-p", "-x"]),
     (["-m", "wxprop", "-root", "_NET_CLIENT_LIST"], ["xprop", "-root", "_NET_CLIENT_LIST"]),
     (["-m", "wxrandr", "--listmonitors"], ["xrandr", "--listmonitors"]),
@@ -58,7 +58,7 @@ class OpenboxLive(unittest.TestCase):
         cls.rig = support.HeadlessOpenbox()
         cls.addClassCleanup(cls.rig.stop)
         cls.xterm = subprocess.Popen(
-            ["xterm", "-T", "fwsmoke", "-e", "sleep", "600"], env=cls.rig.env,
+            ["xterm", "-T", "w11smoke", "-e", "sleep", "600"], env=cls.rig.env,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         cls.addClassCleanup(cls._stop_xterm)
         cls.xid = cls._wait_for_window()
@@ -79,7 +79,7 @@ class OpenboxLive(unittest.TestCase):
             out = subprocess.run(["wmctrl", "-l"], env=cls.rig.env,
                                  capture_output=True, text=True).stdout
             for line in out.splitlines():
-                if line.endswith("fwsmoke"):
+                if line.endswith("w11smoke"):
                     return int(line.split()[0], 16)
             if cls.xterm.poll() is not None:
                 raise unittest.SkipTest("xterm exited at startup")
@@ -89,7 +89,7 @@ class OpenboxLive(unittest.TestCase):
     def handover_env(self):
         """The rig's environment with the suite's escape hatch dropped: handing over is what is measured."""
         env = dict(self.rig.env)
-        env.pop("FUCKWAYLAND_PASSTHROUGH", None)
+        env.pop("W11_PASSTHROUGH", None)
         return env
 
     def ours(self, *argv):

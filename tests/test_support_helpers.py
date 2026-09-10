@@ -32,7 +32,7 @@ import unittest
 
 # The suite never hands a tool over to the real X11 one: see
 # tests/conftest.py (which covers pytest) and tests/test_passthrough.py.
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
@@ -41,8 +41,8 @@ sys.path.insert(0, os.path.join(ROOT, "tests"))
 
 import support
 import wl_fake
-from fwcommon import session
-from fwcommon.wayland_mini import WlConn
+from w11common import session
+from w11common.wayland_mini import WlConn
 from wdotool import ext_workspace
 from wxrandr.core import Fatal, SwayIPC
 
@@ -74,7 +74,7 @@ class Documents(unittest.TestCase):
         docs = support.documents()
         self.assertIn("README.md", docs)
         self.assertIn(os.path.join("docs", "Technical.md"), docs)
-        self.assertIn("# fuckwayland", docs["README.md"])
+        self.assertIn("# w11", docs["README.md"])
 
     def test_it_agrees_with_the_walker_check_docs_carries(self):
         """The one that has to keep working: scripts/check-docs.py reports 0
@@ -160,7 +160,7 @@ class FakeGnomeCommandLine(unittest.TestCase):
     over one state file.  Every branch of debian/enable-bridge is chosen by
     what these answer, and the real ones would write into the runner's dconf."""
 
-    UUID = "fuckwayland-bridge@fuckwayland"
+    UUID = "w11-bridge@w11"
     KEY = "org.gnome.shell/enabled-extensions"
     DISABLED = "org.gnome.shell/disabled-extensions"
     OVERLAP = os.path.join(ROOT, "gnome", "install-overlap.sh")
@@ -304,7 +304,7 @@ class FakeGnomeCommandLine(unittest.TestCase):
     def run_parsers(self, body, **env):
         """Run `body` after install-overlap.sh's own gdbus functions, with the
         fake command line on PATH and the non-root arm of as_user taken."""
-        src = [support.sh_block(self.OVERLAP, "UUID='fuckwayland-overlap@fuckwayland'",
+        src = [support.sh_block(self.OVERLAP, "UUID='w11-overlap@w11'",
                                 "EXT_IFACE='org.gnome.Shell.Extensions'"),
                "ME=%d\nTARGET_UID=%d\nTARGET_USER=nobody\nBUS_ADDR=\nRUNTIME_DIR=\n"
                % (os.getuid(), os.getuid())]
@@ -335,7 +335,7 @@ class FakeGnomeCommandLine(unittest.TestCase):
         r = self.run_parsers("ext_state", FAKE_EXT_STATE="4", FAKE_EXT_LOADED=self.UUID)
         self.assertEqual(r.stdout.strip(), "4")
         r = self.run_parsers("ext_loaded && echo yes || echo no",
-                             FAKE_EXT_LOADED="fuckwayland-overlap@fuckwayland")
+                             FAKE_EXT_LOADED="w11-overlap@w11")
         self.assertEqual(r.stdout.strip(), "yes")
         r = self.run_parsers("ext_loaded && echo yes || echo no",
                              FAKE_EXT_LOADED="somebody-else@x")
@@ -366,10 +366,10 @@ class FakeGnomeCommandLine(unittest.TestCase):
         not know it."""
         support.fake_gnome_state(self.state)
         r = self.run_tool("dpkg", "-S", "/usr/share/gnome-shell/extensions/x",
-                          FAKE_DPKG_S="fuckwayland")
+                          FAKE_DPKG_S="w11")
         self.assertEqual(r.returncode, 0)
         self.assertEqual(r.stdout.strip(),
-                         "fuckwayland: /usr/share/gnome-shell/extensions/x")
+                         "w11: /usr/share/gnome-shell/extensions/x")
         r = self.run_tool("dpkg", "-S", "/tmp/x")
         self.assertEqual(r.returncode, 1)
         self.assertIn("no path found", r.stderr)
@@ -454,13 +454,13 @@ class NodeHarness(unittest.TestCase):
         cut out, which is what the older static tests had to do."""
         got = support.js_harness(support.BRIDGE_EXT, """
             import Ext from '@MODULE@/extension.js';
-            const e = new Ext({uuid: 'fuckwayland-bridge@fuckwayland'});
+            const e = new Ext({uuid: 'w11-bridge@w11'});
             console.log(JSON.stringify({
                 name: Ext.name,
                 methods: Object.getOwnPropertyNames(Object.getPrototypeOf(e)),
             }));
         """)
-        self.assertEqual(got["name"], "FuckwaylandBridge")
+        self.assertEqual(got["name"], "W11Bridge")
         for m in ("enable", "disable", "_setState", "_windowInfo", "_allWindows"):
             self.assertIn(m, got["methods"])
 
@@ -469,11 +469,11 @@ class NodeHarness(unittest.TestCase):
         an extension constructed with the real directory reads the real table."""
         got = support.js_harness(support.OVERLAP_EXT, """
             import Ext from '@MODULE@/extension.js';
-            const e = new Ext({uuid: 'fuckwayland-overlap@fuckwayland', path: '@MODULE@'});
+            const e = new Ext({uuid: 'w11-overlap@w11', path: '@MODULE@'});
             console.log(JSON.stringify({name: Ext.name, path: e.path,
                 methods: Object.getOwnPropertyNames(Object.getPrototypeOf(e))}));
         """)
-        self.assertEqual(got["name"], "FwOverlap")
+        self.assertEqual(got["name"], "W11Overlap")
         self.assertEqual(got["path"], support.OVERLAP_EXT)
         for m in ("Probe", "ApplyOverlap", "Version", "_apply"):
             self.assertIn(m, got["methods"])
@@ -681,17 +681,17 @@ class GjsStubs(unittest.TestCase):
         got = self.case("""
             import GIRepository from 'gi://GIRepository';
             const out = {};
-            GIRepository.configure({sharedLibraries: {FwOverlap14: ['libmutter-14.so.0']}});
+            GIRepository.configure({sharedLibraries: {W11Overlap14: ['libmutter-14.so.0']}});
             const repo = GIRepository.Repository.dup_default();
             out.modern = [typeof repo.get_shared_libraries, typeof repo.get_shared_library,
-                          repo.get_shared_libraries('FwOverlap14')];
+                          repo.get_shared_libraries('W11Overlap14')];
             GIRepository.configure({spelling: {instanceSharedLibraries: 'missing',
                                                instanceSharedLibrary: 'ok'}});
             const old = GIRepository.Repository.dup_default();
-            out.old = [typeof old.get_shared_libraries, old.get_shared_library('FwOverlap14')];
+            out.old = [typeof old.get_shared_libraries, old.get_shared_library('W11Overlap14')];
             GIRepository.configure({spelling: {instanceSharedLibrary: 'throw'}});
             const hostile = GIRepository.Repository.dup_default();
-            out.hostile = (() => { try { hostile.get_shared_library('FwOverlap14');
+            out.hostile = (() => { try { hostile.get_shared_library('W11Overlap14');
                                          return 'answered'; }
                                    catch (e) { return 'threw'; } })();
             console.log(JSON.stringify(out));
@@ -728,7 +728,7 @@ class GjsStubs(unittest.TestCase):
 
     def test_the_overlap_extension_runs_far_enough_to_refuse_an_unknown_shell(self):
         """End to end through the stubs, and the answer is checked against the
-        rig: on GNOME 46.0 the table says libmutter-14.so.0, FwOverlap14 and
+        rig: on GNOME 46.0 the table says libmutter-14.so.0, W11Overlap14 and
         MetaMonitorsConfig 72 bytes, and a shell major nobody measured is the
         one refusal `--unsafe-gnome-overlap-unmeasured` can get past."""
         got = self.case("""
@@ -905,7 +905,7 @@ class SwayDouble(unittest.TestCase):
 class SessionLeader(unittest.TestCase):
     """`leader_process` -- a real process with a session leader's name and a
     session leader's environment, which is the only way to test the /proc walk
-    in fwcommon.session."""
+    in w11common.session."""
 
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="leader-check-")
@@ -919,7 +919,7 @@ class SessionLeader(unittest.TestCase):
 
     def test_a_longer_name_is_truncated_the_way_the_kernel_truncates_it(self):
         """The other half of the same fact, and the one that can be wrong:
-        the walk in fwcommon.session matches on /proc/<pid>/comm, which the
+        the walk in w11common.session matches on /proc/<pid>/comm, which the
         kernel cuts at 15 characters.  `gnome-shell-calendar-server` -- a real
         name on every GNOME session here -- reaches /proc as
         `gnome-shell-cal`, so the helper must not wait for more than that."""
@@ -1721,7 +1721,7 @@ class HeadlessCompositors(unittest.TestCase):
     """The five compositors the live tests boot, checked against the finders that have to see them.
 
     Each one skips cleanly when its binary is absent, which is how they behave in the suite; where the binary
-    is there they are booted for real, because the thing worth proving is that `fwcommon.session` finds the
+    is there they are booted for real, because the thing worth proving is that `w11common.session` finds the
     socket a live compositor actually wrote and not the one a fixture says it did. labwc, Wayfire, i3 and
     Openbox are packaged on this box and on the Ubuntu CI image; river needs `tinyrwm` beside it and is on no
     runner [M recon2/river.md §2].

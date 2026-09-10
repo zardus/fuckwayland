@@ -42,7 +42,7 @@ let
         boot.loader.grub.device = "nodev";
         fileSystems."/" = { device = "/dev/vda1"; fsType = "ext4"; };
         system.stateVersion = "25.11";
-        programs.fuckwayland = {
+        programs.w11 = {
           enable = true;
           warandr.enable = true;
           gnomeBridge.enable = true;
@@ -55,7 +55,7 @@ let
     ];
   };
 in
-pkgs.runCommand "fuckwayland-module-eval" { } ''
+pkgs.runCommand "w11-module-eval" { } ''
   echo ${builtins.unsafeDiscardStringContext
     everything.config.system.build.toplevel.drvPath} > "$out"
 ''

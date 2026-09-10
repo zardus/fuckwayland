@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The GNOME bridge extension, executed.
 
-gnome/fuckwayland-bridge@fuckwayland/extension.js is 1500 lines of gjs that
+gnome/w11-bridge@w11/extension.js is 1500 lines of gjs that
 no test had ever run: it imports `gi://Meta` and
 `resource:///org/gnome/shell/ui/main.js`, which nothing outside a GNOME
 session resolves, so the suite could only grep it for strings while
@@ -37,7 +37,7 @@ sys.path.insert(0, os.path.join(ROOT, "tests"))
 # tests/conftest.py (which covers pytest) and tests/test_passthrough.py.
 # This line is what covers `python3 tests/<file>.py`, where conftest is
 # not loaded, and it reaches every subprocess a test spawns.
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
 import support                                              # noqa: E402
 from test_backend_gnome import (CALC, DESKTOP, EDITOR, XTERM, MockBridge,   # noqa: E402
@@ -266,7 +266,7 @@ function makeWorld(rows, opts = {}) {
 
 function bridgeOn(rows, opts = {}) {
     const world = makeWorld(rows, opts);
-    const ext = new Bridge({uuid: 'fuckwayland-bridge@fuckwayland'});
+    const ext = new Bridge({uuid: 'w11-bridge@w11'});
     ext.enable();
     return {ext, world};
 }
@@ -497,7 +497,7 @@ emit({threw, names: H.names(), error: inv.error});
 """)
         self.assertIn("hostile", got["threw"])
         self.assertIn("w1.maximize", got["names"])
-        self.assertEqual(got["error"][0], "org.fuckwayland.Bridge1.Failed")
+        self.assertEqual(got["error"][0], "org.w11.Bridge1.Failed")
         self.assertIn("hostile", got["error"][1])
 
 
@@ -620,16 +620,16 @@ emit({
 
     def test_the_journal_line_names_the_version_and_the_shell(self):
         """The one line that says the bridge came up, and which version of
-        it: `[fuckwayland-bridge] enabled (bridge v2, gnome-shell 46.0)` is
+        it: `[w11-bridge] enabled (bridge v2, gnome-shell 46.0)` is
         what gnome/README.md:443 records for the 24.04 golden, and
-        `[fuckwayland-bridge] enabled (bridge v3, gnome-shell 51.beta)` is
+        `[w11-bridge] enabled (bridge v3, gnome-shell 51.beta)` is
         what the orchestrator read out of journalctl on stonking-gnome after
         the metadata edit. Both halves have to be right -- a wrong VERSION
         here is how you diagnose an old extension.js still installed -- so
         the number in the line is MockBridge.VERSION and the shell string is
         Config.PACKAGE_VERSION, not a literal."""
         logs = self.answers()["logs"]
-        self.assertIn("[fuckwayland-bridge] enabled (bridge v%d, gnome-shell 50.1)"
+        self.assertIn("[w11-bridge] enabled (bridge v%d, gnome-shell 50.1)"
                       % MockBridge.VERSION, logs)
 
     def test_the_bus_name_and_object_path_are_the_ones_the_client_dials(self):
@@ -639,9 +639,9 @@ const e = Gio.exported();
 emit({path: e.path, exported: e.exported, names: Gio.names().map(n => n.name),
       version: ext.Version});
 """, self.rows)
-        self.assertEqual(got["path"], "/org/fuckwayland/Bridge")
+        self.assertEqual(got["path"], "/org/w11/Bridge")
         self.assertTrue(got["exported"])
-        self.assertEqual(got["names"], ["org.fuckwayland.Bridge"])
+        self.assertEqual(got["names"], ["org.w11.Bridge"])
         self.assertEqual(got["version"], MockBridge.VERSION)
 
     def test_a_window_whose_getters_all_throw_yields_the_safe_defaults(self):
@@ -832,7 +832,7 @@ Main.layoutManager.monitors = null;      // unreadable, not empty
 const unreadable = reply(ext, 'ConfirmDisplayChange', [true]);
 emit({refused, revert, unreadable});
 """, {"rows": fixture_windows()})
-        self.assertEqual(got["refused"][0], "org.fuckwayland.Bridge1.Unsupported")
+        self.assertEqual(got["refused"][0], "org.w11.Bridge1.Unsupported")
         self.assertIn("no enabled monitor", got["refused"][1])
         self.assertEqual(got["revert"], [False])
         self.assertEqual(got["unreadable"], [False])
@@ -964,10 +964,10 @@ const down = [world.spaces.length, H.names().filter(n => /append|remove/.test(n)
 const wroteDown = H.callsTo('settings.set_int').map(c => c.args);
 emit({dynamic, zero, many, up, down, wroteUp, wroteDown});
 """, {"rows": self.ROWS})
-        self.assertEqual(got["dynamic"][0], "org.fuckwayland.Bridge1.Unsupported")
+        self.assertEqual(got["dynamic"][0], "org.w11.Bridge1.Unsupported")
         self.assertIn("dynamic-workspaces", got["dynamic"][1])
         for bad in ("zero", "many"):
-            self.assertEqual(got[bad][0], "org.fuckwayland.Bridge1.InvalidArgs", bad)
+            self.assertEqual(got[bad][0], "org.w11.Bridge1.InvalidArgs", bad)
             self.assertIn("must be 1..36", got[bad][1], bad)
         self.assertEqual(got["up"], [5, 2])       # 3 -> 5 is two appends
         self.assertEqual(got["down"], [2, 3])     # 5 -> 2 is three removes
@@ -1108,7 +1108,7 @@ world.stage.emit('captured-event', key(Clutter.KEY_Escape));
 emit({...answer(inv), left: pending()});
 """)
         self.assertIsNone(got["reply"])
-        self.assertEqual(got["error"][0], "org.fuckwayland.Bridge1.Cancelled")
+        self.assertEqual(got["error"][0], "org.w11.Bridge1.Cancelled")
         self.assertEqual(got["error"][1], "cancelled with Escape")
         self.assertEqual(got["left"], {"timers": 0, "handlers": 0})
 
@@ -1139,7 +1139,7 @@ emit({...answer(inv), left: pending(),
       released: H.callsTo('Main.popModal').length});
 """, {"rows": self.ROWS, "asked": asked})
             self.assertEqual(got["armed"], [ms], asked)
-            self.assertEqual(got["error"][0], "org.fuckwayland.Bridge1.Cancelled", asked)
+            self.assertEqual(got["error"][0], "org.w11.Bridge1.Cancelled", asked)
             self.assertEqual(got["error"][1], "no window picked within %d ms" % ms, asked)
             self.assertEqual(got["released"], 1, asked)
             self.assertEqual(got["left"], {"timers": 0, "handlers": 0}, asked)
@@ -1160,7 +1160,7 @@ emit({...answer(inv), watched, left: pending(),
 """)
         self.assertEqual(got["watched"], [[":1.42"]])
         self.assertEqual(got["error"],
-                         ["org.fuckwayland.Bridge1.Cancelled", "the caller went away"])
+                         ["org.w11.Bridge1.Cancelled", "the caller went away"])
         self.assertEqual((got["released"], got["unwatched"]), (1, 1))
         self.assertEqual(got["left"], {"timers": 0, "handlers": 0})
 
@@ -1182,7 +1182,7 @@ world.stage.emit('captured-event', release());
 emit({second: answer(second), first: answer(first), duringSecond});
 """)
         self.assertEqual(got["second"]["error"][0],
-                         "org.fuckwayland.Bridge1.Unsupported")
+                         "org.w11.Bridge1.Unsupported")
         self.assertIn("already in progress", got["second"]["error"][1])
         self.assertEqual(got["duringSecond"], {"grabs": 1, "timers": 1})
         self.assertEqual(got["first"]["reply"], [XTERM])
@@ -1213,7 +1213,7 @@ emit({first: answer(first), second: answer(second), held,
 """)
         self.assertEqual(got["first"]["reply"], [XTERM])
         self.assertEqual(got["second"]["error"][0],
-                         "org.fuckwayland.Bridge1.Unsupported")
+                         "org.w11.Bridge1.Unsupported")
         self.assertIn("just held the input grab", got["second"]["error"][1])
         # The quiet period is the length of the grab, rounded UP to whole
         # seconds, so the number in the message is a function of how long
@@ -1258,7 +1258,7 @@ emit(out);
 """)
         for axis in ("modalCount", "actionMode", "overview"):
             self.assertEqual(got[axis]["error"][0],
-                             "org.fuckwayland.Bridge1.Unsupported", axis)
+                             "org.w11.Bridge1.Unsupported", axis)
             self.assertIn("the shell is already modal", got[axis]["error"][1], axis)
             self.assertEqual(got[axis]["grabs"], 0, axis)
             self.assertEqual(got[axis]["timers"], 0, axis)
@@ -1276,7 +1276,7 @@ const inv = start(ext);
 emit({...answer(inv), left: pending(),
       names: H.names().filter(n => /pushModal|popModal|stage.connect|timeout/.test(n))});
 """)
-        self.assertEqual(got["error"][0], "org.fuckwayland.Bridge1.Unsupported")
+        self.assertEqual(got["error"][0], "org.w11.Bridge1.Unsupported")
         self.assertIn("would not grant an input grab", got["error"][1])
         self.assertEqual(got["names"],
                          ["GLib.timeout_add", "Main.pushModal", "Main.popModal"])
@@ -1297,7 +1297,7 @@ emit({...answer(inv), left: pending(),
       unowned: H.callsTo('Gio.bus_unown_name').length});
 """)
         self.assertEqual(got["error"],
-                         ["org.fuckwayland.Bridge1.Cancelled",
+                         ["org.w11.Bridge1.Cancelled",
                           "the bridge extension was disabled"])
         self.assertEqual(got["released"], 1)
         self.assertEqual((got["unexported"], got["unowned"]), (1, 1))

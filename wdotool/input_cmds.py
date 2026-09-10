@@ -8,7 +8,7 @@ import math
 import sys
 import time
 
-from fwcommon.errors import CmdError
+from w11common.errors import CmdError
 from wdotool import backend as _backend
 from wdotool import commands
 from wdotool.cli import ChainAbort, _opts

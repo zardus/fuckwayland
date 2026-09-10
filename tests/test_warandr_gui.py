@@ -51,7 +51,7 @@ import unittest
 # tests/conftest.py (which covers pytest) and tests/test_passthrough.py.
 # This line is what covers `python3 tests/<file>.py`, where conftest is
 # not loaded, and it reaches every subprocess a test spawns.
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FIXTURES = os.path.join(ROOT, "tests", "fixtures")
@@ -768,11 +768,11 @@ class GuiOverlapConsent(GuiOverlapCase):
         d, n = self.gnome(after=self.mark)
         self.assertEqual(d["overlap_state"], "available")
         # GNOME stops refusing the drop, and says what it will do instead
-        self.assertIn("fuckwayland-overlap extension", d["overlap"])
+        self.assertIn("w11-overlap extension", d["overlap"])
         lay, n = self.overlap_the_boxes(n)
         # ...and the drop's own sentence says what GNOME will be made to do
         self.assertIn("DP-2 overlaps DP-1", lay["status"])
-        self.assertIn("fuckwayland-overlap extension", lay["status"])
+        self.assertIn("w11-overlap extension", lay["status"])
         # with the pointer off the boxes the status bar goes back to the
         # command -- and it is the command Apply will really run, flag included
         self.xdo("mousemove", 690, 240)
@@ -938,7 +938,7 @@ class GuiOverlapNeverAsks(GuiOverlapCase):
         a first apply that quietly recorded an agreement would make the second
         indistinguishable from a session where the user had been asked and had
         said yes.  Measured on GNOME 46.0 (live-measurements.md): the record is
-        `~/.config/fuckwayland/gnome-overlap.json`, and nothing but the dialog's
+        `~/.config/w11/gnome-overlap.json`, and nothing but the dialog's
         `remember` box or `wxrandr --gnome-overlap-allow` ever writes it."""
         d, n = self.gnome(after=self.mark)
         self.assertEqual(d["overlap_state"], "available")   # nothing agreed to
@@ -1045,7 +1045,7 @@ class GuiOverlapRefused(GuiSession):
         d, n = self.backend_dump(lambda d: d["name"] == "mutter", after=self.mark)
         self.assertEqual(d["overlap_state"], "unavailable")
         self.assertIn("refuses monitors that are not edge-adjacent", d["overlap"])
-        self.assertNotIn("fuckwayland-overlap", d["overlap"])
+        self.assertNotIn("w11-overlap", d["overlap"])
         lay = self.layout()
         self.drag(lay["boxes"]["DP-2"], *self.centre(lay["boxes"]["DP-1"]))
         st, n = self.wait_dump("status", lambda d: "Mutter refuses" in d["text"],

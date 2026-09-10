@@ -1,4 +1,4 @@
-fuckwayland for Debian/Ubuntu
+w11 for Debian/Ubuntu
 =============================
 
 One package, both releases
@@ -18,27 +18,27 @@ What is installed where
         the six commands.  Under their own names only: no file of xdotool,
         wmctrl, x11-utils or x11-xserver-utils is touched or replaced, which
         is what keeps the X11 handover working.
-  /usr/lib/python3/dist-packages/{fwcommon,wdotool,wwmctl,wxprop,wxrandr,
+  /usr/lib/python3/dist-packages/{w11common,wdotool,wwmctl,wxprop,wxrandr,
                                  warandr,wmirror}/
         the code.
-  /usr/share/gnome-shell/extensions/fuckwayland-bridge@fuckwayland/
+  /usr/share/gnome-shell/extensions/w11-bridge@w11/
         the GNOME Shell bridge extension, system-wide.
-  /usr/share/gnome-shell/extensions/fuckwayland-overlap@fuckwayland/
+  /usr/share/gnome-shell/extensions/w11-overlap@w11/
         the second, separate GNOME Shell extension, the one behind
         `wxrandr --unsafe-gnome-overlap`.  Shipped so that it is there, and
         enabled for nobody: no postinst, no autostart helper and no user's
         dconf touches it, which is deliberate, because it is the only thing
         in this package that can cost you the session you are sitting in.
         Turning it on is `gnome-extensions enable
-        fuckwayland-overlap@fuckwayland` and a re-login, by hand.  Even then
+        w11-overlap@w11` and a re-login, by hand.  Even then
         nothing calls it until an apply carries
         `wxrandr --unsafe-gnome-overlap`, which prints what it is about to do
         in full every time until `wxrandr --gnome-overlap-allow` records an
         agreement -- that agreement changes what is printed and nothing else.
         See Overlapping monitors on GNOME in
-        /usr/share/doc/fuckwayland/README.md.gz.
-  /usr/lib/fuckwayland/enable-bridge
-  /usr/lib/fuckwayland/enable-bridge.desktop
+        /usr/share/doc/w11/README.md.gz.
+  /usr/lib/w11/enable-bridge
+  /usr/lib/w11/enable-bridge.desktop
         the once-per-user helper that enables the extension (see below) and
         its autostart entry.  Both are packaging/common/enable-bridge and
         its .desktop in the source tree, not debian/: they were never
@@ -49,8 +49,8 @@ What is installed where
         a regular file under /etc is a conffile, and a conffile outlives
         `apt remove` -- an autostart entry pointing at a helper the removal
         has just deleted.  The symlink goes when the package goes.
-  /usr/lib/udev/rules.d/60-fuckwayland-uinput.rules
-  /usr/lib/modules-load.d/fuckwayland-uinput.conf
+  /usr/lib/udev/rules.d/60-w11-uinput.rules
+  /usr/lib/modules-load.d/w11-uinput.conf
         /dev/uinput for the user at the active seat.
   /usr/share/applications/warandr.desktop
         the menu entry for the GUI.
@@ -65,14 +65,14 @@ neither of those things itself.  What the package does instead:
 
   * installs the extension where gnome-shell will find it at the next login
     (the system directory -- no user's home is written to);
-  * ships an autostart entry that runs /usr/lib/fuckwayland/enable-bridge
+  * ships an autostart entry that runs /usr/lib/w11/enable-bridge
     inside each user's first GNOME session after the install.  That script
     adds the uuid to org.gnome.shell enabled-extensions once, writes a stamp
-    in ~/.config/fuckwayland, and then leaves the setting alone -- so if you
+    in ~/.config/w11, and then leaves the setting alone -- so if you
     later disable the extension, it stays disabled.
 
     Once per installation, that is: removing the package deletes the system
-    stamp /var/lib/fuckwayland/installed, installing writes a fresh one, and
+    stamp /var/lib/w11/installed, installing writes a fresh one, and
     the helper enables the extension again for any user whose own stamp is
     older than it.  Without that, a remove (which takes the extension with it,
     and with it the reason for the uuid to stay in anyone's dconf) followed by
@@ -87,7 +87,7 @@ So: install, log out, log back in, and the window commands work.  Before that
 relogin wxrandr, warandr and wdotool's input commands already work, and the
 window commands say the bridge is not running.
 
-  gnome-extensions list --enabled | grep fuckwayland   # is it on for me?
+  gnome-extensions list --enabled | grep w11           # is it on for me?
   sh gnome/install-bridge.sh --check                   # the full report
 
 If you had previously installed the extension per user with
@@ -106,10 +106,10 @@ Removing the package puts the node back to root:root 0600 with no ACL.
 
 Anyone who can open /dev/uinput can type as you.  That is the trade these
 tools exist to make, and it is spelled out in the threat model in
-/usr/share/doc/fuckwayland/README.md.gz.  If it is the wrong trade on this
+/usr/share/doc/w11/README.md.gz.  If it is the wrong trade on this
 machine, remove the rule and run the input commands under sudo instead:
 
-  sudo rm /usr/lib/udev/rules.d/60-fuckwayland-uinput.rules
+  sudo rm /usr/lib/udev/rules.d/60-w11-uinput.rules
   sudo udevadm control --reload-rules
 
 Alongside a pip install from the clone
@@ -118,7 +118,7 @@ Alongside a pip install from the clone
 The package and a venv install of the same source live together: /usr/local/bin
 comes before /usr/bin on Ubuntu's PATH, so the symlinks the README's pip route
 makes keep winning for the six command names, dpkg owns nothing under
-/usr/local, and `dpkg -V fuckwayland` stays clean either way.
+/usr/local, and `dpkg -V w11` stays clean either way.
 
 One thing is worth knowing if the clone is what you are working on.  A venv made
 with --system-site-packages sees /usr/lib/python3/dist-packages, and setuptools'
@@ -130,7 +130,7 @@ both releases: 24.04 with Python 3.12 and 26.04 with Python 3.14.  Either do
 not install the package on the machine you develop on, or point at the clone
 explicitly:
 
-  PYTHONPATH=/path/to/the/clone ~/.venvs/fuckwayland/bin/wdotool ...
+  PYTHONPATH=/path/to/the/clone ~/.venvs/w11/bin/wdotool ...
 
 A non-editable install into the venv (`pip install .`) is not affected: those
 files are in the venv's own site-packages, which comes first.

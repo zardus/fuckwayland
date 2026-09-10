@@ -1,0 +1,88 @@
+<node>
+  <interface name="org.w11.Bridge1">
+    <!-- windows -->
+    <method name="ListWindows">
+      <arg type="s" direction="out" name="json"/>
+    </method>
+    <method name="GetWindow">
+      <arg type="t" direction="in" name="id"/>
+      <arg type="s" direction="out" name="json"/>
+    </method>
+    <method name="Activate"><arg type="t" direction="in" name="id"/></method>
+    <method name="Focus"><arg type="t" direction="in" name="id"/></method>
+    <method name="Close"><arg type="t" direction="in" name="id"/></method>
+    <method name="Kill"><arg type="t" direction="in" name="id"/></method>
+    <method name="Minimize"><arg type="t" direction="in" name="id"/></method>
+    <method name="Unminimize"><arg type="t" direction="in" name="id"/></method>
+    <method name="Raise"><arg type="t" direction="in" name="id"/></method>
+    <method name="Lower"><arg type="t" direction="in" name="id"/></method>
+    <method name="Move">
+      <arg type="t" direction="in" name="id"/>
+      <arg type="i" direction="in" name="x"/>
+      <arg type="i" direction="in" name="y"/>
+    </method>
+    <method name="Resize">
+      <arg type="t" direction="in" name="id"/>
+      <arg type="i" direction="in" name="width"/>
+      <arg type="i" direction="in" name="height"/>
+    </method>
+    <method name="MoveResize">
+      <arg type="t" direction="in" name="id"/>
+      <arg type="i" direction="in" name="x"/>
+      <arg type="i" direction="in" name="y"/>
+      <arg type="i" direction="in" name="width"/>
+      <arg type="i" direction="in" name="height"/>
+    </method>
+    <method name="SetState">
+      <arg type="t" direction="in" name="id"/>
+      <arg type="s" direction="in" name="state"/>
+      <arg type="s" direction="in" name="action"/>
+      <arg type="b" direction="out" name="applied"/>
+    </method>
+    <method name="MoveToWorkspace">
+      <arg type="t" direction="in" name="id"/>
+      <arg type="i" direction="in" name="index"/>
+    </method>
+    <method name="SelectWindow">
+      <arg type="u" direction="in" name="timeout_ms"/>
+      <arg type="t" direction="out" name="id"/>
+    </method>
+    <!-- workspaces -->
+    <method name="GetActiveWorkspace"><arg type="i" direction="out" name="index"/></method>
+    <method name="SetActiveWorkspace"><arg type="i" direction="in" name="index"/></method>
+    <method name="GetNWorkspaces"><arg type="i" direction="out" name="count"/></method>
+    <method name="SetNWorkspaces"><arg type="i" direction="in" name="count"/></method>
+    <method name="ListWorkspaces"><arg type="s" direction="out" name="json"/></method>
+    <method name="ShowDesktop"><arg type="b" direction="in" name="show"/></method>
+    <!-- screen -->
+    <method name="DisplaySize">
+      <arg type="i" direction="out" name="width"/>
+      <arg type="i" direction="out" name="height"/>
+    </method>
+    <method name="GetPointer">
+      <arg type="i" direction="out" name="x"/>
+      <arg type="i" direction="out" name="y"/>
+      <arg type="u" direction="out" name="modifiers"/>
+    </method>
+    <method name="ListMonitors"><arg type="s" direction="out" name="json"/></method>
+    <method name="XInfo">
+      <arg type="s" direction="out" name="display"/>
+      <arg type="s" direction="out" name="xauthority"/>
+    </method>
+    <method name="ConfirmDisplayChange">
+      <arg type="b" direction="in" name="keep"/>
+      <arg type="b" direction="out" name="handled"/>
+    </method>
+    <!-- misc -->
+    <method name="GetVersion"><arg type="u" direction="out" name="version"/></method>
+    <property name="Version" type="u" access="read"/>
+    <!-- events -->
+    <signal name="WindowEvent">
+      <arg type="t" name="id"/>
+      <arg type="s" name="change"/>
+    </signal>
+    <signal name="WorkspaceEvent">
+      <arg type="s" name="change"/>
+    </signal>
+  </interface>
+</node>

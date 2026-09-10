@@ -27,8 +27,8 @@ import shutil
 import subprocess
 import time
 
-from fwcommon import distro, session
-from fwcommon.errors import CmdError
+from w11common import distro, session
+from w11common.errors import CmdError
 from wxrandr import core as wxcore
 
 HELPER = "wl-mirror"
@@ -43,7 +43,7 @@ _HINT_WHERE = {"debian": "on Ubuntu/Debian", "fedora": "on Fedora",
 def install_hint() -> str:
     """`on Ubuntu/Debian: sudo apt install wl-mirror`, and the same sentence for whatever family this box is.
 
-    A function and not a constant: `fwcommon.distro` reads /etc/os-release, and a value frozen at import time
+    A function and not a constant: `w11common.distro` reads /etc/os-release, and a value frozen at import time
     would be this process's first answer for the life of the interpreter -- which is exactly what the tests
     that plant an os-release file need not to be."""
     fam = distro.family()
@@ -175,8 +175,8 @@ def missing_helper_lines() -> list:
 
 def no_session_lines() -> list:
     """What to say when there is no Wayland session to mirror on."""
-    from fwcommon import passthrough
-    # respect_override=False: FUCKWAYLAND_PASSTHROUGH says what to do about handing over to an X11 original, and
+    from w11common import passthrough
+    # respect_override=False: W11_PASSTHROUGH says what to do about handing over to an X11 original, and
     # wmirror has no original to hand over to (warandr/randr.py reasons the same way).
     if passthrough.session_kind(respect_override=False) == "x11":
         return ["this is an X11 session: there is no wl-mirror here",
@@ -189,7 +189,7 @@ def no_session_lines() -> list:
 
 def open_conn(wayland_socket=None):
     """A WlConn to the compositor, or Refusal naming what is missing."""
-    from fwcommon.wayland_mini import WlConn
+    from w11common.wayland_mini import WlConn
     if wayland_socket is None:
         hit = session.find_wayland_socket()
         if hit is None:

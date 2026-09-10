@@ -19,7 +19,7 @@
 #     MATE box actually sees, so they are asserted as such and not as a defect [recon2/mate 1].
 #   * `-b add,shaded` sticking: shading is a live state on this desktop.
 #   * `x11root`: root over `vmctl ssh` with `env -i` answering, through `mate-session` in
-#     fwcommon/session.py's _SESSION_LEADERS (comm is 12 bytes, inside the 15 the kernel keeps).  The
+#     w11common/session.py's _SESSION_LEADERS (comm is 12 bytes, inside the 15 the kernel keeps).  The
 #     mechanism gap was measured on this desktop -- stock tuple `_shell_environ(1000)` -> {}, with the
 #     name added -> DISPLAY=:91 -- and whether LightDM's ~/.Xauthority masks it on a real box was left
 #     to a VM [recon2/mate 4].  This flavor is that VM.

@@ -1,0 +1,8 @@
+{
+  "uuid": "w11-bridge@w11",
+  "name": "w11 bridge",
+  "description": "Exports Mutter window, workspace and monitor control over D-Bus (org.w11.Bridge) so wdotool, wwmctl and wxprop can drive a GNOME Wayland session. wxrandr and warandr do not need it: monitors go through Mutter's own DisplayConfig.",
+  "shell-version": ["45", "46", "47", "48", "49", "50", "51"],
+  "version": 3,
+  "url": "https://github.com/zardus/w11"
+}

@@ -145,7 +145,7 @@ def options_in_code(tool):
 
 
 def _run(args, timeout=60):
-    env = dict(os.environ, PYTHONPATH=ROOT, FUCKWAYLAND_PASSTHROUGH="never")
+    env = dict(os.environ, PYTHONPATH=ROOT, W11_PASSTHROUGH="never")
     try:
         p = subprocess.run([sys.executable, "-m"] + args, env=env, cwd=ROOT,
                            capture_output=True, text=True, timeout=timeout)

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""wxprop on GNOME: plane resolution over the mock fuckwayland bridge
+"""wxprop on GNOME: plane resolution over the mock w11 bridge
 (tests/test_backend_gnome.py's MockBridge) with the X plane faked as an
 in-memory x11_mini stand-in.
 
@@ -28,7 +28,7 @@ sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tests"))
 
-from fwcommon.dbus_mini import Bus
+from w11common.dbus_mini import Bus
 from test_backend_gnome import (CALC, DESKTOP, EDITOR, XTERM, XTERM_XID,
                                 MockBridge, _Base)
 from test_wxprop_cli import _CapStdout
@@ -41,7 +41,7 @@ from wxprop import cli, core
 # tests/conftest.py (which covers pytest) and tests/test_passthrough.py.
 # This line is what covers `python3 tests/<file>.py`, where conftest is
 # not loaded, and it reaches every subprocess a test spawns.
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
 XROOT = 0x1C5
 WM_CHECK = 0x200001

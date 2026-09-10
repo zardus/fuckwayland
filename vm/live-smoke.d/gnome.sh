@@ -16,7 +16,7 @@
 # and state live under /etc/gdm and /var/lib/gdm instead of gdm3 (measured on
 # Fedora 44 and on Arch [recon2/fedora 5, recon2/arch 5]), and the overlap
 # route's private struct size on Fedora's own libmutter-18 has never been read
-# -- gnome/fuckwayland-overlap@fuckwayland/generations.json records 80 for
+# -- gnome/w11-overlap@w11/generations.json records 80 for
 # Ubuntu's mutter 50.1 and nothing for Fedora's 50.4, so the overlap check
 # there is an `xwant` naming the row it waits for [plan C1, C5 item 22].
 
@@ -27,9 +27,9 @@ SMOKE_PHASES="$SMOKE_PHASES root nodialog"
 EDITOR_CLASS=TextEditor          # WM_CLASS is org.gnome.TextEditor, exactly as
                                  # under X: `--class gnome-text-editor` matching
                                  # nothing is not a bug and is not asserted here.
-BRIDGE_UUID=fuckwayland-bridge@fuckwayland
-OVERLAP_UUID=fuckwayland-overlap@fuckwayland
-BR='--session -d org.fuckwayland.Bridge -o /org/fuckwayland/Bridge -m org.fuckwayland.Bridge1'
+BRIDGE_UUID=w11-bridge@w11
+OVERLAP_UUID=w11-overlap@w11
+BR='--session -d org.w11.Bridge -o /org/w11/Bridge -m org.w11.Bridge1'
 MX='$HOME/.config/monitors.xml'  # expanded in the guest, not here
 
 # GDM's own two paths, resolved in the GUEST by which directory the package
@@ -55,11 +55,11 @@ install_extra() {
     # at the next login (the reboot phase_install does right after this).
     "$VM" scp "$NAME" "$REPO/gnome/$BRIDGE_UUID/extension.js"                "$NAME:/tmp/b-extension.js" >/dev/null
     "$VM" scp "$NAME" "$REPO/gnome/$BRIDGE_UUID/metadata.json"               "$NAME:/tmp/b-metadata.json" >/dev/null
-    "$VM" scp "$NAME" "$REPO/gnome/$BRIDGE_UUID/org.fuckwayland.Bridge1.xml" "$NAME:/tmp/b-iface.xml" >/dev/null
+    "$VM" scp "$NAME" "$REPO/gnome/$BRIDGE_UUID/org.w11.Bridge1.xml" "$NAME:/tmp/b-iface.xml" >/dev/null
     root "d=/usr/share/gnome-shell/extensions/$BRIDGE_UUID; mkdir -p \$d;
           install -m 644 /tmp/b-extension.js \$d/extension.js;
           install -m 644 /tmp/b-metadata.json \$d/metadata.json;
-          install -m 644 /tmp/b-iface.xml \$d/org.fuckwayland.Bridge1.xml; true" >/dev/null
+          install -m 644 /tmp/b-iface.xml \$d/org.w11.Bridge1.xml; true" >/dev/null
     pass "the tree's $BRIDGE_UUID is installed over the package's copy"
 }
 
@@ -88,9 +88,9 @@ phase_bridge() {
     elif printf '%s\n' "$info" | grep -q 'OUT OF DATE'; then
         fail "the bridge is OUT OF DATE as shipped on GNOME $major (F0.0/F6.2)"
         record_out_of_date
-        "$VM" scp "$NAME" "$STEPS/guest-gnome-meta51.sh" "$NAME:/tmp/fw-meta.sh" >/dev/null
+        "$VM" scp "$NAME" "$STEPS/guest-gnome-meta51.sh" "$NAME:/tmp/w11-meta.sh" >/dev/null
         note "adding \"$major\" to the INSTALLED metadata.json (never the repo's):" \
-             "$(root "sh /tmp/fw-meta.sh $major" | tr -d '\n')"
+             "$(root "sh /tmp/w11-meta.sh $major" | tr -d '\n')"
         root "( sleep 1; reboot ) >/dev/null 2>&1 &" >/dev/null 2>&1 || true
         sleep 8
         wait_session >/dev/null || { fail "no session after the metadata reboot"; return 1; }
@@ -102,36 +102,36 @@ phase_bridge() {
         fail "the bridge is neither ACTIVE nor OUT OF DATE [$(ev "$info")]"
     fi
     note "journal: $(guest "journalctl --user -b --no-pager 2>/dev/null \
-              | grep -o '\[fuckwayland-bridge\].*' | tail -1" || true)"
+              | grep -o '\[w11-bridge\].*' | tail -1" || true)"
     want "the bridge answers GetVersion on the session bus" "uint32|[0-9]" \
          "$(guest "gdbus call $BR.GetVersion 2>&1" || true)"
     # The name, on its own line, because acquiring it is what every window
     # command depends on and because it is the one half of the bridge that was
     # measured on Fedora's GNOME 50.4 before any flavor existed: the shell log
-    # said `[fuckwayland-bridge] acquired org.fuckwayland.Bridge` and
+    # said `[w11-bridge] acquired org.w11.Bridge` and
     # `install-bridge.sh --check` said `owned: yes` [recon2/fedora 3.2].
-    want "org.fuckwayland.Bridge is owned on this shell" "org.fuckwayland.Bridge" \
+    want "org.w11.Bridge is owned on this shell" "org.w11.Bridge" \
          "$(guest "gdbus call --session --dest org.freedesktop.DBus \
                      --object-path /org/freedesktop/DBus \
                      --method org.freedesktop.DBus.ListNames 2>&1 \
-                   | tr ',' '\\n' | grep fuckwayland" || true)"
+                   | tr ',' '\\n' | grep w11" || true)"
 }
 
 # The layout half.  us,de with the Super+Space gesture; German types
 # `de: yz@ Straße` byte-exact and `keys explain` says group 2 of 3 (measured on
 # 46, 50 and 51 -- the third group is the keymap's, not a third source).
 layout_phase() {
-    "$VM" scp "$NAME" "$STEPS/guest-gnome-layout.sh" "$NAME:/tmp/fw-layout.sh" >/dev/null
+    "$VM" scp "$NAME" "$STEPS/guest-gnome-layout.sh" "$NAME:/tmp/w11-layout.sh" >/dev/null
     guest "gsettings set org.gnome.desktop.input-sources sources \"[('xkb','us'),('xkb','de')]\"" >/dev/null || true
     sleep 3
     guest "wdotool windowactivate --sync $WIN" >/dev/null || true
     local got
-    got=$(guest "sh /tmp/fw-layout.sh de" | tr -d ' \n' || true)
+    got=$(guest "sh /tmp/w11-layout.sh de" | tr -d ' \n' || true)
     same "the Super+Space gesture reaches the German source" "de" "$got"
     want "keys explain names the second group and where it came from" \
          "group 2 of 3" "$(guest 'wdotool keys explain yz@ 2>&1' || true)"
     same "wdotool type under de arrives byte-exact" "de: yz@ Straße" "$(type_and_read 'de: yz@ Straße')"
-    got=$(guest "sh /tmp/fw-layout.sh us" | tr -d ' \n' || true)
+    got=$(guest "sh /tmp/w11-layout.sh us" | tr -d ' \n' || true)
     same "the gesture switches back to us" "us" "$got"
     # The same running daemon must follow the switch: no restart between these.
     same "the same daemon follows the switch back and types the US string" "us: yz@" "$(type_and_read 'us: yz@')"
@@ -143,7 +143,7 @@ layout_phase() {
 # "GNOME 51 changes the i % 3 + 1 chunk rule".
 phase_five() {
     [ -n "$WIN" ] || { fail "no window from phase_windows"; return 1; }
-    "$VM" scp "$NAME" "$STEPS/guest-gnome-layout.sh" "$NAME:/tmp/fw-layout.sh" >/dev/null
+    "$VM" scp "$NAME" "$STEPS/guest-gnome-layout.sh" "$NAME:/tmp/w11-layout.sh" >/dev/null
     guest "gsettings set org.gnome.desktop.input-sources sources \
            \"[('xkb','us'),('xkb','de'),('xkb','fr'),('xkb','gr'),('xkb','es')]\"" >/dev/null || true
     sleep 3
@@ -156,7 +156,7 @@ phase_five() {
     # FAIL that says nothing about the tool.
     local L got expl warn
     for L in es gr fr de us; do
-        got=$(guest "sh /tmp/fw-layout.sh $L" | tr -d ' \n' || true)
+        got=$(guest "sh /tmp/w11-layout.sh $L" | tr -d ' \n' || true)
         if [ "$got" != "$L" ]; then fail "the gesture did not reach $L (at $(ev "$got"))"; continue; fi
         expl=$(guest "wdotool keys explain yz@ 2>&1 | head -1" || true)
         note "$L: $(ev "$expl")"
@@ -248,7 +248,7 @@ phase_persistent() {
     if [ -n "$after" ] && [ "$after" != "$before" ]; then
         pass "Mutter wrote ~/.config/monitors.xml as soon as the change was kept"
     else fail "monitors.xml did not change after the confirmation (${before:-absent} -> ${after:-absent})"; fi
-    guest "cp $MX /tmp/fw-monitors-kept.xml" >/dev/null 2>&1 || true
+    guest "cp $MX /tmp/w11-monitors-kept.xml" >/dev/null 2>&1 || true
     # A second persistent apply keeps the previous bytes next to it.
     guest "wxrandr --output $second --right-of $first --persistent >/dev/null 2>&1 &" >/dev/null || true
     sleep 4
@@ -272,7 +272,7 @@ phase_persistent() {
 }
 
 # The overlap route.  On 46.0 (libmutter-14 build 9e23feb34618) this applied
-# with all six checks green and the shipped FwOverlap14 typelib.
+# with all six checks green and the shipped W11Overlap14 typelib.
 phase_overlap() {
     local pair first second out st=0 mxsum undo dryundo
     pair=$(display_pair); first=${pair%% *}; second=${pair#* }
@@ -293,7 +293,7 @@ phase_overlap() {
         want "--gnome-overlap-status says the route works on this build" "^(available|agreed)$" \
              "$(printf '%s\n' "$status" | head -1)"
     else
-        # gnome/fuckwayland-overlap@fuckwayland/generations.json records
+        # gnome/w11-overlap@w11/generations.json records
         # MetaMonitorsConfig at 80 bytes for Ubuntu's mutter 50.1 and has no row
         # for anyone else's libmutter-18.  The extension re-reads the size from
         # the GType registry on every call and refuses unless the two agree, so
@@ -343,7 +343,7 @@ phase_overlap() {
     # Now the agreement, which the measurement recorded after that first apply:
     # what it holds, and the one thing it changes -- how much is printed.
     guest "wxrandr --gnome-overlap-allow >/dev/null 2>&1; true" >/dev/null || true
-    out=$(guest 'cat ${XDG_CONFIG_HOME:-$HOME/.config}/fuckwayland/overlap-consent.json 2>&1' || true)
+    out=$(guest 'cat ${XDG_CONFIG_HOME:-$HOME/.config}/w11/overlap-consent.json 2>&1' || true)
     want "the agreement names libmutter" '"libmutter"' "$out"
     want "the agreement names the libmutter build id" '"libmutter_build"' "$out"
     want "the agreement names the shell version" '"shell"' "$out"
@@ -356,7 +356,7 @@ phase_overlap() {
     sleep 2
     guest "wxrandr --gnome-overlap-forget >/dev/null 2>&1; true" >/dev/null || true
     wantnot "--gnome-overlap-forget withdrew the agreement" "libmutter" \
-        "$(guest 'cat ${XDG_CONFIG_HOME:-$HOME/.config}/fuckwayland/overlap-consent.json 2>&1' || true)"
+        "$(guest 'cat ${XDG_CONFIG_HOME:-$HOME/.config}/w11/overlap-consent.json 2>&1' || true)"
     same "~/.config/monitors.xml is untouched by the whole overlap route" "$mxsum" \
          "$(guest "sha256sum $MX 2>/dev/null | cut -d' ' -f1" | tr -d ' \n' || true)"
 }
@@ -364,7 +364,7 @@ phase_overlap() {
 # F0.3: the greeter is a GNOME Shell session too, and gdm runs it as its own
 # user with its own dconf.  enable-bridge must refuse to run there: no stamp
 # under gdm's state directory (/var/lib/gdm3 on Ubuntu, /var/lib/gdm on Fedora
-# and Arch) and no fuckwayland in gdm's enabled-extensions after a boot that
+# and Arch) and no w11 in gdm's enabled-extensions after a boot that
 # nobody logs into.
 phase_enablebridge() {
     root "c=$GDM_CONF; sed -i 's/^AutomaticLoginEnable=.*/AutomaticLoginEnable=false/' \$c 2>/dev/null;
@@ -380,10 +380,10 @@ phase_enablebridge() {
     # so dconf opens /root/.config/dconf/user and answers about root's database:
     # the check would pass on that error output whatever gdm's dconf held.  The
     # grep over gdm's own dconf directory is the second, independent half.
-    wantnot "gdm's own dconf has no fuckwayland in enabled-extensions" "fuckwayland" \
+    wantnot "gdm's own dconf has no w11 in enabled-extensions" "w11" \
         "$(root "h=$GDM_HOME; runuser -u gdm -- env HOME=\$h XDG_RUNTIME_DIR=/run/user/\$(id -u gdm) \
                      dconf read /org/gnome/shell/enabled-extensions 2>&1;
-                 grep -ras fuckwayland \$h/.config/dconf 2>/dev/null | head -2" || true)"
+                 grep -ras w11 \$h/.config/dconf 2>/dev/null | head -2" || true)"
     root "c=$GDM_CONF; sed -i 's/^AutomaticLoginEnable=.*/AutomaticLoginEnable=true/' \$c 2>/dev/null; true" \
         >/dev/null 2>&1 || true
     root "( sleep 1; reboot ) >/dev/null 2>&1 &" >/dev/null 2>&1 || true
@@ -401,7 +401,7 @@ phase_enablebridge() {
 # again and logind hands the ACL straight back.  This measures that.
 phase_udev() {
     "$VM" scp "$NAME" "$REPO/gnome/install-bridge.sh"           "$NAME:/tmp/install-bridge.sh" >/dev/null
-    "$VM" scp "$NAME" "$REPO/gnome/60-fuckwayland-uinput.rules" "$NAME:/tmp/60-fuckwayland-uinput.rules" >/dev/null
+    "$VM" scp "$NAME" "$REPO/gnome/60-w11-uinput.rules" "$NAME:/tmp/60-w11-uinput.rules" >/dev/null
     "$VM" scp "$NAME" "$REPO/gnome/modules-load-uinput.conf"    "$NAME:/tmp/modules-load-uinput.conf" >/dev/null
     want "the seated user has the uaccess ACL on /dev/uinput to start with" "^user:[a-z]" \
          "$(root 'getfacl -p /dev/uinput 2>/dev/null' || true)"
@@ -411,12 +411,12 @@ phase_udev() {
     # says it restored root:root 0600 while the package's own rule is still in
     # /usr/lib/udev/rules.d, so the grant comes straight back at the next
     # uevent.  What it owes the user is a sentence naming `apt remove
-    # fuckwayland`.  XFAIL until that lands, so an unfinished fix cannot turn a
+    # w11`.  XFAIL until that lands, so an unfinished fix cannot turn a
     # smoke run red -- and the day it lands this line says XPASS.
-    xwant "--udev --uninstall names apt remove fuckwayland when the package's rule is there (fix T11)" \
-          "apt remove fuckwayland" "$unin"
-    want "the package's own rule is still installed" "60-fuckwayland-uinput.rules" \
-         "$(root 'ls /usr/lib/udev/rules.d/60-fuckwayland-uinput.rules 2>&1' || true)"
+    xwant "--udev --uninstall names apt remove w11 when the package's rule is there (fix T11)" \
+          "apt remove w11" "$unin"
+    want "the package's own rule is still installed" "60-w11-uinput.rules" \
+         "$(root 'ls /usr/lib/udev/rules.d/60-w11-uinput.rules 2>&1' || true)"
     root 'udevadm control --reload-rules; udevadm trigger --name-match=uinput; udevadm settle --timeout=5' \
         >/dev/null 2>&1 || true
     sleep 2
@@ -436,6 +436,6 @@ phase_udev() {
     sleep 2
     want "the package's rule alone still grants the seated user the node" "^user:[a-z]" \
          "$(root 'getfacl -p /dev/uinput 2>/dev/null' || true)"
-    wantnot "and no /etc/udev/rules.d copy of ours is left behind" "60-fuckwayland-uinput" \
+    wantnot "and no /etc/udev/rules.d copy of ours is left behind" "60-w11-uinput" \
             "$(root 'ls /etc/udev/rules.d/ 2>/dev/null' || true)"
 }

@@ -35,7 +35,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # tests/conftest.py (which covers pytest) and tests/test_passthrough.py.
 # This line is what covers `python3 tests/<file>.py`, where conftest is
 # not loaded, and it reaches every subprocess a test spawns.
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
 import support
 from support import HeadlessWayfire
@@ -120,7 +120,7 @@ class WayfireLive(unittest.TestCase):
         env = dict(os.environ, XDG_RUNTIME_DIR=cls.rig.rtdir,
                    WAYLAND_DISPLAY=os.path.basename(cls.rig.wayland_socket),
                    WAYFIRE_SOCKET=cls.sock, PYTHONPATH=ROOT,
-                   FUCKWAYLAND_PASSTHROUGH="never")
+                   W11_PASSTHROUGH="never")
         # nothing of the runner's own session may leak in: a stray $SWAYSOCK would be found first, and
         # WDOTOOL_FAKE_UINPUT would replace the very path this file is here to exercise
         for name in ("SWAYSOCK", "I3SOCK", "HYPRLAND_INSTANCE_SIGNATURE", "WDOTOOL_FAKE_UINPUT",

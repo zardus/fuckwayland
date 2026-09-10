@@ -17,7 +17,7 @@ dragged with button/motion events). Everything that is not the window
 (`xrandr_parse`, `model`, `randr`, `cli --save/--command`) stays stdlib-only
 and is what the tests exercise without a display. A missing GTK is one line,
 and it names the box's own packages, read from `/etc/os-release` through
-`fwcommon/distro.py`: `warandr: GTK 3 for Python is not available (...) - on
+`w11common/distro.py`: `warandr: GTK 3 for Python is not available (...) - on
 Ubuntu/Debian: sudo apt install python3-gi gir1.2-gtk-3.0`, `on Fedora: sudo dnf
 install python3-gobject gtk3`, `on Arch: sudo pacman -S python-gobject gtk3`, and
 `on NixOS: nix-env -iA nixpkgs.python3Packages.pygobject3 nixpkgs.gtk3` — no `sudo`
@@ -159,7 +159,7 @@ ImageMagick `compare -metric AE` and an md5 of the raw RGB:
 | `x11` (Xorg) | taken, silently | **same pixels** | `--pos 960x0` exit 0, screen 3840×1080 → 2880×1080; a yellow window at 1052,348 inside the region: `AE 0`, both crops md5 `c05208d2…` (measured, Xorg + Xfce) |
 | `kwin` (Plasma 6) | taken | **same pixels** | `kscreen-doctor …position.960,0` exit 0, no warning; `AE 0`, equal md5 at *two* overlap widths (960 px and 480 px) — KWin renders each output as a view onto one shared scene (measured, Plasma 6 / KWin Wayland) |
 | `sway` / `wlr` (wlroots) | taken | **same pixels** | `swaymsg … position 960 0` → success; a window floated to layout 1100,300, wholly inside the region, is drawn on **both** heads: `AE 0`, equal md5 (measured, sway 1.11) |
-| `mutter` (GNOME) | **refused**, unless the overlap extension is installed | same pixels, through it | `ApplyMonitorsConfig` → `Logical monitors not adjacent` for x = 0, 100, 960, 1919, 1921, 2500 — every layout that is not exactly edge-adjacent, overlap and gap alike; nothing half-applied (measured, GNOME 46 / Mutter). With `fuckwayland-overlap` installed, warandr places it anyway and the shared region comes back byte-identical on both heads: [Overlapping monitors on GNOME](#overlapping-monitors-on-gnome) |
+| `mutter` (GNOME) | **refused**, unless the overlap extension is installed | same pixels, through it | `ApplyMonitorsConfig` → `Logical monitors not adjacent` for x = 0, 100, 960, 1919, 1921, 2500 — every layout that is not exactly edge-adjacent, overlap and gap alike; nothing half-applied (measured, GNOME 46 / Mutter). With `w11-overlap` installed, warandr places it anyway and the shared region comes back byte-identical on both heads: [Overlapping monitors on GNOME](#overlapping-monitors-on-gnome) |
 
 Measured, all four rows. **Inferred**, and said as inference: the `wlr`
 backend beyond sway (same wlroots renderer, only sway 1.11 on the bench);
@@ -250,7 +250,7 @@ this* rather than *this cannot be done*.
 ### Overlapping monitors on GNOME
 
 Since 0.4 there is one route through that validator, and `warandr` can use it:
-`fuckwayland-overlap@fuckwayland`, a *separate* GNOME Shell extension with its
+`w11-overlap@w11`, a *separate* GNOME Shell extension with its
 own installer and its own enable step, which writes the two numbers that are a
 monitor's position inside `gnome-shell` and asks Mutter to apply the result.
 What it is, what it risks and every check that stands between it and a dead
@@ -308,14 +308,14 @@ loud in the same place:
 
 * at the drop — `Virtual-2 overlaps Virtual-1. GNOME's Mutter refuses monitors
   that are not edge-adjacent, so warandr places these through the
-  fuckwayland-overlap extension instead; the layout is temporary and is gone at
+  w11-overlap extension instead; the layout is temporary and is gone at
   the next login.`
 * as the command, because the status bar's promise is that it shows what Apply
   runs — `wxrandr --unsafe-gnome-overlap --output Virtual-1 …`. That flag is
   added for an overlapping layout on GNOME with a route, and for nothing else;
   a saved script still gets the bare `wxrandr`, because a layout script must run
   on any desktop.
-* after the apply — `applied through the fuckwayland-overlap extension a layout
+* after the apply — `applied through the w11-overlap extension a layout
   GNOME refuses (Virtual-1 and Virtual-2 share 960x1080 at +960+0); not saved,
   gone at the next login`, plus `- agreed, warandr will not ask again on this
   GNOME` when the box was ticked.
@@ -328,7 +328,7 @@ because withdrawing has to work from a text console with a session that will
 not start, and that is where the command already works.
 
 **Verified live** on GNOME 50.1 (Ubuntu 26.04, two 1920×1080 virtio heads,
-`fuckwayland-overlap` installed): drag `Virtual-2` onto `Virtual-1`, Apply, the
+`w11-overlap` installed): drag `Virtual-2` onto `Virtual-1`, Apply, the
 dialog, the box, *Apply anyway* — `wxrandr --query` then really reads
 `Virtual-2 … 1920x1080+960+0`, the second head's screendump shows the shared
 960 px, and the agreement file exists. The second overlapping Apply produced no
@@ -745,7 +745,7 @@ warandr spelling at all, on purpose: WXRANDR.md §
 
 `warandr/{__init__,__main__,cli,randr,xrandr_parse,model,gui}.py`,
 `warandr.desktop`, `scripts/build-pyz.sh` (→ `dist/warandr`, bundling
-fwcommon + wxrandr so the Wayland backend runs from inside the pyz),
+w11common + wxrandr so the Wayland backend runs from inside the pyz),
 `pyproject.toml`
 console script. Tests: `tests/test_warandr_parse.py` (Xvfb captures, an
 xrandr 1.5.4 laptop capture, wxrandr renders for 1–4 outputs),

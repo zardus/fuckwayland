@@ -6,7 +6,7 @@ import subprocess
 import sys
 import time
 
-from fwcommon.errors import CmdError
+from w11common.errors import CmdError
 from wdotool.cli import ChainAbort, _opts
 from wdotool.cnum import atof as _atof, atoi as _atoi
 from wdotool.ctx import NoSessionError

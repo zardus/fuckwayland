@@ -23,7 +23,7 @@ import os
 import re
 import sys
 
-from fwcommon import distro, passthrough, stdio
+from w11common import distro, passthrough, stdio
 from wxrandr import core, gnome_overlap
 from wxrandr.core import ArgErr, Fatal, Stanza
 
@@ -762,7 +762,7 @@ def _probe_x11(env):
 
 
 def _probe_sway(verbose=False):
-    from fwcommon import session as wsession
+    from w11common import session as wsession
     sock = wsession.find_sway_socket()
     if not sock:
         return Probe("sway", False, "no sway or i3 IPC socket ($SWAYSOCK)")
@@ -784,7 +784,7 @@ def _probe_sway(verbose=False):
 
 
 def _probe_kwin():
-    from fwcommon import session as wsession
+    from w11common import session as wsession
     from wxrandr import kwin as kwin_mod
     conn = kwin_mod.probe()
     if conn is None:
@@ -803,7 +803,7 @@ def _probe_kwin():
 
 
 def _probe_mutter():
-    from fwcommon import session as wsession
+    from w11common import session as wsession
     from wxrandr import mutter as mutter_mod
     bus = mutter_mod.probe()
     if bus is None:
@@ -818,9 +818,9 @@ def _probe_mutter():
 
 def _probe_wlr(env=None):
     env = os.environ if env is None else env
-    from fwcommon import session as wsession
+    from w11common import session as wsession
     try:
-        from fwcommon.wayland_mini import WlConn
+        from w11common.wayland_mini import WlConn
         hit = wsession.find_wayland_socket()
         if hit is None:
             return Probe("wlr", False, "no wayland socket")
@@ -864,7 +864,7 @@ def _wlr_name(ifaces, env) -> str:
 def _probe_hypr(verbose=False):
     """Hyprland's own IPC. The socket is checked here rather than in wxrandr/hypr.py so that a session without
     one costs no import and no connection, exactly as _probe_sway does."""
-    from fwcommon import session as wsession
+    from w11common import session as wsession
     sock = wsession.find_hypr_socket()
     if not sock:
         return Probe("hypr", False,
@@ -884,7 +884,7 @@ def _probe_cinnamon():
     """Muffin's DisplayConfig, which is Mutter's interface under Cinnamon's bus name. A Cinnamon session owns
     org.cinnamon.Muffin.DisplayConfig and never org.gnome.Mutter.DisplayConfig [M recon2/cinnamon.md §2.2], so
     this is a separate name on the same bus and not a second flavour of the mutter probe."""
-    from fwcommon import session as wsession
+    from w11common import session as wsession
     from wxrandr import mutter as mutter_mod
     bus = mutter_mod.probe(flavor=mutter_mod.MUFFIN)
     if bus is None:
@@ -1201,7 +1201,7 @@ class Session:
     overlap_force = None
 
     def __init__(self, forced=None):
-        from fwcommon import session as wsession
+        from w11common import session as wsession
         name, self.backend_source, self.backend_note = resolve_backend(forced)
         probes = {}
         if name == "x11":
@@ -1513,7 +1513,7 @@ def _check_screen_size(opts: Opts, targets, dims, pos):
 
 def _apply_gamma(sess: Session, opts: Opts, outputs):
     from wxrandr import gamma as gammamod
-    from fwcommon import session as wsession
+    from w11common import session as wsession
     hit = wsession.find_wayland_socket()
     sock = hit[2] if hit else None
     known = {o.name for o in outputs}

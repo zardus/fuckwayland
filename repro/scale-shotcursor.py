@@ -10,7 +10,7 @@ composites the cursor into the scanout instead -- which is exactly the case
 QMP `screendump` CAN see.  So: park the pointer at a corner, shoot; move it to
 the target, shoot; difference the two, and the blob that is not at the parked
 corner is the cursor.  Positions come out in device pixels of that head, the
-same space the cursor plane reports, and nothing in fuckwayland produced them.
+same space the cursor plane reports, and nothing in w11 produced them.
 
 Prints JSON: one record per target with the blob's bounding box and centroid.
 """

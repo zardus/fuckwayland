@@ -8,25 +8,25 @@ GNOME Shell 46.0
 ### wdotool --version
 xdotool version 4.20260303.1
 ### rc=0
-### dpkg -l fuckwayland | tail -1
-ii  fuckwayland    0.4.0        all          X11 power tools as drop-in clones for Wayland
+### dpkg -l w11 | tail -1
+ii  w11    0.4.0        all          X11 power tools as drop-in clones for Wayland
 ### rc=0
-### gnome-extensions info fuckwayland-bridge@fuckwayland
-fuckwayland-bridge@fuckwayland
-  Name: fuckwayland bridge
-  Description: Exports Mutter window, workspace and monitor control over D-Bus (org.fuckwayland.Bridge) so wdotool, wwmctl and wxprop can drive a GNOME Wayland session. wxrandr and warandr do not need it: monitors go through Mutter's own DisplayConfig.
-  Path: /usr/share/gnome-shell/extensions/fuckwayland-bridge@fuckwayland
-  URL: https://github.com/antoniobianchi333/fuckwayland
+### gnome-extensions info w11-bridge@w11
+w11-bridge@w11
+  Name: w11 bridge
+  Description: Exports Mutter window, workspace and monitor control over D-Bus (org.w11.Bridge) so wdotool, wwmctl and wxprop can drive a GNOME Wayland session. wxrandr and warandr do not need it: monitors go through Mutter's own DisplayConfig.
+  Path: /usr/share/gnome-shell/extensions/w11-bridge@w11
+  URL: https://github.com/zardus/w11
   Version: 3
   Enabled: Yes
   State: ACTIVE
 ### rc=0
-### gnome-extensions info fuckwayland-overlap@fuckwayland
-fuckwayland-overlap@fuckwayland
-  Name: fuckwayland overlap (unsupported)
-  Description: Lets wxrandr --unsafe-gnome-overlap place two GNOME monitors so that they share screen area, which Mutter's own configuration API refuses. It does nothing at all until it is called, and it re-checks this build of libmutter before every write. Only GNOME Shell 46, 50 and 51 have been measured; on anything else it refuses. Not needed by any other fuckwayland tool.
-  Path: /usr/share/gnome-shell/extensions/fuckwayland-overlap@fuckwayland
-  URL: https://github.com/antoniobianchi333/fuckwayland
+### gnome-extensions info w11-overlap@w11
+w11-overlap@w11
+  Name: w11 overlap (unsupported)
+  Description: Lets wxrandr --unsafe-gnome-overlap place two GNOME monitors so that they share screen area, which Mutter's own configuration API refuses. It does nothing at all until it is called, and it re-checks this build of libmutter before every write. Only GNOME Shell 46, 50 and 51 have been measured; on anything else it refuses. Not needed by any other w11 tool.
+  Path: /usr/share/gnome-shell/extensions/w11-overlap@w11
+  URL: https://github.com/zardus/w11
   Version: 1
   Enabled: Yes
   State: ACTIVE
@@ -36,7 +36,7 @@ fuckwayland-overlap@fuckwayland
 ### rc=0
 ### WIN=1950993698
 ### wdotool getwindowname 1950993698
-fw-smoke.txt (/tmp) - Text Editor
+w11-smoke.txt (/tmp) - Text Editor
 ### rc=0
 ### wdotool windowmove 1950993698 100 100
 ### rc=0
@@ -104,10 +104,10 @@ Window 1950993698
   Geometry: 800x600
 ### rc=0
 ### wwmctl -l
-0x7449cd22  0 gnome46 fw-smoke.txt (/tmp) - Text Editor
+0x7449cd22  0 gnome46 w11-smoke.txt (/tmp) - Text Editor
 ### rc=0
 ### wwmctl -l -G
-0x7449cd22  0 100  100  800  600  gnome46 fw-smoke.txt (/tmp) - Text Editor
+0x7449cd22  0 100  100  800  600  gnome46 w11-smoke.txt (/tmp) - Text Editor
 ### rc=0
 ### wwmctl -d
 0  * DG: 5760x1080  VP: 0,0  WA: 66,32 5694x1048  Workspace 1
@@ -206,7 +206,7 @@ compositor: Mutter
 protocol: org.gnome.Mutter.DisplayConfig (D-Bus)
 available: yes
 ### rc=0
-### python3 /tmp/fw-oracle.py gnome
+### python3 /tmp/w11-oracle.py gnome
 Virtual-1 0,0
 Virtual-2 1920,0
 Virtual-3 3840,0
@@ -221,14 +221,14 @@ extension: running
 agreed on: 2026-09-08T00:05:37Z
 agreed for: GNOME Shell 46.0 (libmutter-14 build 9e23feb34618, MetaMonitorsConfig 72 bytes)
 agreed by: wxrandr --gnome-overlap-allow
-file: /home/test/.config/fuckwayland/overlap-consent.json
+file: /home/test/.config/w11/overlap-consent.json
 ### rc=0
 ### wxrandr --dryrun --unsafe-gnome-overlap --output Virtual-2 --pos 1000x0
 xrandr: --unsafe-gnome-overlap: GNOME will not place these monitors, so they are going to be
   placed by writing into the running gnome-shell instead of asking it.
   What it does:         move Virtual-2 from +1920+0 to +1000+0
                         by writing 8 bytes per monitor inside gnome-shell
-                        (GNOME Shell 46.0), through the fuckwayland-overlap@fuckwayland
+                        (GNOME Shell 46.0), through the w11-overlap@w11
                         extension, and then asking Mutter to apply the result.
   What it risks:        those 8 bytes go where this build of libmutter keeps a
                         logical monitor's position.  The extension re-checks
@@ -249,14 +249,14 @@ xrandr: --unsafe-gnome-overlap: GNOME will not place these monitors, so they are
                         so the layout is the one you started with.
                         If a session will not start at all, switch to a text
                         console with Ctrl+Alt+F3, log in and run
-                            gnome-extensions disable fuckwayland-overlap@fuckwayland
+                            gnome-extensions disable w11-overlap@w11
                         (or delete whichever of these two is there:
-                            ~/.local/share/gnome-shell/extensions/fuckwayland-overlap@fuckwayland
-                            /usr/share/gnome-shell/extensions/fuckwayland-overlap@fuckwayland   <- from the .deb ),
+                            ~/.local/share/gnome-shell/extensions/w11-overlap@w11
+                            /usr/share/gnome-shell/extensions/w11-overlap@w11   <- from the .deb ),
                         then Ctrl+Alt+F1 back to the login screen.
 xrandr: GNOME's rule this breaks: logical monitors not adjacent (an overlap counts, and so does a gap)
 xrandr: overlap check shell-version: GNOME Shell 46.0, libmutter-14.so.0 (build 9e23feb34618)
-xrandr: overlap check typelib: FwOverlap14, MetaMonitorsConfig 72 bytes as declared
+xrandr: overlap check typelib: W11Overlap14, MetaMonitorsConfig 72 bytes as declared
 xrandr: overlap check sentinel: switch_config round-tripped at the declared offset
 xrandr: overlap check pending-dialog: nothing holds a modal grab, so GNOME is not asking "Keep changes?"
 xrandr: overlap check bounded-read: 3 logical monitors, every address range-checked
@@ -289,8 +289,8 @@ other::---
 ### stat -c "%U %G %a" /dev/uinput
 root root 660
 ### rc=0
-### ls /usr/lib/udev/rules.d/60-fuckwayland-uinput.rules
-/usr/lib/udev/rules.d/60-fuckwayland-uinput.rules
+### ls /usr/lib/udev/rules.d/60-w11-uinput.rules
+/usr/lib/udev/rules.d/60-w11-uinput.rules
 ### rc=0
 ### end 2026-09-08T02:34:42+00:00
 rc=0

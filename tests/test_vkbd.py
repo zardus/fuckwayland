@@ -2,7 +2,7 @@
 
 Everything here runs against a **real Wayland socket** served by a fake
 compositor that speaks the wire format (`KeyboardCompositor` below): our client is
-`fwcommon/wayland_mini.py` unmodified, the keymap really travels as an fd over
+`w11common/wayland_mini.py` unmodified, the keymap really travels as an fd over
 SCM_RIGHTS, and every assertion is about the bytes the compositor received. A
 mock of our own client would have proved only that we can call our own
 methods.
@@ -27,7 +27,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # every test file carries this itself: the suite is run file by file, where
 # conftest.py never loads, and a tool that hands itself over would not be
 # the code under test
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 # The injection assertions pin the *fixed US table* as the source of
 # keycodes; without this a developer running the suite inside a German
 # session would have the kernel-path daemon read that session's keymap.
@@ -35,7 +35,7 @@ os.environ.setdefault("WDOTOOL_LAYOUT", "us")
 
 import wl_fake
 from support import RecorderDev
-from fwcommon.wayland_mini import WlConn
+from w11common.wayland_mini import WlConn
 from wdotool import cli, daemon, keymap, us_keymap, vkbd, xkbmap
 
 

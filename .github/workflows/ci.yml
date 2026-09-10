@@ -50,7 +50,7 @@ permissions:
   packages: write
 
 env:
-  FUCKWAYLAND_PASSTHROUGH: never
+  W11_PASSTHROUGH: never
 
 jobs:
   plan:
@@ -122,7 +122,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: build the image unless GHCR already has this Dockerfile's
         run: |
-          tag=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/fuckwayland-ci:${{ matrix.distro }}-${{ matrix.key }}
+          tag=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/w11-ci:${{ matrix.distro }}-${{ matrix.key }}
           if docker manifest inspect "$tag" >/dev/null 2>&1; then echo "have $tag"; exit 0; fi
           docker build --build-arg BASE=${{ matrix.base }} -t "$tag" -f .github/ci/${{ matrix.dockerfile }} .github/ci
           docker push "$tag"
@@ -149,7 +149,7 @@ jobs:
         file: ${{ fromJSON(needs.plan.outputs.files) }}
     name: 24.04 ${{ matrix.file }}
     container:
-      image: ghcr.io/${{ github.repository_owner }}/fuckwayland-ci:24.04-${{ needs.plan.outputs.image_key }}
+      image: ghcr.io/${{ github.repository_owner }}/w11-ci:24.04-${{ needs.plan.outputs.image_key }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -159,7 +159,7 @@ jobs:
       - name: ${{ matrix.file }}
         run: |
           chown -R ci "$PWD"
-          runuser -u ci -- env HOME=/home/ci XDG_RUNTIME_DIR=/tmp/xdg-ci FUCKWAYLAND_PASSTHROUGH=never \
+          runuser -u ci -- env HOME=/home/ci XDG_RUNTIME_DIR=/tmp/xdg-ci W11_PASSTHROUGH=never \
               dbus-run-session -- python3 tests/${{ matrix.file }}.py
 
   unit-2604:
@@ -172,7 +172,7 @@ jobs:
         file: ${{ fromJSON(needs.plan.outputs.files) }}
     name: 26.04 ${{ matrix.file }}
     container:
-      image: ghcr.io/${{ github.repository_owner }}/fuckwayland-ci:26.04-${{ needs.plan.outputs.image_key }}
+      image: ghcr.io/${{ github.repository_owner }}/w11-ci:26.04-${{ needs.plan.outputs.image_key }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -182,7 +182,7 @@ jobs:
       - name: ${{ matrix.file }}
         run: |
           chown -R ci "$PWD"
-          runuser -u ci -- env HOME=/home/ci XDG_RUNTIME_DIR=/tmp/xdg-ci FUCKWAYLAND_PASSTHROUGH=never \
+          runuser -u ci -- env HOME=/home/ci XDG_RUNTIME_DIR=/tmp/xdg-ci W11_PASSTHROUGH=never \
               dbus-run-session -- python3 tests/${{ matrix.file }}.py
 
   unit-2610:
@@ -197,7 +197,7 @@ jobs:
     continue-on-error: true
     name: 26.10 ${{ matrix.file }}
     container:
-      image: ghcr.io/${{ github.repository_owner }}/fuckwayland-ci:26.10-${{ needs.plan.outputs.image_key }}
+      image: ghcr.io/${{ github.repository_owner }}/w11-ci:26.10-${{ needs.plan.outputs.image_key }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -207,7 +207,7 @@ jobs:
       - name: ${{ matrix.file }}
         run: |
           chown -R ci "$PWD"
-          runuser -u ci -- env HOME=/home/ci XDG_RUNTIME_DIR=/tmp/xdg-ci FUCKWAYLAND_PASSTHROUGH=never \
+          runuser -u ci -- env HOME=/home/ci XDG_RUNTIME_DIR=/tmp/xdg-ci W11_PASSTHROUGH=never \
               dbus-run-session -- python3 tests/${{ matrix.file }}.py
 
   # One job, the whole suite, on the two distros that are not Debian: the point here is the
@@ -241,7 +241,7 @@ jobs:
     continue-on-error: ${{ matrix.distro == 'arch' }}
     name: ${{ matrix.distro }} every test file
     container:
-      image: ghcr.io/${{ github.repository_owner }}/fuckwayland-ci:${{ matrix.image }}
+      image: ghcr.io/${{ github.repository_owner }}/w11-ci:${{ matrix.image }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -251,7 +251,7 @@ jobs:
       - name: every tests/test_*.py, one process each, all of them before the verdict
         run: |
           chown -R ci "$PWD"
-          runuser -u ci -- env HOME=/home/ci XDG_RUNTIME_DIR=/tmp/xdg-ci FUCKWAYLAND_PASSTHROUGH=never \
+          runuser -u ci -- env HOME=/home/ci XDG_RUNTIME_DIR=/tmp/xdg-ci W11_PASSTHROUGH=never \
               dbus-run-session -- sh -c '
                 failed=
                 for f in tests/test_*.py; do
@@ -272,7 +272,7 @@ jobs:
       - name: the pinned oracles, then scripts/parity-oracle.sh
         run: |
           nix build --no-link --print-out-paths --inputs-from . nixpkgs#xdotool nixpkgs#wmctrl > /tmp/oracles
-          FW_ORACLE_PATH=$(sed 's|$|/bin|' /tmp/oracles | paste -sd:); export FW_ORACLE_PATH
+          W11_ORACLE_PATH=$(sed 's|$|/bin|' /tmp/oracles | paste -sd:); export W11_ORACLE_PATH
           sh scripts/parity-oracle.sh
 
   # The same comparison against a DISTRO's binary rather than a nix build. Arch is the only
@@ -292,24 +292,24 @@ jobs:
     timeout-minutes: 30
     continue-on-error: true
     container:
-      image: ghcr.io/${{ github.repository_owner }}/fuckwayland-ci:arch-${{ needs.plan.outputs.image_key_arch }}
+      image: ghcr.io/${{ github.repository_owner }}/w11-ci:arch-${{ needs.plan.outputs.image_key_arch }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
       options: --user root --init
     steps:
       - uses: actions/checkout@v4
-      - name: FW_ORACLE_PATH=/usr/bin, then scripts/parity-oracle.sh
+      - name: W11_ORACLE_PATH=/usr/bin, then scripts/parity-oracle.sh
         run: |
           chown -R ci "$PWD"
-          runuser -u ci -- env HOME=/home/ci XDG_RUNTIME_DIR=/tmp/xdg-ci FUCKWAYLAND_PASSTHROUGH=never \
-              FW_ORACLE_PATH=/usr/bin dbus-run-session -- sh scripts/parity-oracle.sh
+          runuser -u ci -- env HOME=/home/ci XDG_RUNTIME_DIR=/tmp/xdg-ci W11_PASSTHROUGH=never \
+              W11_ORACLE_PATH=/usr/bin dbus-run-session -- sh scripts/parity-oracle.sh
 
   deb:
     needs: [plan, image]
     runs-on: ubuntu-24.04
     container:
-      image: ghcr.io/${{ github.repository_owner }}/fuckwayland-ci:24.04-${{ needs.plan.outputs.image_key }}
+      image: ghcr.io/${{ github.repository_owner }}/w11-ci:24.04-${{ needs.plan.outputs.image_key }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -344,11 +344,11 @@ jobs:
         run: |
           export DEBIAN_FRONTEND=noninteractive
           apt-get update -qq && apt-get install -y -qq --no-install-recommends ca-certificates >/dev/null
-          apt-get install -y ./fuckwayland_*.deb
+          apt-get install -y ./w11_*.deb
           for t in wdotool wwmctl wxprop wxrandr warandr wmirror; do printf '%s: ' $t; $t --version 2>&1 | head -1; done
-          ls /usr/share/gnome-shell/extensions/ /usr/lib/udev/rules.d/60-fuckwayland-uinput.rules \
-             /etc/xdg/autostart/fuckwayland-enable-bridge.desktop /usr/lib/fuckwayland/enable-bridge
-          apt-get remove -y fuckwayland >/dev/null && ! command -v wdotool
+          ls /usr/share/gnome-shell/extensions/ /usr/lib/udev/rules.d/60-w11-uinput.rules \
+             /etc/xdg/autostart/w11-enable-bridge.desktop /usr/lib/w11/enable-bridge
+          apt-get remove -y w11 >/dev/null && ! command -v wdotool
 
   # The rpm half of `deb`. Three noarch rpms out of one build, rpmlint against the checked-in
   # rpmlintrc, and tests/test_release_rpm.py comparing the payload with the tree; the
@@ -358,7 +358,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     container:
-      image: ghcr.io/${{ github.repository_owner }}/fuckwayland-ci:fedora44-${{ needs.plan.outputs.image_key_fedora }}
+      image: ghcr.io/${{ github.repository_owner }}/w11-ci:fedora44-${{ needs.plan.outputs.image_key_fedora }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -368,9 +368,9 @@ jobs:
       - name: scripts/build-rpm.sh --no-deps --lint, then the payload against the tree
         run: |
           chown -R ci "$PWD"
-          runuser -u ci -- env HOME=/home/ci FUCKWAYLAND_PASSTHROUGH=never \
+          runuser -u ci -- env HOME=/home/ci W11_PASSTHROUGH=never \
               sh scripts/build-rpm.sh --no-deps --lint
-          runuser -u ci -- env HOME=/home/ci FUCKWAYLAND_PASSTHROUGH=never \
+          runuser -u ci -- env HOME=/home/ci W11_PASSTHROUGH=never \
               python3 tests/test_release_rpm.py
       - uses: actions/upload-artifact@v4
         with:
@@ -396,18 +396,18 @@ jobs:
           name: rpms
       - name: dnf install, then every tool answers
         run: |
-          dnf -y install ./fuckwayland-*.noarch.rpm ./gnome-shell-extension-fuckwayland-*.noarch.rpm
+          dnf -y install ./w11-*.noarch.rpm ./gnome-shell-extension-w11-*.noarch.rpm
           for t in wdotool wwmctl wxprop wxrandr warandr wmirror; do printf '%s: ' $t; $t --version 2>&1 | head -1; done
-          ls /usr/share/gnome-shell/extensions/ /usr/lib/udev/rules.d/60-fuckwayland-uinput.rules \
-             /etc/xdg/autostart/fuckwayland-enable-bridge.desktop /usr/libexec/fuckwayland/enable-bridge
+          ls /usr/share/gnome-shell/extensions/ /usr/lib/udev/rules.d/60-w11-uinput.rules \
+             /etc/xdg/autostart/w11-enable-bridge.desktop /usr/libexec/w11/enable-bridge
           # what the package says it installed against what is on disk: mode, size, digest
           # and mtime of every file of all three rpms. Silent and exit 0 when they agree;
           # the %ghost stamp %post writes is skipped by rpm's own verification, which is
           # why it is a %ghost. A scriptlet that edits a packaged file shows up here.
-          for p in fuckwayland gnome-shell-extension-fuckwayland-bridge gnome-shell-extension-fuckwayland-overlap; do
+          for p in w11 gnome-shell-extension-w11-bridge gnome-shell-extension-w11-overlap; do
               printf 'rpm -V %s: ' "$p"; rpm -V "$p" && echo ok
           done
-          dnf -y remove fuckwayland >/dev/null && ! command -v wdotool
+          dnf -y remove w11 >/dev/null && ! command -v wdotool
 
   # Arch in one job -- build, namcap, install, every tool answers, remove -- because makepkg
   # cannot run as root and the container already has the `ci` user that cannot either.
@@ -418,7 +418,7 @@ jobs:
     timeout-minutes: 30
     continue-on-error: true
     container:
-      image: ghcr.io/${{ github.repository_owner }}/fuckwayland-ci:arch-${{ needs.plan.outputs.image_key_arch }}
+      image: ghcr.io/${{ github.repository_owner }}/w11-ci:arch-${{ needs.plan.outputs.image_key_arch }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -428,19 +428,19 @@ jobs:
       - name: scripts/build-pkgbuild.sh --no-deps --lint, then pacman -U and -R
         run: |
           chown -R ci "$PWD"
-          runuser -u ci -- env HOME=/home/ci FUCKWAYLAND_PASSTHROUGH=never \
+          runuser -u ci -- env HOME=/home/ci W11_PASSTHROUGH=never \
               sh scripts/build-pkgbuild.sh --no-deps --lint
-          runuser -u ci -- env HOME=/home/ci FUCKWAYLAND_PASSTHROUGH=never \
+          runuser -u ci -- env HOME=/home/ci W11_PASSTHROUGH=never \
               python3 tests/test_release_pkgbuild.py
-          pacman -U --noconfirm dist/fuckwayland-*.pkg.tar.zst
+          pacman -U --noconfirm dist/w11-*.pkg.tar.zst
           for t in wdotool wwmctl wxprop wxrandr warandr wmirror; do printf '%s: ' $t; $t --version 2>&1 | head -1; done
-          ls /usr/share/gnome-shell/extensions/ /usr/lib/udev/rules.d/60-fuckwayland-uinput.rules \
-             /etc/xdg/autostart/fuckwayland-enable-bridge.desktop /usr/lib/fuckwayland/enable-bridge
+          ls /usr/share/gnome-shell/extensions/ /usr/lib/udev/rules.d/60-w11-uinput.rules \
+             /etc/xdg/autostart/w11-enable-bridge.desktop /usr/lib/w11/enable-bridge
           # the mtree of the installed package against what is on disk -- pacman's own
           # `rpm -V`, and the same claim: `-Qkk` reads sizes and sha256s and not just
           # presence. The stamp post_install writes lives outside the file list.
-          pacman -Qkk fuckwayland
-          pacman -R --noconfirm fuckwayland && ! command -v wdotool
+          pacman -Qkk w11
+          pacman -R --noconfirm w11 && ! command -v wdotool
       - uses: actions/upload-artifact@v4
         with:
           name: pkg
@@ -463,8 +463,8 @@ jobs:
       - uses: DeterminateSystems/nix-installer-action@main
         with:
           extra-conf: system-features = nixos-test benchmark big-parallel kvm
-      - name: tests/test_flake.py with FW_NIX_LIVE=1
-        run: FW_NIX_LIVE=1 FUCKWAYLAND_PASSTHROUGH=never python3 tests/test_flake.py
+      - name: tests/test_flake.py with W11_NIX_LIVE=1
+        run: W11_NIX_LIVE=1 W11_PASSTHROUGH=never python3 tests/test_flake.py
       - name: the checks that boot nothing
         run: nix build --no-link -L .#checks.x86_64-linux.module-eval .#checks.x86_64-linux.tools .#checks.x86_64-linux.nixos-sway
 

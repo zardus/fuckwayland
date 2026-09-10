@@ -8,7 +8,7 @@ import re
 import sys
 import time
 
-from fwcommon.errors import CmdError
+from w11common.errors import CmdError
 from wdotool import commands
 from wdotool.cli import ChainAbort, GetoptError, _opts, getopt_long_only
 from wdotool.cnum import atoi as _atoi, strtol as _strtol

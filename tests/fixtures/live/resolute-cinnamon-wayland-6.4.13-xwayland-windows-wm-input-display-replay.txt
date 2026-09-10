@@ -1,6 +1,6 @@
 ### true
 ### rc=0
-### cp /tmp/fw-oracle.py $HOME/fw-oracle.py && chmod 0755 $HOME/fw-oracle.py
+### cp /tmp/w11-oracle.py $HOME/w11-oracle.py && chmod 0755 $HOME/w11-oracle.py
 ### rc=0
 ### gdbus call --session --dest org.Cinnamon --object-path /org/Cinnamon                              --method org.Cinnamon.Eval 'String(1+1)' 2>&1
 (true, '"2"')
@@ -8,9 +8,9 @@
 ### test -x /usr/bin/Xwayland && echo yes || echo no
 no
 ### rc=0
-### rm -f $HOME/fw-smoke.txt; touch $HOME/fw-smoke.txt
+### rm -f $HOME/w11-smoke.txt; touch $HOME/w11-smoke.txt
 ### rc=0
-### rm -f $HOME/fw-smoke.txt; setsid nohup gnome-terminal -- sh -c 'cat >> $HOME/fw-smoke.txt'            >/dev/null 2>&1 </dev/null & sleep 4; true
+### rm -f $HOME/w11-smoke.txt; setsid nohup gnome-terminal -- sh -c 'cat >> $HOME/w11-smoke.txt'            >/dev/null 2>&1 </dev/null & sleep 4; true
 ### rc=0
 ### wdotool search --class 'gnome[-.]terminal' | head -1
 1
@@ -137,22 +137,22 @@ _NET_CLIENT_LIST(WINDOW): window id # 0x1
 ### rc=0
 ### wdotool windowactivate --sync 1
 ### rc=0
-### wdotool key ctrl+u; : > $HOME/fw-smoke.txt
+### wdotool key ctrl+u; : > $HOME/w11-smoke.txt
 ### rc=0
 ### wdotool type --delay 30 -- 'us: yz@'
 ### rc=0
 ### wdotool key Return
 ### rc=0
-### cat $HOME/fw-smoke.txt 2>/dev/null
+### cat $HOME/w11-smoke.txt 2>/dev/null
 us: yz@
 ### rc=0
-### wdotool key ctrl+u; : > $HOME/fw-smoke.txt
+### wdotool key ctrl+u; : > $HOME/w11-smoke.txt
 ### rc=0
 ### wdotool type --delay 30 -- abc; wdotool key Return; wdotool type --delay 30 -- def
 ### rc=0
 ### wdotool key Return
 ### rc=0
-### cat $HOME/fw-smoke.txt 2>/dev/null
+### cat $HOME/w11-smoke.txt 2>/dev/null
 abc
 def
 ### rc=0
@@ -172,13 +172,13 @@ note: this layout is plain US: wdotool uses its built-in table and never reads t
     wdotool key 52                             (keycodes)
     wdotool type 'z'                           (characters)
 ### rc=0
-### wdotool key ctrl+u; : > $HOME/fw-smoke.txt
+### wdotool key ctrl+u; : > $HOME/w11-smoke.txt
 ### rc=0
 ### wdotool type --delay 30 -- 'de: yz@'
 ### rc=0
 ### wdotool key Return
 ### rc=0
-### cat $HOME/fw-smoke.txt 2>/dev/null
+### cat $HOME/w11-smoke.txt 2>/dev/null
 de: yz@
 ### rc=0
 ### gsettings set org.cinnamon.desktop.input-sources current 0
@@ -188,7 +188,7 @@ de: yz@
 ### wdotool --vkbd on type -- x 2>&1
 --vkbd on: cannot use zwp_virtual_keyboard_v1: this compositor does not implement zwp_virtual_keyboard_manager_v1 (Mutter and KWin do not; sway, Hyprland, the wlroots family and COSMIC do)
 ### rc=1
-### python3 $HOME/fw-oracle.py cinnamon-wayland
+### python3 $HOME/w11-oracle.py cinnamon-wayland
 Virtual-1 0,0
 Virtual-2 1920,0
 Virtual-3 1920,1080
@@ -213,12 +213,12 @@ Monitors: 3
  1: +Virtual-2 1920/508x1080/286+1920+0  Virtual-2
  2: +Virtual-3 1920/508x1080/286+1920+1080  Virtual-3
 ### rc=0
-### python3 $HOME/fw-oracle.py cinnamon-wayland
+### python3 $HOME/w11-oracle.py cinnamon-wayland
 Virtual-1 0,0
 Virtual-2 1920,0
 Virtual-3 1920,1080
 ### rc=0
-### python3 $HOME/fw-oracle.py cinnamon-wayland
+### python3 $HOME/w11-oracle.py cinnamon-wayland
 Virtual-1 0,0
 Virtual-2 1920,0
 Virtual-3 1920,1080
@@ -231,38 +231,38 @@ Monitors: 3
 ### rc=0
 ### wxrandr --output Virtual-3 --off
 ### rc=0
-### python3 $HOME/fw-oracle.py cinnamon-wayland
+### python3 $HOME/w11-oracle.py cinnamon-wayland
 Virtual-1 0,0
 Virtual-2 1920,0
 ### rc=0
 ### wxrandr --output Virtual-3 --auto
 xrandr: output Virtual-3 enabled without a position; placing it right-of Virtual-2
 ### rc=0
-### python3 $HOME/fw-oracle.py cinnamon-wayland
+### python3 $HOME/w11-oracle.py cinnamon-wayland
 Virtual-1 0,0
 Virtual-2 1920,0
 Virtual-3 3840,0
 ### rc=0
 ### wxrandr --output Virtual-3 --right-of Virtual-2
 ### rc=0
-### python3 $HOME/fw-oracle.py cinnamon-wayland
+### python3 $HOME/w11-oracle.py cinnamon-wayland
 Virtual-1 0,0
 Virtual-2 1920,0
 Virtual-3 3840,0
 ### rc=0
-### python3 $HOME/fw-oracle.py cinnamon-wayland
+### python3 $HOME/w11-oracle.py cinnamon-wayland
 Virtual-1 0,0
 Virtual-2 1920,0
 Virtual-3 3840,0
 ### rc=0
 ### wxrandr --output Virtual-3 --below Virtual-2
 ### rc=0
-### python3 $HOME/fw-oracle.py cinnamon-wayland
+### python3 $HOME/w11-oracle.py cinnamon-wayland
 Virtual-1 0,0
 Virtual-2 1920,0
 Virtual-3 1920,1080
 ### rc=0
-### python3 $HOME/fw-oracle.py cinnamon-wayland
+### python3 $HOME/w11-oracle.py cinnamon-wayland
 Virtual-1 0,0
 Virtual-2 1920,0
 Virtual-3 1920,1080

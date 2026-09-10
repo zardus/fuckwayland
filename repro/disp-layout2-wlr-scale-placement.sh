@@ -4,7 +4,7 @@
 # runs a quantised (120ths, float32) one -- a gap or overlap of 1-10 px.
 # Sweeps 1.00..3.00 by 0.01 on both backends and counts the misses.
 # a headless sway session's env (XDG_RUNTIME_DIR, SWAYSOCK,
-# WAYLAND_DISPLAY, FUCKWAYLAND_PASSTHROUGH=never)
+# WAYLAND_DISPLAY, W11_PASSTHROUGH=never)
 . ${SWAYENV:-/tmp/fixsway.env}
 cd "${SD:-$HOME/work/sd-fix}" || exit 2
 PYTHONPATH=$PWD python3 - "$@" <<'PY'

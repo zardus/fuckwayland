@@ -6,15 +6,15 @@ cd "$(dirname "$0")/.."
 
 # Stamped into every zipapp so that a *copy* of one of these files installed
 # under an original's name is recognised as ours by
-# fwcommon.passthrough.is_us() (the head sniff, which is the only "not us"
+# w11common.passthrough.is_us() (the head sniff, which is the only "not us"
 # guard that survives two copies under two names in two PATH directories).
 # zipapp stores members uncompressed and __main__.py sorts first, so the
 # stamp lands in plain text in the first few hundred bytes -- which is what
 # the guard reads. The guard matches the whole of "$STAMP", never the bare
 # word: a third-party wrapper that merely mentions the project must not be
 # mistaken for one of ours. Keep both in sync with
-# fwcommon/passthrough.py:MARKER / STAMP.
-MARKER=fuckwayland
+# w11common/passthrough.py:MARKER / STAMP.
+MARKER=w11
 STAMP="$MARKER-clone:"
 
 build() { # name entry_module packages...
@@ -23,7 +23,7 @@ build() { # name entry_module packages...
   mkdir -p dist/.stage
   for p in "$@"; do cp -r "$p" "dist/.stage/$p"; done
   find dist/.stage -name __pycache__ -type d -exec rm -rf {} +
-  printf '# %s-clone: %s (X11 passthrough marker, see fwcommon/passthrough.py)\nimport sys\nfrom %s import main\n\nsys.exit(main())\n' \
+  printf '# %s-clone: %s (X11 passthrough marker, see w11common/passthrough.py)\nimport sys\nfrom %s import main\n\nsys.exit(main())\n' \
     "$MARKER" "$name" "$entry" > dist/.stage/__main__.py
   printf '%s %s\n' "$STAMP" "$name" > "dist/.stage/_${MARKER}_marker"
   python3 -m zipapp dist/.stage -p "/usr/bin/env python3" -o "dist/$name"
@@ -37,7 +37,7 @@ build() { # name entry_module packages...
   echo "built dist/$name ($(wc -c < "dist/$name") bytes)"
 }
 
-# fwcommon is in every bundle: every tool here finds its session, hands over
+# w11common is in every bundle: every tool here finds its session, hands over
 # to the original on an X11 one, raises the same exception when it fails and
 # flushes through the same stdout on the way out.
 #
@@ -46,18 +46,18 @@ build() { # name entry_module packages...
 # XWayland ids KWin 6 does not export, and the WM_CLASS pair 5.27
 # lower-cases; since it lives in wdotool the shipped wdotool answers like a
 # source checkout with nothing else in the bundle.
-build wdotool wdotool.cli fwcommon wdotool
-build wwmctl  wwmctl.cli  fwcommon wdotool wwmctl
-build wxprop  wxprop.cli  fwcommon wdotool wxprop
+build wdotool wdotool.cli w11common wdotool
+build wwmctl  wwmctl.cli  w11common wdotool wwmctl
+build wxprop  wxprop.cli  w11common wdotool wxprop
 # The three display tools import no wdotool at all: what they used of it --
-# CmdError, stdio and procs -- is in fwcommon, so a zipapp of one of them no
+# CmdError, stdio and procs -- is in w11common, so a zipapp of one of them no
 # longer drags in the keysym table, the input daemon and four window
 # backends for three small files. That is 680 kB off each of the three.
-build wxrandr wxrandr.cli fwcommon wxrandr
+build wxrandr wxrandr.cli w11common wxrandr
 # warandr bundles wxrandr: on Wayland it runs the same interpreter with
 # -m wxrandr, PYTHONPATH pointing at the pyz itself (zipimport)
-build warandr warandr.cli fwcommon wxrandr warandr
+build warandr warandr.cli w11common wxrandr warandr
 # wmirror drives an external binary but reads the layout through wxrandr's
 # own wlr client, and the detached supervisor is this same zipapp re-entered
 # by fork, so it needs nothing else in the bundle.
-build wmirror wmirror.cli fwcommon wxrandr wmirror
+build wmirror wmirror.cli w11common wxrandr wmirror

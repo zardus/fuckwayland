@@ -10,7 +10,7 @@
 { self, pkgs }:
 
 pkgs.testers.runNixOSTest {
-  name = "fuckwayland-nixos-kde";
+  name = "w11-nixos-kde";
 
   nodes.machine = { ... }: {
     imports = [ self.nixosModules.default ];
@@ -28,7 +28,7 @@ pkgs.testers.runNixOSTest {
     services.displayManager.autoLogin = { enable = true; user = "alice"; };
     services.desktopManager.plasma6.enable = true;
 
-    programs.fuckwayland.enable = true;
+    programs.w11.enable = true;
     environment.systemPackages = [ pkgs.kdePackages.konsole pkgs.acl ];
   };
 

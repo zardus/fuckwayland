@@ -16,9 +16,9 @@ sys.path.insert(0, ROOT)
 
 # This shim is named `xdotool` and the real xdotool is on PATH -- which on
 # an X11 session is exactly the arrangement that makes wdotool hand over to
-# it (fwcommon/passthrough.py). The oracle would then compare the real xdotool
+# it (w11common/passthrough.py). The oracle would then compare the real xdotool
 # with itself and pass tautologically, so keep our own code in the loop.
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
 
 def skip(reason):

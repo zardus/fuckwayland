@@ -28,7 +28,7 @@ import re
 import socket
 import time
 
-from fwcommon import session as wsession
+from w11common import session as wsession
 from wxrandr import core
 from wxrandr.core import Fatal, Mode, OutputState
 
@@ -52,7 +52,7 @@ class HyprIPC:
 
     It is a second copy of `wdotool/hypr_ipc.py`'s reader, and deliberately, for the reason
     `wdotool/layoutbox.py` carries its own copy of Mutter's logical-size rule: the zipapp install route builds
-    `dist/wxrandr` out of `fwcommon` and `wxrandr` alone (scripts/build-pyz.sh, pinned by
+    `dist/wxrandr` out of `w11common` and `wxrandr` alone (scripts/build-pyz.sh, pinned by
     tests/test_build_scripts.py:TheZipapps -- "no display tool carries the input stack", 680 kB off each of
     the three), so a `from wdotool...` here would work from the .deb and quietly not from the zipapp -- and
     "quietly" on Hyprland means falling back to a wlr path that cannot apply. The price is this class; what

@@ -7,10 +7,10 @@ Command function contract (all *_cmds.py modules):
 The return value is the number of argv tokens the command consumed (NOT counting
 the command name itself). Raise errors.CmdError(msg) on failure: the driver
 prints the message to stderr, aborts the rest of the chain, and exits 1. That
-class lives in fwcommon/errors.py, because the display tools catch it too.
+class lives in w11common/errors.py, because the display tools catch it too.
 """
 
-from fwcommon import errors
+from w11common import errors
 
 
 class SoftCmdError(errors.CmdError):

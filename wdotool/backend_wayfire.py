@@ -26,8 +26,8 @@ import socket
 import struct
 import time
 
-from fwcommon import session
-from fwcommon.errors import CmdError
+from w11common import session
+from w11common.errors import CmdError
 from wdotool.backend import View, Window, WindowBackend, Workspace
 from wdotool.xid_match import match_xids
 

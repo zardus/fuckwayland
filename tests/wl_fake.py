@@ -1,7 +1,7 @@
 """Wayland wire helpers for the compositor fakes, and the server base the
 two that boot alike share.
 
-Deliberately NOT built on `fwcommon/wayland_mini.py`. These fakes are the
+Deliberately NOT built on `w11common/wayland_mini.py`. These fakes are the
 oracle for that client: a fake that marshalled with the code under test
 would agree with it by construction, and the one thing these tests exist to
 prove -- that the bytes on the wire are the bytes the protocol asks for --

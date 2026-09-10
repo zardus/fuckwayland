@@ -32,8 +32,8 @@ import struct
 import sys
 import time
 
-from fwcommon import session
-from fwcommon.errors import CmdError
+from w11common import session
+from w11common.errors import CmdError
 from wdotool import backend_detect
 from wdotool.backend import state_steps as _backend_state_steps
 from wdotool.backend import warn as _warn

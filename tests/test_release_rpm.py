@@ -5,14 +5,14 @@ tests/test_release_deb.py exists because the committed .deb was once the build
 of the previous tag and every test in the suite passed anyway: what a user runs
 is a binary, and nothing in the tree makes a binary agree with it.  The rpm has
 the same hole and one more edge, because its payload is assembled by a spec that
-lists paths by hand -- so a file added to debian/fuckwayland.install and not to
+lists paths by hand -- so a file added to debian/w11.install and not to
 %install is a Fedora package silently missing it.  tests/test_rpm_spec.py holds
 the two lists against each other; this holds the built package against the tree.
 
 Nothing is committed: an rpm is one file per Fedora release (the payload is
 version-bound, `python(abi) = 3.14`), so there is no counterpart to the .deb's
 "one file for both supported releases" and dist/ is where they land.  This file
-therefore looks in dist/, or in $FW_RPM_DIR, and skips when there is nothing
+therefore looks in dist/, or in $W11_RPM_DIR, and skips when there is nothing
 there -- which is every run outside the CI `rpm` job in fedora:44 and any box
 where somebody has just built them by hand.
 
@@ -35,17 +35,17 @@ import unittest
 # The suite never hands a tool over to the real X11 one: see tests/conftest.py
 # (which covers pytest) and tests/test_passthrough.py.  This line is what
 # covers `python3 tests/<file>.py`, where conftest is not loaded.
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from fwcommon import VERSION                                      # noqa: E402
+from w11common import VERSION                                      # noqa: E402
 
-RPMDIR = os.environ.get("FW_RPM_DIR") or os.path.join(ROOT, "dist")
-BRIDGE_UUID = "fuckwayland-bridge@fuckwayland"
-OVERLAP_UUID = "fuckwayland-overlap@fuckwayland"
+RPMDIR = os.environ.get("W11_RPM_DIR") or os.path.join(ROOT, "dist")
+BRIDGE_UUID = "w11-bridge@w11"
+OVERLAP_UUID = "w11-overlap@w11"
 EXT = "usr/share/gnome-shell/extensions"
 
 #: Every file the three packages carry that is NOT a Python module, paired with
@@ -55,11 +55,11 @@ EXT = "usr/share/gnome-shell/extensions"
 #: it is the one file that is NOT a byte copy, because %install rewrites its
 #: Exec= line, and it has a test of its own below.
 PAIRS = {
-    "usr/lib/udev/rules.d/60-fuckwayland-uinput.rules":
-        "gnome/60-fuckwayland-uinput.rules",
-    "usr/lib/modules-load.d/fuckwayland-uinput.conf":
+    "usr/lib/udev/rules.d/60-w11-uinput.rules":
+        "gnome/60-w11-uinput.rules",
+    "usr/lib/modules-load.d/w11-uinput.conf":
         "gnome/modules-load-uinput.conf",
-    "usr/libexec/fuckwayland/enable-bridge": "packaging/common/enable-bridge",
+    "usr/libexec/w11/enable-bridge": "packaging/common/enable-bridge",
     "usr/share/applications/warandr.desktop": "warandr.desktop",
 }
 
@@ -111,11 +111,11 @@ class RpmCase(unittest.TestCase):
     def setUp(self):
         if shutil.which("rpm") is None:
             self.skipTest("no rpm")
-        self.main = find("fuckwayland-%s-" % VERSION)
-        self.bridge = find("gnome-shell-extension-fuckwayland-bridge-%s-" % VERSION)
-        self.overlap = find("gnome-shell-extension-fuckwayland-overlap-%s-" % VERSION)
+        self.main = find("w11-%s-" % VERSION)
+        self.bridge = find("gnome-shell-extension-w11-bridge-%s-" % VERSION)
+        self.overlap = find("gnome-shell-extension-w11-overlap-%s-" % VERSION)
         if not (self.main and self.bridge and self.overlap):
-            self.skipTest("no fuckwayland %s rpms in %s (sh scripts/build-rpm.sh)"
+            self.skipTest("no w11 %s rpms in %s (sh scripts/build-rpm.sh)"
                           % (VERSION, RPMDIR))
 
     def q(self, path, *args):
@@ -133,7 +133,7 @@ class RpmCase(unittest.TestCase):
         for tool in ("rpm2cpio", "cpio"):
             if shutil.which(tool) is None:
                 self.skipTest("no %s" % tool)
-        tmp = tempfile.mkdtemp(prefix="fw-rpm-")
+        tmp = tempfile.mkdtemp(prefix="w11-rpm-")
         self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
         payload = subprocess.run(["rpm2cpio", path], stdout=subprocess.PIPE,
                                  check=True, timeout=300).stdout
@@ -197,18 +197,18 @@ class ThePackagesInDist(RpmCase):
 
     def test_the_autostart_entry_is_the_common_one_with_libexec_in_its_exec(self):
         """The one file that is not a byte copy: %install rewrites Exec= to
-        %{_libexecdir}/fuckwayland/enable-bridge, because that is where the
+        %{_libexecdir}/w11/enable-bridge, because that is where the
         helper goes on Fedora.  Every other line has to be the shared file's,
         or two packagings have drifted into two autostart entries."""
         tmp = self.unpack(self.bridge[0])
         with open(os.path.join(tmp, "etc/xdg/autostart",
-                               "fuckwayland-enable-bridge.desktop"),
+                               "w11-enable-bridge.desktop"),
                   encoding="utf-8") as f:
             shipped = f.read().splitlines()
         with open(os.path.join(ROOT, "packaging/common/enable-bridge.desktop"),
                   encoding="utf-8") as f:
             common = f.read().splitlines()
-        self.assertIn("Exec=/usr/libexec/fuckwayland/enable-bridge", shipped)
+        self.assertIn("Exec=/usr/libexec/w11/enable-bridge", shipped)
         self.assertEqual([ln for ln in shipped if not ln.startswith("Exec=")],
                          [ln for ln in common if not ln.startswith("Exec=")])
 
@@ -259,7 +259,7 @@ class WhatDnfWillDo(RpmCase):
     def test_the_gtk_stack_is_recommended_and_not_required(self):
         """Design decision 5.  dnf honours Recommends by default, so the GUI
         arrives for everyone who has not turned weak deps off, and
-        `dnf install fuckwayland` on a sway box pulls in no toolkit."""
+        `dnf install w11` on a sway box pulls in no toolkit."""
         recommends = self.q(self.main[0], "--recommends").split()
         self.assertEqual(sorted(recommends), ["gtk3", "python3-gobject"])
         self.assertNotIn("gtk3", self.q(self.main[0], "--requires").split())
@@ -272,7 +272,7 @@ class WhatDnfWillDo(RpmCase):
         """The whole reason the extensions are subpackages: dnf installs the
         bridge by itself wherever both halves are present, and installs the one
         thing that can cost a session for nobody, ever."""
-        self.assertIn("(fuckwayland and gnome-shell)",
+        self.assertIn("(w11 and gnome-shell)",
                       self.q(self.bridge[0], "--supplements"))
         self.assertEqual(self.q(self.overlap[0], "--supplements").strip(), "")
 
@@ -311,7 +311,7 @@ class TheScriptletsThatShipped(RpmCase):
             "udevadm trigger --name-match=uinput",
             "udevadm settle --timeout=5",
         ])
-        self.assertIn("/var/lib/fuckwayland/installed", post,
+        self.assertIn("/var/lib/w11/installed", post,
                       "%{_sharedstatedir} did not expand to /var/lib")
 
     def test_postun_is_the_revoke_sequence(self):
@@ -332,10 +332,10 @@ class TheScriptletsThatShipped(RpmCase):
         """%ghost: rpm owns the path and carries no bytes for it, so the file
         %post writes belongs to the package and an erase takes it."""
         listing = self.q(self.main[0], "-l")
-        self.assertIn("/var/lib/fuckwayland/installed", listing)
+        self.assertIn("/var/lib/w11/installed", listing)
         ghosts = self.q(self.main[0], "--qf", "[%{FILENAMES} %{FILEFLAGS}\n]")
         line = [ln for ln in ghosts.splitlines()
-                if ln.startswith("/var/lib/fuckwayland/installed ")]
+                if ln.startswith("/var/lib/w11/installed ")]
         self.assertEqual(len(line), 1, ghosts)
         # bit 6 (64) is RPMFILE_GHOST
         self.assertTrue(int(line[0].split()[1]) & 64, line)
@@ -358,16 +358,16 @@ class InstallAndErase(RpmCase):
         file left behind is a file no package owns any more: on the next
         install rpm will not replace it, and on this one it is a stale copy of
         something that has moved."""
-        root = tempfile.mkdtemp(prefix="fw-rpm-root-")
+        root = tempfile.mkdtemp(prefix="w11-rpm-root-")
         self.addCleanup(shutil.rmtree, root, ignore_errors=True)
         pkgs = self.main + self.bridge + self.overlap
         subprocess.run(["rpm", "--root", root, "-Uvh", "--noscripts", "--nodeps"]
                        + pkgs, check=True, capture_output=True, timeout=600)
         self.assertTrue(os.path.exists(os.path.join(root, "usr/bin/wdotool")))
         subprocess.run(["rpm", "--root", root, "-e", "--noscripts", "--nodeps",
-                        "fuckwayland",
-                        "gnome-shell-extension-fuckwayland-bridge",
-                        "gnome-shell-extension-fuckwayland-overlap"],
+                        "w11",
+                        "gnome-shell-extension-w11-bridge",
+                        "gnome-shell-extension-w11-overlap"],
                        check=True, capture_output=True, timeout=600)
         left = []
         for top in ("usr", "etc"):

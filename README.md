@@ -1,4 +1,6 @@
-# fuckwayland
+# w11
+
+**X11 was the X that stuck. w11 is the Wayland that behaves like it.**
 
 The X11 power tools, `xdotool`, `wmctrl`, `xprop` and `xrandr`, reborn as no-bullshit
 drop-in clones that work on Wayland. Same commands, same flags, same output bytes,
@@ -41,12 +43,12 @@ tools did, that is a gap in this tree with a route beside it, not a policy, and 
 
 On a default Ubuntu 24.04 or 26.04 desktop, one file and one command. The built
 package is in the clone, at
-[`release/fuckwayland_0.4.0_all.deb`](release/fuckwayland_0.4.0_all.deb), and on the
-[releases page](https://github.com/antoniobianchi333/fuckwayland/releases). From the
+[`release/w11_0.4.0_all.deb`](release/w11_0.4.0_all.deb), and on the
+[releases page](https://github.com/zardus/w11/releases). From the
 top of a clone:
 
 ```sh
-sudo apt install ./release/fuckwayland_0.4.0_all.deb
+sudo apt install ./release/w11_0.4.0_all.deb
 ```
 
 `sh scripts/build-deb.sh` rebuilds that same file in place from the source beside it.
@@ -58,7 +60,7 @@ off, the [overlap extension](#overlapping-monitors-on-gnome). **One**
 `Architecture: all` package for **both** releases, because every module here is pure
 standard library and your own `python3` byte compiles it at install time. The real `xdotool`, `wmctrl`, `xprop` and
 `xrandr` stay exactly as they were, so a script that calls both keeps working, and
-`sudo apt remove fuckwayland` takes every piece away again.
+`sudo apt remove w11` takes every piece away again.
 
 **On GNOME, log out and back in once.** That is the whole of the manual procedure.
 `gnome-shell` reads extension directories only when a session starts, so until you do
@@ -96,7 +98,7 @@ yourself, because pip does not install it:
 
 ```sh
 sh gnome/install-bridge.sh          # copies the extension, enables it
-sh gnome/install-bridge.sh --check  # is it loaded? is org.fuckwayland.Bridge owned?
+sh gnome/install-bridge.sh --check  # is it loaded? is org.w11.Bridge owned?
 ```
 
 Expect one session restart on a **first** install. That install exits 1 asking you to
@@ -104,7 +106,7 @@ log out and back in, because gnome-shell scans extension directories at login an
 until it has, the window commands say the bridge is not running. After that the shell
 knows the extension and can take it out and put it back in the running process:
 measured on GNOME Shell 46.0 (2026-09-09), `gnome-extensions disable` releases
-`org.fuckwayland.Bridge` about 3 s later and `enable` takes it back about 4 s later
+`org.w11.Bridge` about 3 s later and `enable` takes it back about 4 s later
 with gnome-shell's pid unchanged, on X11 and on Wayland alike, which is what the
 package's own autostart uses. A bridge whose `extension.js` has **changed** still
 wants a logout, and that is **not yet**:
@@ -119,7 +121,7 @@ whom, is [Threat model](#threat-model).
 The package carries a **second, separate** extension that almost nobody needs, for
 the one thing GNOME will not do at all: place two monitors so that they share screen
 area. On Fedora it is a second, separate *package* instead
-(`gnome-shell-extension-fuckwayland-overlap`), with no `Supplements:`, so nothing
+(`gnome-shell-extension-w11-overlap`), with no `Supplements:`, so nothing
 installs it for you. Nothing turns it on and nothing uses it, and it is the only thing here that can
 cost you the session you are sitting in, so it has a section of its own:
 [Overlapping monitors on GNOME](#overlapping-monitors-on-gnome).
@@ -212,8 +214,8 @@ too, so `sudo xdotool key a` works *through* us where `sudo /usr/bin/xdotool key
 says `Can't open display`.
 
 ```console
-$ FUCKWAYLAND_PASSTHROUGH=never xdotool key a   # our own code, whatever the session
-$ FUCKWAYLAND_PASSTHROUGH=always ...            # hand over, whatever the session
+$ W11_PASSTHROUGH=never xdotool key a   # our own code, whatever the session
+$ W11_PASSTHROUGH=always ...            # hand over, whatever the session
 $ WDOTOOL_REAL_XDOTOOL=/opt/bin/xdotool ...     # where the original is
 ```
 
@@ -260,18 +262,18 @@ by hand, or leave it alone for the quarter of an hour of idleness that ends it.
 
 ```sh
 sudo apt install git python3-venv
-git clone https://github.com/antoniobianchi333/fuckwayland.git
-cd fuckwayland
-python3 -m venv --system-site-packages ~/.venvs/fuckwayland
-~/.venvs/fuckwayland/bin/pip install -e .
+git clone https://github.com/zardus/w11.git
+cd w11
+python3 -m venv --system-site-packages ~/.venvs/w11
+~/.venvs/w11/bin/pip install -e .
 ```
 
 That is the whole install: `wdotool`, `wwmctl`, `wxprop`, `wxrandr`, `warandr` and
-`wmirror` in `~/.venvs/fuckwayland/bin`. Put them on `PATH`:
+`wmirror` in `~/.venvs/w11/bin`. Put them on `PATH`:
 
 ```sh
 for t in wdotool wwmctl wxprop wxrandr warandr wmirror; do
-    sudo ln -sfn ~/.venvs/fuckwayland/bin/$t /usr/local/bin/$t
+    sudo ln -sfn ~/.venvs/w11/bin/$t /usr/local/bin/$t
 done
 ```
 
@@ -297,7 +299,7 @@ To undo all of it:
 ```sh
 sudo rm -f /usr/local/bin/wdotool /usr/local/bin/wwmctl /usr/local/bin/wxprop \
            /usr/local/bin/wxrandr /usr/local/bin/warandr /usr/local/bin/wmirror
-rm -rf ~/.venvs/fuckwayland ~/.local/share/applications/warandr.desktop
+rm -rf ~/.venvs/w11 ~/.local/share/applications/warandr.desktop
 ```
 
 ### Other ways to install
@@ -309,16 +311,16 @@ not by what is possible.
   and `pipx ensurepath` once. Prefer it if pipx is already how you keep your tools.
   `--system-site-packages` is not optional here either, or `warandr` fails exactly as
   [above](#from-a-clone-with-pip). Lands in `~/.local/bin`. Undo with
-  `pipx uninstall fuckwayland`.
+  `pipx uninstall w11`.
 * **The user site, overriding the rule**: `sudo apt install python3-pip`, then
   `pip install --user --break-system-packages -e .`. Prefer it when you want no venv
   at all and you accept the risk that flag names. Also `~/.local/bin`, which a
   *login* shell adds from `~/.profile`, but only if the directory existed at login,
   so log out and back in once. Undo with
-  `pip uninstall --break-system-packages fuckwayland`.
+  `pip uninstall --break-system-packages w11`.
 * **One venv for the whole machine**: `sudo python3 -m venv --system-site-packages
-  /opt/fuckwayland`, then `sudo /opt/fuckwayland/bin/pip install /path/to/the/clone`,
-  and symlink out of `/opt/fuckwayland/bin`. Prefer it when other accounts (or `sudo`
+  /opt/w11`, then `sudo /opt/w11/bin/pip install /path/to/the/clone`,
+  and symlink out of `/opt/w11/bin`. Prefer it when other accounts (or `sudo`
   as another user) must run the tools: Ubuntu home directories are `0750`, so a venv
   under your `$HOME` is unreadable to them. Note the missing `-e`.
 * **Without installing anything**: `sh scripts/build-pyz.sh` builds `dist/wdotool`,
@@ -330,10 +332,10 @@ not by what is possible.
   [docs/Technical.md § The single-file builds](docs/Technical.md#the-single-file-builds)
   has the table of what is in each.
 * **A Fedora package**: `sh scripts/build-rpm.sh` produces three noarch rpms into
-  `dist/` — `fuckwayland`, `gnome-shell-extension-fuckwayland-bridge`
-  (`Supplements: (fuckwayland and gnome-shell)`, so dnf installs it wherever both
+  `dist/` — `w11`, `gnome-shell-extension-w11-bridge`
+  (`Supplements: (w11 and gnome-shell)`, so dnf installs it wherever both
   halves are present and on no sway or KDE box) and
-  `gnome-shell-extension-fuckwayland-overlap` (no `Supplements` at all: nothing
+  `gnome-shell-extension-w11-overlap` (no `Supplements` at all: nothing
   installs the one thing that can cost the session you are sitting in). Nothing is
   committed, because the Python payload lands in `%{python3_sitelib}` and carries an
   auto-generated `Requires: python(abi) = 3.14`; Fedora 43 and 44 both ship python3
@@ -348,22 +350,22 @@ not by what is possible.
   carries xdotool 4.20260303.1, wmctrl 1.07, xorg-xprop 1.2.8 and xorg-xrandr 1.5.4,
   the exact four versions these tools clone, so there the handover lands on the parity
   target. `packaging/arch/README.Arch` has the rest.
-* **Nix / NixOS**: `nix run github:emolabs/fuckwayland -- --version` runs the tools
+* **Nix / NixOS**: `nix run github:emolabs/w11 -- --version` runs the tools
   without installing anything, and `nix build` gives you `result/bin/` with all six
   plus `xdotool`, `wmctrl`, `xprop`, `xrandr` and `arandr` symlinks next to them
   (`wmirror` gets none, because there is no X11 original to shadow). The flake wraps
   the GTK typelibs into `warandr`, so the GUI works without a system PyGObject. On
-  NixOS, add the flake as an input and set `programs.fuckwayland.enable = true`: that
+  NixOS, add the flake as an input and set `programs.w11.enable = true`: that
   puts the six tools on the system path, ships the project's own uaccess rule for
   `/dev/uinput` (never `hardware.uinput.enable`, and the module asserts against it),
   and on a GNOME machine installs the bridge extension and turns it on for every user
   through a system dconf profile — enabled at the **first** login, with no logout
   step. `homeManagerModules.default` does the per-user half and warns, in the module
   itself, that home-manager cannot grant `/dev/uinput` at all. The packages are
-  `fuckwayland` (five of the six tools, stdlib, 216.0 MiB of closure), `warandr` (the
-  one GTK program, 546.9 MiB, installed by `programs.fuckwayland.warandr.enable`),
+  `w11` (five of the six tools, stdlib, 216.0 MiB of closure), `warandr` (the
+  one GTK program, 546.9 MiB, installed by `programs.w11.warandr.enable`),
   `gnome-bridge`, `gnome-overlap`, `udev-rules` and `x11-shadows`;
-  `programs.fuckwayland.shadowOriginals = true` puts that last one over the real
+  `programs.w11.shadowOriginals = true` puts that last one over the real
   xdotool/wmctrl/xprop/xrandr/arandr with `lib.hiPrio`, which on NixOS is the only way
   to say "installed over the originals" — without it the system path resolves the
   collision in the **originals'** favour, silently (measured:
@@ -376,7 +378,7 @@ None of the rpm, the Arch package or the flake is published anywhere yet — no 
 AUR, no nixpkgs, no NUR — and that is now a decision rather than a licence problem: the
 tree is BSD-2-Clause, the spec says `License: BSD-2-Clause`, the PKGBUILD says
 `license=('BSD-2-Clause')` and installs the text under
-`/usr/share/licenses/fuckwayland/`, `meta.license` is `lib.licenses.bsd2`, and both
+`/usr/share/licenses/w11/`, `meta.license` is `lib.licenses.bsd2`, and both
 build scripts read the identifier back out of `LICENSE` and refuse a build whose tag
 disagrees with it. Build from your own clone in the meantime; the `.deb` in `release/`
 is still the only committed package.
@@ -402,10 +404,10 @@ the originals stay exactly where they are, which is what makes the [X11
 handover](#x11-sessions) work at all.
 
 ```sh
-sudo ln -sfn ~/.venvs/fuckwayland/bin/wdotool /usr/local/bin/xdotool
-sudo ln -sfn ~/.venvs/fuckwayland/bin/wwmctl  /usr/local/bin/wmctrl
-sudo ln -sfn ~/.venvs/fuckwayland/bin/wxprop  /usr/local/bin/xprop
-sudo ln -sfn ~/.venvs/fuckwayland/bin/wxrandr /usr/local/bin/xrandr
+sudo ln -sfn ~/.venvs/w11/bin/wdotool /usr/local/bin/xdotool
+sudo ln -sfn ~/.venvs/w11/bin/wwmctl  /usr/local/bin/wmctrl
+sudo ln -sfn ~/.venvs/w11/bin/wxprop  /usr/local/bin/xprop
+sudo ln -sfn ~/.venvs/w11/bin/wxrandr /usr/local/bin/xrandr
 ```
 
 From pipx or a `--user` install the source is `~/.local/bin/wdotool` instead. From a
@@ -481,12 +483,12 @@ If something did not work, the first thing to try:
 | what you saw | what to do |
 |---|---|
 | `wdotool: command not found` | `command -v wdotool`, then the symlinks, or `~/.local/bin` not on `PATH` yet (log out and back in) |
-| `gnome backend: the fuckwayland bridge extension is not running in GNOME Shell` | `sh gnome/install-bridge.sh`, then log out and back in. `sh gnome/install-bridge.sh --check` must say `loaded in shell: yes` and `org.fuckwayland.Bridge owned: yes` |
+| `gnome backend: the w11 bridge extension is not running in GNOME Shell` | `sh gnome/install-bridge.sh`, then log out and back in. `sh gnome/install-bridge.sh --check` must say `loaded in shell: yes` and `org.w11.Bridge owned: yes` |
 | `cannot create uinput devices: [Errno 13] Permission denied` | `sudo wdotool …`, or install the [udev rule](#input-access). `sudo sh gnome/install-bridge.sh --udev --check` should end `uinput usable by <your user>: yes (logind ACL)` |
 | `warandr: GTK 3 for Python is not available` | `sudo apt install python3-gi gir1.2-gtk-3.0`, and the venv must have been made `--system-site-packages` |
 | `xdotool: … no real xdotool was found on PATH`, exit 127 | you are on X11: `sudo apt install xdotool wmctrl` |
-| the tool does something you did not expect on X11 | it *is* the original there. `FUCKWAYLAND_PASSTHROUGH=never` runs our own code instead |
-| `gnome backend: the fuckwayland bridge is unavailable while the screen is locked` | unlock the session. GNOME Shell shuts its extensions down behind the lock screen, so every window command stops until you unlock, and a **default** Ubuntu desktop locks itself after 5 minutes idle. `wxrandr`, `warandr` and `wdotool`'s input commands are unaffected: they do not go through the extension |
+| the tool does something you did not expect on X11 | it *is* the original there. `W11_PASSTHROUGH=never` runs our own code instead |
+| `gnome backend: the w11 bridge is unavailable while the screen is locked` | unlock the session. GNOME Shell shuts its extensions down behind the lock screen, so every window command stops until you unlock, and a **default** Ubuntu desktop locks itself after 5 minutes idle. `wxrandr`, `warandr` and `wdotool`'s input commands are unaffected: they do not go through the extension |
 
 ## The tools
 
@@ -804,12 +806,12 @@ wxrandr --gnome-overlap-allow   # read it once, agree to this build of GNOME (op
 wxrandr --unsafe-gnome-overlap --output Virtual-2 --pos 960x0
 ```
 
-The first step installs `fuckwayland-overlap@fuckwayland`, which is not the bridge
+The first step installs `w11-overlap@w11`, which is not the bridge
 extension the other tools use and is installed by hand for exactly that reason. It
 exits 1 until the log out and back in it asks for, the same as the bridge installer
 does, so a script that runs these in order stops there on purpose. From the package
 rather than a clone the files are already in `/usr/share/gnome-shell/extensions` and
-the first step is instead `gnome-extensions enable fuckwayland-overlap@fuckwayland`:
+the first step is instead `gnome-extensions enable w11-overlap@w11`:
 nothing in the package turns this one on for you. That one needs no second log out —
 `gnome-shell` scanned the directory at the login the install itself asks for, so
 enabling it there brings it up at once (measured on 26.04) — and it does need one if
@@ -885,7 +887,7 @@ startup script or a hotkey if you want it every time.
 Withdrawing the agreement is `wxrandr --gnome-overlap-forget`, which needs no desktop
 and works from a text console, and `wxrandr --gnome-overlap-status` says where you
 stand. Removing the route altogether is `sh gnome/install-overlap.sh --uninstall`
-from a clone, and `gnome-extensions disable fuckwayland-overlap@fuckwayland` from the
+from a clone, and `gnome-extensions disable w11-overlap@w11` from the
 package, which is the first step of the three undone whichever way you took it.
 
 The honest part: this works by writing eight bytes per monitor into the running
@@ -897,7 +899,7 @@ which today means GNOME 46, GNOME 50 and GNOME 51 and nothing else.
 **Adding the next GNOME is meant to be small.** Everything version-specific, the
 library's file name, the typelib version, the type description and the size that
 structure has to be, is one record per release in
-`gnome/fuckwayland-overlap@fuckwayland/generations.json`, and the refusal on an
+`gnome/w11-overlap@w11/generations.json`, and the refusal on an
 unmeasured build prints the versions it found, the size that build reports, what
 was expected, and the two files a record goes in. Every name in a record is
 written out rather than computed, because GNOME 51 is where computing one stopped
@@ -1330,6 +1332,13 @@ appears. KWin has no equivalent: it applies and saves at once, and says so.
 The long form of each release, with the measurements behind it, is
 [CHANGELOG.md](CHANGELOG.md).
 
+Through 0.4 this project was called `fuckwayland`. The rename to `w11` took the
+package, the extension UUIDs, the bus names, the udev rule and the environment
+variables with it, and there is no compatibility shim. The packages declare the
+hand-over (`Conflicts`/`Replaces`, `Obsoletes`, `conflicts=`/`replaces=`), so
+installing `w11` over an old install takes the old package off with it; on the
+flake side, drop the old input.
+
 <!-- release-notes: 0.4 -->
 ### 0.4
 
@@ -1389,7 +1398,7 @@ stands at **4302 tests**.
 
 A subtraction release: the same six tools, 602 production lines fewer behind them,
 and a documentation set that agrees with the code. What every tool shares moved into
-one package, `fwcommon`, which is what let the three display tools stop carrying
+one package, `w11common`, which is what let the three display tools stop carrying
 `wdotool` and took about 60% of the bytes off their single file builds. Six copies of
 C's `atoi`, three getopt wrappers, one hit-test written three times, two transform
 tables and two detach protocols became one each. Nine bugs went, all of them in error

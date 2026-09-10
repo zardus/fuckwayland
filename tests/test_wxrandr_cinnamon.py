@@ -47,12 +47,12 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from fwcommon.dbus_mini import Bus
+from w11common.dbus_mini import Bus
 from test_wxrandr_mutter import M, FakeMutter, MutterMockBus
 from wxrandr import cli, gnome_overlap, monitors_xml, mutter
 from wxrandr.core import State
 
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
 MUFFIN = mutter.MUFFIN
 
@@ -103,7 +103,7 @@ def on_x11():
 
 
 def _v(sig, value):
-    from fwcommon.dbus_mini import Variant
+    from w11common.dbus_mini import Variant
     return Variant(sig, value)
 
 
@@ -352,7 +352,7 @@ class Apply(CinnamonCase):
         """`Logical monitors not adjacent` is Muffin's string as much as Mutter's (both carry the same
         `meta_verify_logical_monitor_config_list`), and the hint after it advises about a rule that is
         Cinnamon's here, not GNOME's."""
-        from fwcommon.dbus_mini import DBusError
+        from w11common.dbus_mini import DBusError
         e = DBusError("org.freedesktop.DBus.Error.InvalidArgs", "Logical monitors not adjacent")
         self.assertEqual(mutter._refused(e, MUFFIN),
                          "Cinnamon's Muffin refused this layout: Logical monitors not adjacent"
@@ -469,7 +469,7 @@ class NoOverlapRoute(CinnamonCase):
 
     def test_nothing_asks_gnome_shell_anything(self):
         """The landmine. The bus here owns Muffin's name only, so asking `org.gnome.Shell` for a version or
-        `org.fuckwayland.Overlap` for a probe is a round trip whose answer could only ever be an error --
+        `org.w11.Overlap` for a probe is a round trip whose answer could only ever be an error --
         and on a real Cinnamon session it is a round trip charged to somebody who typed a flag that was
         never going to work. Every destination the backend addresses is recorded."""
         mo = self.outputs()

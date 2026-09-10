@@ -31,14 +31,14 @@ from unittest import mock
 # tests/conftest.py (which covers pytest) and tests/test_passthrough.py.
 # This line is what covers `python3 tests/<file>.py`, where conftest is
 # not loaded, and it reaches every subprocess a test spawns.
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import support
-from fwcommon import session
+from w11common import session
 from wdotool.hypr_ipc import HyprIPC
 from wxrandr import cli, core, hypr
 
@@ -592,7 +592,7 @@ class TheTwoClients(Base):
     """`wxrandr.hypr.HyprIPC` is a second copy of `wdotool.hypr_ipc.HyprIPC`'s reader, and this is what keeps
     them from drifting.
 
-    The copy is not laziness: `scripts/build-pyz.sh` builds `dist/wxrandr` out of `fwcommon` and `wxrandr`
+    The copy is not laziness: `scripts/build-pyz.sh` builds `dist/wxrandr` out of `w11common` and `wxrandr`
     alone, and `tests/test_build_scripts.py:TheZipapps.test_no_display_tool_carries_the_input_stack` pins
     that, so a `from wdotool...` in this package would work from the .deb and quietly not from the second
     install route -- and on Hyprland "quietly" means falling back to a wlr path that cannot apply
@@ -637,7 +637,7 @@ class TheTwoClients(Base):
         self.assertEqual(mine.events_path, theirs.events_path)
 
     def test_every_failure_is_the_same_sentence(self):
-        from fwcommon.errors import CmdError
+        from w11common.errors import CmdError
         for mode, want in (
                 ("gone", "hypr backend: the compositor closed the IPC socket without answering `j/monitors`"),
                 ("badjson", "hypr backend: the compositor's answer to j/monitors is not JSON"),
@@ -654,7 +654,7 @@ class TheTwoClients(Base):
             self.assertTrue(str(b.exception).startswith(want), mode)
 
     def test_a_wedged_compositor_ends_at_the_same_deadline_in_both(self):
-        from fwcommon.errors import CmdError
+        from w11common.errors import CmdError
         srv = self.hypr(mode="wedged")
         mine, theirs = self.pair(srv, timeout=0.4)
         with self.assertRaises(core.Fatal) as a:
@@ -667,7 +667,7 @@ class TheTwoClients(Base):
         self.assertEqual(str(a.exception), str(b.exception) + "\n")
 
     def test_a_refused_keyword_reads_the_same_in_both(self):
-        from fwcommon.errors import CmdError
+        from w11common.errors import CmdError
         srv = self.hypr(payloads={})
         srv.reply_for = lambda req: (b"Invalid keyword" if req.startswith("keyword")
                                      else support.FakeHypr.reply_for(srv, req))
@@ -680,7 +680,7 @@ class TheTwoClients(Base):
         self.assertEqual(str(a.exception), str(b.exception) + "\n")
 
     def test_no_socket_at_all_is_the_same_sentence_in_both(self):
-        from fwcommon.errors import CmdError
+        from w11common.errors import CmdError
         from wdotool.hypr_ipc import HyprIPC as WdotoolIPC
         tmp = tempfile.mkdtemp(prefix="wxr-hypr-bare-")
         self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)

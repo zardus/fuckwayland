@@ -7,7 +7,7 @@
 # A golden is keyed by the sha256 of everything that goes into building it (the flavor
 # yaml, vm/vmctl, the three build scripts, and vm/golden-epoch, a file to bump by hand
 # when the upstream cloud image or ISO has moved under an unchanged recipe) and kept as
-# an OCI artifact at ghcr.io/<owner>/fuckwayland-golden/<flavor>:<key>, pushed with oras.
+# an OCI artifact at ghcr.io/<owner>/w11-golden/<flavor>:<key>, pushed with oras.
 # On a hit it is pulled into $VMDATA/golden/<flavor>.qcow2 in about a minute; on a miss
 # the base image or ISO is downloaded into $VMIMAGES, the golden is built the way
 # vm/README.md says (vmctl build, build-iso-golden.sh for an ISO flavor, or
@@ -17,7 +17,7 @@
 # the rig's root key baked in, so it is neither pulled nor pushed -- see the paragraph
 # above `cacheable=1` below.
 #
-#   GOLDEN_REPO   the OCI repository prefix (default ghcr.io/<GITHUB_REPOSITORY_OWNER>/fuckwayland-golden)
+#   GOLDEN_REPO   the OCI repository prefix (default ghcr.io/<GITHUB_REPOSITORY_OWNER>/w11-golden)
 #   GOLDEN_PUSH   set to 0 to never push (default 1 when a registry login exists)
 #   VMDATA, VMIMAGES   as vm/vmctl reads them
 set -eu
@@ -32,7 +32,7 @@ base=$(hdr vmctl-base)
 nix=$(hdr vmctl-nix)
 base_sha=$(hdr vmctl-base-sha256)
 owner=$(printf '%s' "${GITHUB_REPOSITORY_OWNER:-$(git config --get remote.origin.url | sed 's|.*[:/]\([^/]*\)/[^/]*$|\1|')}" | tr 'A-Z' 'a-z')
-repo=${GOLDEN_REPO:-ghcr.io/$owner/fuckwayland-golden}
+repo=${GOLDEN_REPO:-ghcr.io/$owner/w11-golden}
 
 key_inputs() {   # the files whose bytes decide this flavor's cache key, one per line
     # A NixOS golden runs none of the three cloud-image builders -- vm/build-nixos-golden.sh
@@ -44,7 +44,7 @@ key_inputs() {   # the files whose bytes decide this flavor's cache key, one per
     #
     # The nix list is NOT sufficient to identify one of these images and is not used as
     # if it were: vm/nixos/flake.nix takes the repository itself as
-    # `inputs.fuckwayland.url = "path:../.."` and the module installs the package built
+    # `inputs.w11.url = "path:../.."` and the module installs the package built
     # from it, so the image's contents move with any file of the tree.  Nothing serves a
     # stale one today because a `# vmctl-nix:` golden is neither pulled nor pushed (see
     # `cacheable` below) -- the key is only printed in the `building $ref` line.  The day
@@ -183,6 +183,6 @@ qemu-img info "$golden" | sed 's/^/    /'
 
 if [ -n "$cacheable" ] && [ "${GOLDEN_PUSH:-1}" = 1 ] && command -v oras >/dev/null; then
     say "pushing $ref"
-    ( cd "$VMDATA/golden" && oras push "$ref" --artifact-type application/vnd.fuckwayland.golden \
+    ( cd "$VMDATA/golden" && oras push "$ref" --artifact-type application/vnd.w11.golden \
         "$flavor.qcow2:application/vnd.qemu.qcow2" ) || say "push failed (kept the local golden)"
 fi

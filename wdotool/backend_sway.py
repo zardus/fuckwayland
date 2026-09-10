@@ -3,7 +3,7 @@
 Framing: b"i3-ipc" + u32 payload length + u32 message type + JSON payload. Window ids are sway node ids;
 commands address nodes with [con_id=N]. Desktops are workspaces: xdotool desktop N == workspace number N+1.
 
-Two dialects on one wire. i3 speaks the same protocol and this backend is what `FUCKWAYLAND_PASSTHROUGH=never`
+Two dialects on one wire. i3 speaks the same protocol and this backend is what `W11_PASSTHROUGH=never`
 reaches on an i3 box, where it used to call itself sway and get four things wrong [M recon2/i3.md §2b]:
 `dialect()` asks GET_VERSION once (sway is 1.x, i3 has been 4.x since 2011) and the four differences below hang
 off it -- ids, floating, pid, visible. Everything else is one code path."""
@@ -14,8 +14,8 @@ import socket
 import struct
 import time
 
-from fwcommon import session
-from fwcommon.errors import CmdError
+from w11common import session
+from w11common.errors import CmdError
 from wdotool.backend import Window, WindowBackend, Workspace, warn
 from wdotool.ctx import SoftCmdError
 

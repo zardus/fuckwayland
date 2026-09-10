@@ -1,12 +1,12 @@
 #!/bin/sh
-# Enable the fuckwayland GNOME Shell bridge extension for this user -- once.
+# Enable the w11 GNOME Shell bridge extension for this user -- once.
 #
 # Why this exists at all: the extension is a per-user setting
 # (org.gnome.shell enabled-extensions, in the user's own dconf) and dpkg runs
 # as root, at a moment when there may be no user session on the machine at
 # all.  So the package installs the extension system-wide, where gnome-shell
 # finds it at login, and leaves the one per-user act to this script, which
-# /etc/xdg/autostart/fuckwayland-enable-bridge.desktop runs inside the user's
+# /etc/xdg/autostart/w11-enable-bridge.desktop runs inside the user's
 # first GNOME session after the install.  gnome-shell scans extension
 # directories only at login, so that first login is also the moment the
 # extension can be loaded -- which is why "log out and back in once" is the
@@ -15,7 +15,7 @@
 # It runs once per user per installation: after a run it writes a stamp and
 # leaves the setting alone, so a user who later disables the extension stays
 # in charge of it.  What resets that is a re-install and nothing else --
-# postrm drops /var/lib/fuckwayland/installed when the package is removed and
+# postrm drops /var/lib/w11/installed when the package is removed and
 # postinst writes a fresh one, so a system stamp newer than the user's means
 # this is a different installation from the one that user was set up for, and
 # the setting (which the removal may well have taken with it) is made again.
@@ -23,13 +23,13 @@
 # Remove the user stamp to have it run again by hand.
 set -eu
 
-UUID='fuckwayland-bridge@fuckwayland'
-STAMP_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/fuckwayland"
+UUID='w11-bridge@w11'
+STAMP_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/w11"
 STAMP="$STAMP_DIR/bridge-enabled"
 # The path is a variable so the tests can point it at a temporary tree; nothing
-# on a real system sets FUCKWAYLAND_SYSTEM_STAMP, and the default is the file
+# on a real system sets W11_SYSTEM_STAMP, and the default is the file
 # postinst writes and postrm removes.
-SYSTEM_STAMP="${FUCKWAYLAND_SYSTEM_STAMP:-/var/lib/fuckwayland/installed}"
+SYSTEM_STAMP="${W11_SYSTEM_STAMP:-/var/lib/w11/installed}"
 
 # The greeter is a GNOME Shell session too, and gdm runs it as its own user with
 # its own dconf.  Enabling the extension there sets it for gdm and for nobody

@@ -198,11 +198,11 @@ monitors() {   # enabled monitor names, one per line, sorted
 layout() {   # "primary <name> at x,y" (or "output Virtual-1 at x,y"), then the stray-window line
     case $oracle in
     mutter|muffin)
-        "$VM" user "$name" -- env FW_BUS_DEST="$bus_dest" FW_BUS_PATH="$bus_path" python3 - <<'PY'
+        "$VM" user "$name" -- env W11_BUS_DEST="$bus_dest" W11_BUS_PATH="$bus_path" python3 - <<'PY'
 import gi, os, subprocess
 gi.require_version("Gio", "2.0")
 from gi.repository import Gio
-dest, path = os.environ["FW_BUS_DEST"], os.environ["FW_BUS_PATH"]
+dest, path = os.environ["W11_BUS_DEST"], os.environ["W11_BUS_PATH"]
 bus = Gio.bus_get_sync(Gio.BusType.SESSION)
 st = bus.call_sync(dest, path, dest, "GetCurrentState", None, None, 0, -1, None).unpack()
 for x, y, scale, transform, primary, mons, props in st[2]:

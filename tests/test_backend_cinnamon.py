@@ -36,15 +36,15 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from fwcommon.dbus_mini import ERR, Bus, DBusError
-from fwcommon.errors import CmdError
+from w11common.dbus_mini import ERR, Bus, DBusError
+from w11common.errors import CmdError
 import test_dbus_mini as tdm
 from test_xkbmap import _FakeService
 from wdotool import backend, backend_cinnamon, backend_gnome, cinnamon_js as js
 from wdotool.backend_cinnamon import CinnamonBackend
 from wdotool.ctx import NoSessionError
 
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
 NAME = backend_cinnamon.BUS_NAME
 PATH = backend_cinnamon.OBJECT_PATH
@@ -70,10 +70,10 @@ def win(seq, **over):
     return d
 
 
-XTERM = win(3, meta_id=3070932382, xwindow=16777228, title="yans@fuckwayland: ~",
+XTERM = win(3, meta_id=3070932382, xwindow=16777228, title="yans@w11: ~",
             wm_class="XTerm", instance="xterm", pid=79691, client_type=1,
             x=400, y=337, w=484, h=316, focus=False)
-FOOT = win(1, meta_id=2959920136, xwindow=0, title="yans@fuckwayland: ~/code",
+FOOT = win(1, meta_id=2959920136, xwindow=0, title="yans@w11: ~/code",
            wm_class="foot", instance="foot", pid=-1, client_pid=86275, client_type=0,
            x=51, y=21, w=696, h=494, focus=True, client_decorated=True)
 
@@ -606,7 +606,7 @@ class Acting(CinnamonCase):
 
     def test_x_info_defers_to_the_session_scan(self):
         """muffin has no `get_x11_display()` to ask, and writes `.mutter-Xwaylandauth.*`, which
-        fwcommon/session.py already finds [M cinnamon.md §2.3]."""
+        w11common/session.py already finds [M cinnamon.md §2.3]."""
         self.assertIsNone(self.backend().x_info())
 
 

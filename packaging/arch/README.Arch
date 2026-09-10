@@ -1,14 +1,14 @@
-fuckwayland for Arch
+w11 for Arch
 ====================
 
 Nothing is on the AUR yet -- publishing there is the owner's call, not a
 licence problem any more: the tree is BSD-2-Clause since HEAD 375d815, the
 recipe says `license=('BSD-2-Clause')` and package() installs the text under
-/usr/share/licenses/fuckwayland/.  Today the route is: clone, build, install
+/usr/share/licenses/w11/.  Today the route is: clone, build, install
 your own build.
 
-  sh scripts/build-pkgbuild.sh       # -> dist/fuckwayland-<ver>-1-any.pkg.tar.zst
-  sudo pacman -U ./dist/fuckwayland-*.pkg.tar.zst
+  sh scripts/build-pkgbuild.sh       # -> dist/w11-<ver>-1-any.pkg.tar.zst
+  sudo pacman -U ./dist/w11-*.pkg.tar.zst
 
 `--no-deps` fails instead of installing build tools, `--lint` runs namcap on
 the recipe and on the package, `--keep` leaves the scratch build directory
@@ -17,7 +17,7 @@ run as root, so in a container do it as an ordinary user.
 
 The script writes PKGBUILD.local into dist/pkgbuild/, never beside
 packaging/arch/PKGBUILD, so a build leaves `git status` nothing to explain.
-Same recipe, with `source=("fuckwayland-<ver>.tar.gz")` pointing at the tarball
+Same recipe, with `source=("w11-<ver>.tar.gz")` pointing at the tarball
 `git archive` just made and its real sha256.  Nothing in what is built is SKIP.
 
 Arch is the best oracle this project has
@@ -45,7 +45,7 @@ What differs from the .deb
     never committed to this repository.
   * The .pyc files ship in the package (134 of them, written by `python -m
     installer`), where dpkg compiles them on your machine at configure time.
-  * /etc/xdg/autostart/fuckwayland-enable-bridge.desktop is a plain file.
+  * /etc/xdg/autostart/w11-enable-bridge.desktop is a plain file.
     pacman has no conffiles -- only backup=() entries are preserved -- so it
     goes in and comes out again with the package, and the .deb's symlink
     round the conffile rule has no reason to exist here.
@@ -53,7 +53,7 @@ What differs from the .deb
     extension's three type descriptions with gobject-introspection; the
     checked-in ones are LP64 blobs.  See the comment on the `arch=` line.
   * The install hints name Arch's packages: `pacman -S xorg-xprop`,
-    `xorg-xrandr`, `python-gobject gtk3`.  fwcommon/distro.py is the table,
+    `xorg-xrandr`, `python-gobject gtk3`.  w11common/distro.py is the table,
     and tests/test_packaging_names.py keeps it and this recipe's optdepends
     saying the same thing.
 
@@ -67,8 +67,8 @@ running system too, so no reboot is needed.  pacman's own
 scriptlet -- which is why the scriptlet reloads before it triggers, and why
 the order is what the tests pin.
 
-`pacman -R fuckwayland` puts the node back to root:root 0600 with no ACL and
-takes /var/lib/fuckwayland with it (measured).
+`pacman -R w11` puts the node back to root:root 0600 with no ACL and
+takes /var/lib/w11 with it (measured).
 
 Anyone who can open /dev/uinput can type as you.  The threat model is in
 README.md.
@@ -79,7 +79,7 @@ The bridge, and the one re-login
 Identical to the .deb: gnome-shell scans extension directories only at login,
 enabling an extension is a per-user dconf setting, and pacman runs as root.
 The extension is installed system-wide and enabled in each user's first GNOME
-session by /etc/xdg/autostart/fuckwayland-enable-bridge.desktop.  Install, log
+session by /etc/xdg/autostart/w11-enable-bridge.desktop.  Install, log
 out, log back in.
 
  -- Antonio Bianchi <antonio.bianchi.333@gmail.com>

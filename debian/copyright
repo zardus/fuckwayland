@@ -1,10 +1,10 @@
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
-Upstream-Name: fuckwayland
+Upstream-Name: w11
 Upstream-Contact: Antonio Bianchi <antonio.bianchi.333@gmail.com>
-Source: https://github.com/zardus/fuckwayland
+Source: https://github.com/zardus/w11
 
 Files: *
-Copyright: 2026 the fuckwayland authors: Yan (zardus) and Antonio Bianchi
+Copyright: 2026 the w11 authors: Yan (zardus) and Antonio Bianchi
 License: BSD-2-Clause
 
 License: BSD-2-Clause

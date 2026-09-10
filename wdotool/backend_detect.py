@@ -29,8 +29,8 @@ Why each step sits where it does, all measured:
 
 import os
 
-from fwcommon import session
-from fwcommon.errors import CmdError
+from w11common import session
+from w11common.errors import CmdError
 from wdotool.backend import program
 from wdotool.ctx import NoSessionError
 
@@ -45,7 +45,7 @@ CINNAMON_NAME = "org.Cinnamon"
 #: tests/fixtures/live/busnames-resolute-budgie-10.10.2.txt) it is owned by `budgie-power-dialog`, and the
 #: session it belongs to is labwc: no org.gnome.Mutter.* name anywhere on that bus, and the compositor
 #: advertises zwlr_foreign_toplevel_manager_v1.  Detection took that name for GNOME and every window command
-#: on the flavor answered with the bridge's install hint instead of a window list ("the fuckwayland bridge
+#: on the flavor answered with the bridge's install hint instead of a window list ("the w11 bridge
 #: extension is installed in ... but the running GNOME Shell has not loaded it", CI run 34308982263).
 #:
 #: This CORRECTS recon2/budgie.md, whose §2 says a Budgie session owns no `org.gnome.Shell` and whose §6
@@ -59,7 +59,7 @@ CINNAMON_NAME = "org.Cinnamon"
 #: tests/fixtures/live/noble-gnome-46.0-capture.txt); our bridge's name can only be owned by an extension
 #: running INSIDE gnome-shell, so it is the honest answer to "is our own code in there".
 MUTTER_NAME = "org.gnome.Mutter.DisplayConfig"
-BRIDGE_NAME = "org.fuckwayland.Bridge"
+BRIDGE_NAME = "org.w11.Bridge"
 
 #: the toplevel protocols the registry step chooses between
 WLR_TOPLEVEL = "zwlr_foreign_toplevel_manager_v1"
@@ -173,7 +173,7 @@ def session_bus():
     if _probed:
         return _bus
     _probed = True
-    from fwcommon.dbus_mini import Bus, DBusError
+    from w11common.dbus_mini import Bus, DBusError
     try:
         _bus = Bus()
         _names = _bus.list_names()
@@ -206,7 +206,7 @@ def session_registry() -> "dict[str, int] | None":
     if _registry_probed:
         return _registry
     _registry_probed = True
-    from fwcommon.wayland_mini import WlConn
+    from w11common.wayland_mini import WlConn
     hit = session.find_wayland_socket()
     if hit is None:
         return None

@@ -22,7 +22,7 @@
 # this one.  Store path names, not package names; the file says so in its first line.
 #
 # Two specialisations are in the image (vm/nixos/common.nix): the default, and
-# `without-fuckwayland` with the module off.  `switch-to-configuration test` between them
+# `without-w11` with the module off.  `switch-to-configuration test` between them
 # is the offline, in-guest analogue of `apt-get remove` and re-install -- it reloads the
 # udev rules and swaps the system path in one step, no network and no rebuild.
 #

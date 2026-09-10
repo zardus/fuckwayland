@@ -38,13 +38,13 @@ sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import support
-from fwcommon import procs
+from w11common import procs
 from wmirror import cli, core, supervise
 from wxrandr import core as wxcore
 
 # The suite never hands a tool over to the real X11 one: see
 # tests/conftest.py (which covers pytest) and tests/test_passthrough.py.
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
 #: The stand-in lives in tests/support.py now: tests/test_wmirror_live.py
 #: needs the same one on a real sway, and two copies of a fake that decides
@@ -1112,7 +1112,7 @@ class Commands(MirrorCli, Base):
         wrote the file with a string) reached `"/proc/%d" % pid` and every
         command -- including the ones that would have reaped the bad record
         -- exited 1 with `wmirror: %d format: a real number is required, not
-        str`. See fwcommon.procs.as_pid."""
+        str`. See w11common.procs.as_pid."""
         self.assertEqual(self.invoke(["A", "--to", "B"])[0], 0)
         good = dict(self.live()["B"])
         state = core.load_state()

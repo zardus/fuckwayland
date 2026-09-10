@@ -31,9 +31,9 @@ What the protocol does not carry, and what this backend therefore says instead o
 
 import struct
 
-from fwcommon import session
-from fwcommon.errors import CmdError
-from fwcommon.wayland_mini import WlConn
+from w11common import session
+from w11common.errors import CmdError
+from w11common.wayland_mini import WlConn
 from wdotool import ext_workspace
 from wdotool.backend import Window, WindowBackend, mint_map
 from wdotool.backend_wlr import XPlaneViews

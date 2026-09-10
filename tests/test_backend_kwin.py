@@ -35,9 +35,9 @@ sys.path.insert(0, ROOT)
 # fails over a file that imports one of them without this line).
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from fwcommon import dbus_mini, session
-from fwcommon.dbus_mini import ERR, Bus, DBusError, Message, Variant
-from fwcommon.errors import CmdError
+from w11common import dbus_mini, session
+from w11common.dbus_mini import ERR, Bus, DBusError, Message, Variant
+from w11common.errors import CmdError
 import support
 from test_dbus_mini import MockBus
 from wdotool import backend, backend_detect, backend_kwin, kwin_js, xid_match
@@ -50,7 +50,7 @@ from wdotool.backend_kwin import (BUS_NAME, IFACE, KWIN_IFACE,
 from wdotool.ctx import NoSessionError
 
 # See tests/conftest.py: no test process ever hands itself to the real xdotool.
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
 UU = {
     "desktop": "1b4e28ba-2fa1-11d2-883f-0016d3cca427",

@@ -6,7 +6,7 @@ found a real defect doing it (fix 55: a banner down a closed pipe took the whole
 configuration with it).  The rpm's pair is the same procedure in a second
 dialect, and it is the only code in the Fedora package that runs as root on a
 stranger's machine, so it gets the same treatment: the shipped text, cut out of
-packaging/rpm/fuckwayland.spec with the markers the file itself has, run under
+packaging/rpm/w11.spec with the markers the file itself has, run under
 `sh -e` (which is how rpm runs a scriptlet) against a fake root with stubbed
 modprobe / udevadm / setfacl / chown / chmod / python3.
 
@@ -14,7 +14,7 @@ rpm has no DPKG_ROOT, so the redirection is the test's: three macros and two
 absolute paths are rewritten into a temporary tree before the slice is run
 (MACROS and ROOTED below).  That is the whole of the difference between what
 runs here and what runs on a Fedora box, and it is why the last two tests
-compare the result with debian/fuckwayland.postinst and .postrm phrase for
+compare the result with debian/w11.postinst and .postrm phrase for
 phrase: three copies of one procedure -- dpkg's, rpm's and pacman's -- and the
 order of the four udev commands is the part that matters.  The trigger has to
 follow the reload, or the node is re-tagged against the rule set that was in
@@ -35,7 +35,7 @@ import unittest
 # The suite never hands a tool over to the real X11 one: see tests/conftest.py
 # (which covers pytest) and tests/test_passthrough.py.  This line is what
 # covers `python3 tests/<file>.py`, where conftest is not loaded.
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
@@ -46,17 +46,17 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import support                                                    # noqa: E402
 
-SPEC = os.path.join(ROOT, "packaging", "rpm", "fuckwayland.spec")
-POSTINST = os.path.join(ROOT, "debian", "fuckwayland.postinst")
-POSTRM = os.path.join(ROOT, "debian", "fuckwayland.postrm")
+SPEC = os.path.join(ROOT, "packaging", "rpm", "w11.spec")
+POSTINST = os.path.join(ROOT, "debian", "w11.postinst")
+POSTRM = os.path.join(ROOT, "debian", "w11.postrm")
 
 #: rpm macros the scriptlets use, and what they are here.  %{_sharedstatedir}
 #: is /var/lib on Fedora and /usr/com on the rpm Ubuntu ships (measured), which
 #: is one more reason the scriptlet names the macro and this table names the
 #: test's tree.
 MACROS = {
-    "%{_sharedstatedir}": "$FW_ROOT/var/lib",
-    "%{name}": "fuckwayland",
+    "%{_sharedstatedir}": "$W11_ROOT/var/lib",
+    "%{name}": "w11",
 }
 
 #: The two absolute paths a scriptlet cannot be talked out of, redirected into
@@ -142,7 +142,7 @@ class ScriptletCase(unittest.TestCase):
     """A fake root, the six stubs, and the two scriptlets rewritten into it."""
 
     def setUp(self):
-        self.tmp = tempfile.mkdtemp(prefix="fw-rpm-scripts-")
+        self.tmp = tempfile.mkdtemp(prefix="w11-rpm-scripts-")
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         self.root = os.path.join(self.tmp, "root")
         self.bin = os.path.join(self.tmp, "bin")
@@ -175,7 +175,7 @@ class ScriptletCase(unittest.TestCase):
         for macro, value in MACROS.items():
             text = text.replace(macro, value)
         for path in ROOTED:
-            text = text.replace(path, "$FW_ROOT" + path)
+            text = text.replace(path, "$W11_ROOT" + path)
         return text
 
     def run_scriptlet(self, name, arg):
@@ -183,12 +183,12 @@ class ScriptletCase(unittest.TestCase):
         with open(path, "w", encoding="utf-8") as fh:
             fh.write(self.rewrite(scriptlet(name)))
         env = {"PATH": self.bin + ":" + self.realbin, "FAKE_LOG": self.log,
-               "FW_ROOT": self.root, "LC_ALL": "C"}
+               "W11_ROOT": self.root, "LC_ALL": "C"}
         return subprocess.run(["/bin/sh", "-e", path, str(arg)], env=env, cwd=self.tmp,
                               capture_output=True, text=True, timeout=60)
 
     def stamp(self):
-        return os.path.join(self.root, "var", "lib", "fuckwayland", "installed")
+        return os.path.join(self.root, "var", "lib", "w11", "installed")
 
     def calls(self):
         if not os.path.exists(self.log):
@@ -381,7 +381,7 @@ class TheThreePackagingsAgree(ScriptletCase):
             "udevadm control --reload-rules",
             "udevadm trigger --name-match=uinput",
             "udevadm settle --timeout=5",
-        ], "debian/fuckwayland.postinst changed; the spec has to follow")
+        ], "debian/w11.postinst changed; the spec has to follow")
 
     def test_postun_is_debians_remove_arm(self):
         deb = self.deb_arm(POSTRM, "remove)", "purge)")
@@ -395,7 +395,7 @@ class TheThreePackagingsAgree(ScriptletCase):
             "removexattr",
             "chown root:root",
             "chmod 0600",
-        ], "debian/fuckwayland.postrm changed; the spec has to follow")
+        ], "debian/w11.postrm changed; the spec has to follow")
 
     def test_the_phrase_scan_is_not_fooled_by_the_prose(self):
         """The comments around both scriptlets name the commands they are
@@ -409,17 +409,17 @@ class TheThreePackagingsAgree(ScriptletCase):
 
     def test_the_stamp_path_is_the_one_the_enabler_reads(self):
         """packaging/common/enable-bridge defaults SYSTEM_STAMP to
-        /var/lib/fuckwayland/installed, and %{_sharedstatedir} is /var/lib on
+        /var/lib/w11/installed, and %{_sharedstatedir} is /var/lib on
         Fedora.  Three files, one path, and no test between them until now."""
         self.run_scriptlet("post", 1)
         self.assertEqual(
             os.path.relpath(self.stamp(), self.root),
-            "var/lib/fuckwayland/installed")
+            "var/lib/w11/installed")
         with open(os.path.join(ROOT, "packaging", "common", "enable-bridge"),
                   encoding="utf-8") as fh:
             src = fh.read()
         self.assertIn(
-            'SYSTEM_STAMP="${FUCKWAYLAND_SYSTEM_STAMP:-/var/lib/fuckwayland/installed}"',
+            'SYSTEM_STAMP="${W11_SYSTEM_STAMP:-/var/lib/w11/installed}"',
             src)
 
 

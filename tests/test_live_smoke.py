@@ -47,7 +47,7 @@ from unittest import mock
 # The suite never hands a tool over to the real X11 one: see tests/conftest.py
 # (which covers pytest) and tests/test_passthrough.py.  This line is what
 # covers `python3 tests/<file>.py`, where conftest is not loaded.
-os.environ["FUCKWAYLAND_PASSTHROUGH"] = "never"
+os.environ["W11_PASSTHROUGH"] = "never"
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
@@ -86,8 +86,8 @@ def oracle_module():
     loader is how the shipped file itself -- not a copy of it -- is what these
     tests parse with."""
     spec = importlib.util.spec_from_loader(
-        "fw_oracle_under_test",
-        importlib.machinery.SourceFileLoader("fw_oracle_under_test", ORACLE))
+        "w11_oracle_under_test",
+        importlib.machinery.SourceFileLoader("w11_oracle_under_test", ORACLE))
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -295,7 +295,7 @@ class TheOracle(unittest.TestCase):
 
     def test_the_wayfire_socket_is_looked_for_where_the_tools_look(self):
         """$WAYFIRE_SOCKET first, then the `wayfire-*.socket` glob -- the order
-        fwcommon.session.find_wayfire_socket uses.  The measured name has an
+        w11common.session.find_wayfire_socket uses.  The measured name has an
         empty pid field (`wayfire-wayland-1-.socket`), so nothing may match on
         one [recon2/wayfire 1.2]."""
         # `mock.patch.dict` and not `self.mod.os.environ = env`: oracle.py's `os`
@@ -483,8 +483,8 @@ class TheDriversPackageAxis(unittest.TestCase):
         pre = "set -u\n"
         if distro:
             pre += 'DISTRO=%s\n' % distro
-        pre += 'DEB=/repo/release/fuckwayland_0.4.0_all.deb\nVERSION=0.4.0\n'
-        pre += 'LIVE_SMOKE_RPMS=/rpms\nLIVE_SMOKE_PKG=/pkgs/fuckwayland-0.4.0-1-any.pkg.tar.zst\n'
+        pre += 'DEB=/repo/release/w11_0.4.0_all.deb\nVERSION=0.4.0\n'
+        pre += 'LIVE_SMOKE_RPMS=/rpms\nLIVE_SMOKE_PKG=/pkgs/w11-0.4.0-1-any.pkg.tar.zst\n'
         for name in ("pkg_files", "pkg_install_cmd", "pkg_remove_cmd",
                      "pkg_left_behind", "pkg_banner_re", "distro_phases"):
             pre += support.sh_function(DRIVER, name)
@@ -578,9 +578,9 @@ class TheDriversPackageAxis(unittest.TestCase):
 
     def test_the_package_resolves_per_distro(self):
         self.assertEqual(self.out("pkg_files", "ubuntu"),
-                         "/repo/release/fuckwayland_0.4.0_all.deb")
+                         "/repo/release/w11_0.4.0_all.deb")
         self.assertEqual(self.out("pkg_files", "arch"),
-                         "/pkgs/fuckwayland-0.4.0-1-any.pkg.tar.zst")
+                         "/pkgs/w11-0.4.0-1-any.pkg.tar.zst")
         self.assertEqual(self.out("pkg_files", "nixos"), "")
 
     def test_the_rpms_are_the_ones_of_this_version_and_nothing_else(self):
@@ -591,55 +591,55 @@ class TheDriversPackageAxis(unittest.TestCase):
         `dnf install` two versions of each name and fail.  The deb and pkg arms
         are pinned to $VERSION already; this is that same pin."""
         with tempfile.TemporaryDirectory() as tmp:
-            for n in ("fuckwayland-0.4.0-1.fc44.noarch.rpm",
-                      "gnome-shell-extension-fuckwayland-bridge-0.4.0-1.fc44.noarch.rpm",
-                      "fuckwayland-0.3.9-1.fc44.noarch.rpm",
+            for n in ("w11-0.4.0-1.fc44.noarch.rpm",
+                      "gnome-shell-extension-w11-bridge-0.4.0-1.fc44.noarch.rpm",
+                      "w11-0.3.9-1.fc44.noarch.rpm",
                       "not-a-package.txt"):
                 open(os.path.join(tmp, n), "w").close()
             got = self.out("LIVE_SMOKE_RPMS=%s; pkg_files" % tmp, "fedora")
-            self.assertIn("fuckwayland-0.4.0-1.fc44.noarch.rpm", got)
-            self.assertIn("gnome-shell-extension-fuckwayland-bridge-0.4.0-1.fc44.noarch.rpm", got)
+            self.assertIn("w11-0.4.0-1.fc44.noarch.rpm", got)
+            self.assertIn("gnome-shell-extension-w11-bridge-0.4.0-1.fc44.noarch.rpm", got)
             self.assertNotIn("0.3.9", got)
             self.assertNotIn("not-a-package.txt", got)
         self.assertEqual(self.out("LIVE_SMOKE_RPMS=/nowhere; pkg_files", "fedora"), "")
 
     def test_each_manager_installs_with_its_own_command(self):
-        self.assertIn("apt-get install -y ./fw.deb", self.out("pkg_install_cmd", "ubuntu"))
+        self.assertIn("apt-get install -y ./w11.deb", self.out("pkg_install_cmd", "ubuntu"))
         self.assertIn("dnf install -y", self.out("pkg_install_cmd", "fedora"))
         self.assertIn("pacman -U --noconfirm", self.out("pkg_install_cmd", "arch"))
         self.assertEqual(self.out("pkg_install_cmd", "nixos"), "")
 
     def test_the_bridge_subpackage_is_named_and_not_left_to_supplements(self):
         """`Supplements: gnome-shell` only fires where gnome-shell is installed,
-        and fedora44-sway has none -- so a `dnf install ./fuckwayland-*.rpm`
+        and fedora44-sway has none -- so a `dnf install ./w11-*.rpm`
         alone would leave the bridge out of exactly the image whose smoke does
         not need it and, worse, out of any image dnf decides differently about."""
         got = self.out("pkg_install_cmd", "fedora")
-        self.assertIn("gnome-shell-extension-fuckwayland-bridge-", got)
-        self.assertIn("gnome-shell-extension-fuckwayland-overlap-", got)
+        self.assertIn("gnome-shell-extension-w11-bridge-", got)
+        self.assertIn("gnome-shell-extension-w11-overlap-", got)
 
     def test_each_manager_removes_with_its_own_command(self):
-        self.assertIn("apt-get remove -y fuckwayland", self.out("pkg_remove_cmd", "ubuntu"))
-        self.assertIn("dnf remove -y fuckwayland", self.out("pkg_remove_cmd", "fedora"))
-        self.assertIn("pacman -R --noconfirm fuckwayland", self.out("pkg_remove_cmd", "arch"))
+        self.assertIn("apt-get remove -y w11", self.out("pkg_remove_cmd", "ubuntu"))
+        self.assertIn("dnf remove -y w11", self.out("pkg_remove_cmd", "fedora"))
+        self.assertIn("pacman -R --noconfirm w11", self.out("pkg_remove_cmd", "arch"))
         self.assertIn("switch-to-configuration test", self.out("pkg_remove_cmd", "nixos"))
-        self.assertIn("without-fuckwayland", self.out("pkg_remove_cmd", "nixos"))
+        self.assertIn("without-w11", self.out("pkg_remove_cmd", "nixos"))
 
     def test_the_left_behind_table_names_each_packagings_own_libexec_path(self):
         """The one path that differs between packagings.  Checking the rpm's
-        removal against `/usr/lib/fuckwayland` would pass on every rpm ever
+        removal against `/usr/lib/w11` would pass on every rpm ever
         built, because nothing has ever put a file there."""
-        self.assertIn("/usr/lib/fuckwayland", self.out("pkg_left_behind", "ubuntu").split())
-        self.assertIn("/usr/lib/fuckwayland", self.out("pkg_left_behind", "arch").split())
-        self.assertIn("/usr/libexec/fuckwayland", self.out("pkg_left_behind", "fedora").split())
-        self.assertNotIn("/usr/lib/fuckwayland", self.out("pkg_left_behind", "fedora").split())
+        self.assertIn("/usr/lib/w11", self.out("pkg_left_behind", "ubuntu").split())
+        self.assertIn("/usr/lib/w11", self.out("pkg_left_behind", "arch").split())
+        self.assertIn("/usr/libexec/w11", self.out("pkg_left_behind", "fedora").split())
+        self.assertNotIn("/usr/lib/w11", self.out("pkg_left_behind", "fedora").split())
 
     def test_the_left_behind_table_names_both_extensions_everywhere(self):
         for distro in ("ubuntu", "fedora", "arch", "nixos"):
             with self.subTest(distro):
                 got = self.out("pkg_left_behind", distro)
-                self.assertIn("fuckwayland-bridge@fuckwayland", got)
-                self.assertIn("fuckwayland-overlap@fuckwayland", got)
+                self.assertIn("w11-bridge@w11", got)
+                self.assertIn("w11-overlap@w11", got)
 
     def test_nixos_owns_no_path_under_usr_at_all(self):
         """There is no /usr on NixOS; the extensions live in the system profile
@@ -647,7 +647,7 @@ class TheDriversPackageAxis(unittest.TestCase):
         does not have."""
         got = self.out("pkg_left_behind", "nixos")
         self.assertNotIn("/usr/", got)
-        self.assertNotIn("/var/lib/fuckwayland", got)
+        self.assertNotIn("/var/lib/w11", got)
         self.assertIn("/run/current-system/sw/share/gnome-shell/extensions", got)
 
     def test_only_the_packagings_that_print_a_banner_are_checked_for_one(self):
@@ -666,11 +666,11 @@ class TheDriversPackageAxis(unittest.TestCase):
         rather than named a second time here: the pair of tests then says both
         halves of the claim.  The one above pins what the driver answers, this
         one pins that a scriptlet still prints it -- so rewording the paragraph
-        in debian/fuckwayland.postinst or packaging/arch/fuckwayland.install
+        in debian/w11.postinst or packaging/arch/w11.install
         turns this red instead of leaving the smoke waiting for a sentence
         nobody prints any more."""
-        for distro, path in (("ubuntu", "debian/fuckwayland.postinst"),
-                             ("arch", "packaging/arch/fuckwayland.install")):
+        for distro, path in (("ubuntu", "debian/w11.postinst"),
+                             ("arch", "packaging/arch/w11.install")):
             with self.subTest(path):
                 banner = self.out("pkg_banner_re", distro)
                 self.assertTrue(banner, "the driver answers no banner for %s" % distro)
@@ -706,8 +706,8 @@ class TheDriversPackageAxis(unittest.TestCase):
 
     #: What `readlink -f /run/current-system` answers on a NixOS guest before
     #: anything is switched: the DEFAULT system's toplevel, the one that carries
-    #: `specialisation/without-fuckwayland`.
-    DEFSYS = "/nix/store/0000000000000000000000000000000-nixos-system-fw-26.05"
+    #: `specialisation/without-w11`.
+    DEFSYS = "/nix/store/0000000000000000000000000000000-nixos-system-w11-26.05"
 
     def test_phase_remove_never_runs_an_empty_command_on_nixos(self):
         """There is nothing to install on NixOS, so `pkg_install_cmd` is empty
@@ -717,7 +717,7 @@ class TheDriversPackageAxis(unittest.TestCase):
         putting the package back actually is there."""
         err = self.nixos_remove()
         self.assertNotIn("ROOT[]", err)
-        self.assertIn("without-fuckwayland/bin/switch-to-configuration test", err)
+        self.assertIn("without-w11/bin/switch-to-configuration test", err)
         self.assertNotIn("DEPLOYED", err)
 
     def test_the_nixos_switch_back_goes_through_the_path_captured_before_the_switch(self):
@@ -725,7 +725,7 @@ class TheDriversPackageAxis(unittest.TestCase):
         "$systemConfig")" /run/current-system` and runs that for `test` exactly
         as for `switch` [nixpkgs nixos/modules/system/activation/
         activation-script.nix:79, read in the local store 2026-09-08].  So the
-        moment the removal switches into without-fuckwayland, /run/current-system
+        moment the removal switches into without-w11, /run/current-system
         IS that child -- which has no `specialisation/` of its own, the fact
         phase_install asserts -- and a "switch back" spelled
         /run/current-system/bin/switch-to-configuration would re-activate the
@@ -755,8 +755,8 @@ class TheDriversPackageAxis(unittest.TestCase):
         got = subprocess.run(["bash", "-c", pre], capture_output=True, text=True, timeout=60)
         self.assertEqual(got.returncode, 0, got.stderr)
         self.assertIn("DEPLOYED", got.stderr)
-        self.assertIn("apt-get remove -y fuckwayland", got.stderr)
-        self.assertIn("apt-get install -y ./fw.deb", got.stderr)
+        self.assertIn("apt-get remove -y w11", got.stderr)
+        self.assertIn("apt-get install -y ./w11.deb", got.stderr)
         self.assertIn("WANT[installing again prints the first-install banner again]", got.stderr)
 
     def remove_under_errexit(self, distro, rc):
@@ -880,7 +880,7 @@ class TheDistroPhases(unittest.TestCase):
         one summary line.  Two shapes, one meaning, and neither may be
         confused with a real difference."""
         for distro, answer in (("fedora", ""),
-                               ("arch", "fuckwayland: 61 total files, 0 altered files")):
+                               ("arch", "w11: 61 total files, 0 altered files")):
             with self.subTest(distro):
                 out = self.phase("phase_pkgverify", distro, answer)
                 self.assertTrue(any(ln.startswith("PASS|") for ln in out.splitlines()), out)
@@ -893,8 +893,8 @@ class TheDistroPhases(unittest.TestCase):
         image where the install never happened."""
         for distro, answer in (
                 ("fedora", "S.5....T.  /usr/bin/wdotool"),
-                ("fedora", "package fuckwayland is not installed"),
-                ("arch", "fuckwayland: 61 total files, 1 altered file")):
+                ("fedora", "package w11 is not installed"),
+                ("arch", "w11: 61 total files, 1 altered file")):
             with self.subTest((distro, answer)):
                 out = self.phase("phase_pkgverify", distro, answer)
                 self.assertTrue(any(ln.startswith("FAIL|") for ln in out.splitlines()), out)
@@ -906,14 +906,14 @@ class TheDistroPhases(unittest.TestCase):
 
     def test_pkgverify_does_not_run_the_verifier_over_a_tree_deploy(self):
         """In tree mode phase_install puts the tree's extension.js, metadata.json
-        and org.fuckwayland.Bridge1.xml over the package's copies under
+        and org.w11.Bridge1.xml over the package's copies under
         /usr/share/gnome-shell/extensions (gnome.sh install_extra), and the
         single Arch package OWNS those three files -- so `pacman -Qkk` would
         report altered files for a difference the smoke itself made, and the
         phase would be red by construction on arch-gnome.  It says what it did
         not check and stops."""
         out = self.phase("phase_pkgverify", "arch",
-                         "fuckwayland: 61 total files, 3 altered files", mode="tree")
+                         "w11: 61 total files, 3 altered files", mode="tree")
         self.assertNotIn("PASS|", out)
         self.assertNotIn("FAIL|", out)
 

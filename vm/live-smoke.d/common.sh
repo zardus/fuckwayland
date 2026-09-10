@@ -32,10 +32,10 @@
 # left in /tmp would simply be gone by the phase that reads it, with no error.
 # The strings are single-quoted on purpose: $HOME is expanded by the GUEST's
 # shell, the same way gnome.sh's $MX is.
-SMOKE_FILE='$HOME/fw-smoke.txt'
+SMOKE_FILE='$HOME/w11-smoke.txt'
 WIN=                      # the editor's window id, set by phase_windows
-BUSLOG='$HOME/fw-bus.log'
-ORACLE='$HOME/fw-oracle.py'
+BUSLOG='$HOME/w11-bus.log'
+ORACLE='$HOME/w11-oracle.py'
 
 # --- helpers ------------------------------------------------------------------
 
@@ -91,8 +91,8 @@ plasma_major() { guest 'plasmashell --version 2>/dev/null' | grep -o '[0-9]\+' |
 # user's own shell copies it home.  Both halves run again after every reboot,
 # because /tmp does not survive one on 24.04.
 install_oracle() {
-    "$VM" scp "$NAME" "$STEPS/oracle.py" "$NAME:/tmp/fw-oracle.py" >/dev/null 2>&1 || true
-    guest "cp /tmp/fw-oracle.py $ORACLE && chmod 0755 $ORACLE" >/dev/null 2>&1 || true
+    "$VM" scp "$NAME" "$STEPS/oracle.py" "$NAME:/tmp/w11-oracle.py" >/dev/null 2>&1 || true
+    guest "cp /tmp/w11-oracle.py $ORACLE && chmod 0755 $ORACLE" >/dev/null 2>&1 || true
 }
 
 # One output's position as the native tool reports it, `x,y`.
@@ -225,15 +225,15 @@ phase_install() {
     # phase owes instead is proof that the running system is the one with it on
     # (vm/nixos/common.nix bakes two specialisations, and `--remove` switches
     # into the other).  A store path with the version in its name is what
-    # `programs.fuckwayland.enable` put on PATH; the without-fuckwayland
+    # `programs.w11.enable` put on PATH; the without-w11
     # specialisation directory exists only under the DEFAULT system, because a
     # specialisation has no specialisations of its own.
     if [ "$DISTRO" = nixos ]; then
         want "wdotool is a /nix/store path carrying $VERSION" \
-             "^/nix/store/[a-z0-9]+-fuckwayland-$VERSION/" \
+             "^/nix/store/[a-z0-9]+-w11-$VERSION/" \
              "$(guest 'readlink -f $(command -v wdotool)' | tr -d ' \r' || true)"
-        same "/run/current-system is the default specialisation, not without-fuckwayland" "yes" \
-             "$(guest 'test -d /run/current-system/specialisation/without-fuckwayland && echo yes || echo no' \
+        same "/run/current-system is the default specialisation, not without-w11" "yes" \
+             "$(guest 'test -d /run/current-system/specialisation/without-w11 && echo yes || echo no' \
                   | tr -d ' \r' || true)"
         return 0
     fi
@@ -243,7 +243,7 @@ phase_install() {
     out=$(root "$cmd") || st=$?
     ok "$cmd" "$st"
     # The postinst/scriptlet banner is printed on a FIRST install only (the
-    # stamp /var/lib/fuckwayland/installed decides), which a --fresh instance
+    # stamp /var/lib/w11/installed decides), which a --fresh instance
     # is.  dpkg and pacman print the same paragraph; the rpm prints nothing at
     # all on purpose, and what it owes instead is README.Fedora in %doc
     # [recon2/pkg-rpm 292].
@@ -252,7 +252,7 @@ phase_install() {
         want "the first-install banner names the relogin and /dev/uinput" "$banner" "$out"
     elif [ "$DISTRO" = fedora ]; then
         want "no banner, but the rpm ships README.Fedora where the advice went" "README.Fedora" \
-             "$(root 'rpm -ql fuckwayland 2>/dev/null | grep -i readme' || true)"
+             "$(root 'rpm -ql w11 2>/dev/null | grep -i readme' || true)"
     fi
     if [ "$MODE" = tree ]; then
         step "deploying the WORKING TREE over the package (the tree carries fixes the package does not)"
@@ -311,14 +311,14 @@ phase_selinux() {
 phase_pkgverify() {
     local cmd out
     case "$DISTRO" in
-    fedora) cmd="rpm -V fuckwayland" ;;
-    arch)   cmd="pacman -Qkk fuckwayland" ;;
+    fedora) cmd="rpm -V w11" ;;
+    arch)   cmd="pacman -Qkk w11" ;;
     *)      note "no package verifier for distro $DISTRO"; return 0 ;;
     esac
     # Tree mode is not a weaker version of this check, it is a different run:
     # phase_install deploys the zipapps into /usr/local/bin (which no package
     # owns, so the verifier is right to ignore them) AND, on gnome.sh, installs
-    # the tree's extension.js/metadata.json/org.fuckwayland.Bridge1.xml over the
+    # the tree's extension.js/metadata.json/org.w11.Bridge1.xml over the
     # package's copies under /usr/share/gnome-shell/extensions -- which the
     # single Arch package DOES own, so `pacman -Qkk` would report altered files
     # and this phase would be red by construction on arch-gnome.  So the tree
@@ -330,10 +330,10 @@ phase_pkgverify() {
     out=$(root "$cmd 2>&1" || true)
     # pacman -Qkk prints one `... 0 altered files` summary line on success; rpm
     # -V prints nothing at all.  Anything else -- a `5` size mismatch, a missing
-    # file, `package fuckwayland is not installed` -- is what this phase exists
+    # file, `package w11 is not installed` -- is what this phase exists
     # to catch, so the accepted shapes are named and everything else is a FAIL.
     if [ -z "$(printf '%s' "$out" | tr -d ' \r\n')" ] \
-       || printf '%s\n' "$out" | grep -Eq '^fuckwayland: .* 0 altered files$'; then
+       || printf '%s\n' "$out" | grep -Eq '^w11: .* 0 altered files$'; then
         pass "$cmd is clean: every installed file is as the package recorded it"
     else
         fail "$cmd reported a difference [$(ev "$out")]"

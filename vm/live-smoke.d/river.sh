@@ -55,7 +55,7 @@ EDITOR_CLASS=foot
 #: Where the second terminal writes its own pid.  In $HOME and not /tmp, for the reason
 #: common.sh gives for SMOKE_FILE: noble's systemd-tmpfiles empties /tmp on every boot.
 #: Single-quoted, so $HOME is expanded by the GUEST's shell.
-SECOND_PID='$HOME/fw-second.pid'
+SECOND_PID='$HOME/w11-second.pid'
 
 editor_start() {
     guest "rm -f $SMOKE_FILE; setsid nohup foot -- sh -c 'cat >> $SMOKE_FILE' >/dev/null 2>&1 </dev/null &

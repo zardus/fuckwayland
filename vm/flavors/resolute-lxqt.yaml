@@ -9,7 +9,7 @@
 # work in-session and ALL FOUR FAIL from `ssh root@box` with an empty environment --
 # `Authorization required, but no authorization protocol specified` -- because SDDM writes the cookie to
 # /tmp/xauth_<random>, which is neither ~/.Xauthority nor anything in a runtime directory, and
-# fwcommon/session.py's _SESSION_LEADERS named no LXQt or Openbox process to read it from.  Four names
+# w11common/session.py's _SESSION_LEADERS named no LXQt or Openbox process to read it from.  Four names
 # added to that tuple (`lxqt-session`, `lxsession`, `openbox`, `labwc`) turned all four from broken to
 # working in the same session, measured both ways [recon2/openbox A].  vm/live-smoke.d/lxqt.sh's
 # `x11root` phase is that measurement, kept.
@@ -26,7 +26,7 @@
 # Cost: the recon's lxqt-core install took ~40 min on a loaded host for ~700 packages; lubuntu-desktop
 # is bigger, of kubuntu-desktop's order.  qterminal is Lubuntu's terminal and arrives with the
 # metapackage; xterm is EXTRA all the same, because the checks act on the client the byte-parity
-# measurement used (`0x02400014  0 1967 719 396 484 316 xterm.XTerm ... fwsmoke` against real wmctrl's
+# measurement used (`0x02400014  0 1967 719 396 484 316 xterm.XTerm ... w11smoke` against real wmctrl's
 # own bytes [recon2/openbox A]).
 #
 # The Wayland twin is resolute-lxqt-wayland (batch 14): the same desktop over labwc, from

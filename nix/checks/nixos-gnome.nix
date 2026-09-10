@@ -4,7 +4,7 @@
 # set -- the extension package in systemPackages, the dconf profile, the udev
 # package, boot.kernelModules -- and it passed in 110.8 s of test script
 # [recon2/pkg-nix §7, recon2/pkg-nix/gnometest.nix].  Here those four lines
-# are `programs.fuckwayland.enable = true` and the prints are assertions.  It
+# are `programs.w11.enable = true` and the prints are assertions.  It
 # is the file that proves nixosModules.default, so it asserts the two things
 # only a VM can say: that a store-installed extension is found and loaded with
 # no ~/.local/share copy and no relogin, and that the uaccess rule reaches
@@ -12,7 +12,7 @@
 { self, pkgs }:
 
 pkgs.testers.runNixOSTest {
-  name = "fuckwayland-nixos-gnome";
+  name = "w11-nixos-gnome";
 
   nodes.machine = { ... }: {
     imports = [ self.nixosModules.default ];
@@ -35,8 +35,8 @@ pkgs.testers.runNixOSTest {
     # under test.  warandr is the one option it does ask for, because the GTK
     # wrapper is the same claim on Mutter as it is on sway and this is the
     # machine where a real Mutter answers DisplayConfig.
-    programs.fuckwayland.enable = true;
-    programs.fuckwayland.warandr.enable = true;
+    programs.w11.enable = true;
+    programs.w11.warandr.enable = true;
     environment.systemPackages = [ pkgs.gnome-console pkgs.acl ];
   };
 
@@ -58,18 +58,18 @@ pkgs.testers.runNixOSTest {
     # The system dconf profile, read back by the session that was started
     # after it was written: first login, no logout step.
     enabled = u("gsettings get org.gnome.shell enabled-extensions")
-    assert "fuckwayland-bridge@fuckwayland" in enabled, enabled
+    assert "w11-bridge@w11" in enabled, enabled
     assert u("gsettings get org.gnome.shell disable-user-extensions").strip() == "false"
 
     # The extension is not merely enabled in a key: it loaded and took the
     # bus name.  Both journal lines were measured at t=60.7 s on gnome-shell
     # 50.4 [recon2/pkg-nix §7].
     machine.wait_until_succeeds(
-        "journalctl -b | grep -q 'fuckwayland-bridge.*acquired org.fuckwayland.Bridge'",
+        "journalctl -b | grep -q 'w11-bridge.*acquired org.w11.Bridge'",
         timeout=120)
     names = u("gdbus call --session -d org.freedesktop.DBus -o /org/freedesktop/DBus "
               "-m org.freedesktop.DBus.ListNames")
-    assert "org.fuckwayland.Bridge" in names, names
+    assert "org.w11.Bridge" in names, names
 
     backend = u("wxrandr --print-backend --verbose")
     assert backend.splitlines()[0].strip() == "mutter", backend
@@ -115,15 +115,15 @@ pkgs.testers.runNixOSTest {
     # store-installed extension found through XDG_DATA_DIRS, which is the
     # whole claim of §7 and the reason the dconf profile above is enough.
     ext = "/run/current-system/sw/share/gnome-shell/extensions"
-    machine.succeed(f"test -f {ext}/fuckwayland-bridge@fuckwayland/metadata.json")
+    machine.succeed(f"test -f {ext}/w11-bridge@w11/metadata.json")
     machine.fail("test -e /home/alice/.local/share/gnome-shell/extensions")
 
     # The overlap extension is installed by NOBODY here, which is a stronger
     # claim than "enabled by nobody" and the one the comment used to make
     # without testing: gnomeOverlap.enable is false by default, so its package
     # is in no profile at all.
-    assert "fuckwayland-overlap@fuckwayland" not in enabled, enabled
-    machine.fail(f"test -e {ext}/fuckwayland-overlap@fuckwayland")
+    assert "w11-overlap@w11" not in enabled, enabled
+    machine.fail(f"test -e {ext}/w11-overlap@w11")
 
     node = machine.succeed("ls -l /dev/uinput")
     assert node.split()[0] == "crw-rw----+", node
