@@ -144,7 +144,7 @@ keys/id_ed25519[.pub]            guest root ssh key, generated once
 **38 flavors** across four distributions: 25 Ubuntu, 6 Arch, 5 Fedora and 2 NixOS. By builder,
 34 are a cloud image plus a desktop metapackage, 2 are an Ubuntu desktop ISO run through the
 real installer (`resolute-gnome-iso`, `noble-gnome-iso`) and 2 are NixOS configurations built
-with `nix build` (`nixos-sway`, `nixos-gnome`). CI builds 29 of them on every push and 9 on
+with `nix build` (`nixos-sway`, `nixos-gnome`). CI builds 38 of them on every push and 0 on
 demand. The cloud-image flavors exist because one script gets 19 desktops out of them; the
 two ISO ones exist because "it works out of the box on a default Ubuntu desktop" is a claim
 about an *installed* system — one per supported LTS, because the two releases install
@@ -218,18 +218,18 @@ bridge claims every shell the rig carries, so the header line is an anchor as we
 | `resolute-xfce-wayland` | Ubuntu 26.04 LTS | Xfce 4.20 as `startxfce4 --wayland`, i.e. **on labwc** (`xubuntu-desktop` plus `labwc`) | LightDM (`autologin-session=xfce-wayland`) | Wayland | `wlr-randr` | `ubuntu` | push |
 | `stonking-gnome` | Ubuntu 26.10 | GNOME Shell 51 / mutter 51 (`ubuntu-desktop-minimal`) | GDM | Wayland | mutter's `GetCurrentState` | `ubuntu` | push |
 | `stonking-kde` | Ubuntu 26.10 | Plasma 6.7 / KWin 6.7 (`kde-plasma-desktop`) | SDDM | Wayland | `kscreen-doctor -o` | `ubuntu` | push |
-| `fedora43-gnome` | Fedora 43 | GNOME Shell 49 / mutter 49 (`workstation-product-environment`) | GDM (`/etc/gdm`) | Wayland | mutter's `GetCurrentState` | `fedora` | on demand |
-| `fedora44-cosmic` | Fedora 44 | COSMIC, cosmic-comp 1.6.0-3.fc44 (Smithay), Xwayland, `foot` (`cosmic-desktop-environment`) | greetd (`command = "start-cosmic"`) | Wayland | `cosmic-randr list --kdl` | `fedora` | on demand |
+| `fedora43-gnome` | Fedora 43 | GNOME Shell 49 / mutter 49 (`workstation-product-environment`) | GDM (`/etc/gdm`) | Wayland | mutter's `GetCurrentState` | `fedora` | push |
+| `fedora44-cosmic` | Fedora 44 | COSMIC, cosmic-comp 1.6.0-3.fc44 (Smithay), Xwayland, `foot` (`cosmic-desktop-environment`) | greetd (`command = "start-cosmic"`) | Wayland | `cosmic-randr list --kdl` | `fedora` | push |
 | `fedora44-gnome` | Fedora 44 | GNOME Shell 50.4 / mutter 50.4 (`workstation-product-environment`) | GDM (`/etc/gdm`) | Wayland | mutter's `GetCurrentState` | `fedora` | push |
-| `fedora44-kde` | Fedora 44 | Plasma 6.7 / KWin 6.7 (`kde-desktop-environment`) | **plasma-login-manager** — the one flavor not seated by SDDM or GDM | Wayland | `kscreen-doctor -o` | `fedora` | on demand |
+| `fedora44-kde` | Fedora 44 | Plasma 6.7 / KWin 6.7 (`kde-desktop-environment`) | **plasma-login-manager** — the one flavor not seated by SDDM or GDM | Wayland | `kscreen-doctor -o` | `fedora` | push |
 | `fedora44-sway` | Fedora 44 | sway 1.11 / wlroots, Xwayland, `foot`, `grim` (`sway-desktop-environment`) | greetd (+ `greetd-selinux`) | Wayland | `swaymsg -t get_outputs` | `fedora` | push |
-| `arch-cosmic` | Arch, rolling (20260901) | COSMIC 1:1.7.0-1 | greetd | Wayland | `cosmic-randr list --kdl` | `arch` | on demand |
-| `arch-gnome` | Arch, rolling (20260901) | GNOME Shell 50.4 / mutter 50.4 | GDM (`/etc/gdm`) | Wayland | mutter's `GetCurrentState` | `arch` | on demand |
-| `arch-hypr` | Arch, rolling (20260901) | Hyprland 0.56.2, `xorg-xwayland`, `foot` | greetd | Wayland | `hyprctl -j monitors`; `wlr-randr` 0.5.0 second | `arch` | on demand |
-| `arch-kde` | Arch, rolling (20260901) | Plasma 6.7 / KWin 6.7 | SDDM | Wayland | `kscreen-doctor -o` | `arch` | on demand |
-| `arch-river` | Arch, rolling (20260901) | river 0.4.8 + **tinyrwm built from source** (commit `5c01698c`) | greetd (`command = "river -c /usr/local/bin/vmctl-river-init"`) | Wayland | `wlr-randr` 0.5.0 (river has no output query at all) | `arch` | on demand |
+| `arch-cosmic` | Arch, rolling (20260901) | COSMIC 1:1.7.0-1 | greetd | Wayland | `cosmic-randr list --kdl` | `arch` | push |
+| `arch-gnome` | Arch, rolling (20260901) | GNOME Shell 50.4 / mutter 50.4 | GDM (`/etc/gdm`) | Wayland | mutter's `GetCurrentState` | `arch` | push |
+| `arch-hypr` | Arch, rolling (20260901) | Hyprland 0.56.2, `xorg-xwayland`, `foot` | greetd | Wayland | `hyprctl -j monitors`; `wlr-randr` 0.5.0 second | `arch` | push |
+| `arch-kde` | Arch, rolling (20260901) | Plasma 6.7 / KWin 6.7 | SDDM | Wayland | `kscreen-doctor -o` | `arch` | push |
+| `arch-river` | Arch, rolling (20260901) | river 0.4.8 + **tinyrwm built from source** (commit `5c01698c`) | greetd (`command = "river -c /usr/local/bin/vmctl-river-init"`) | Wayland | `wlr-randr` 0.5.0 (river has no output query at all) | `arch` | push |
 | `arch-sway` | Arch, rolling (20260901) | sway 1:1.12 / wlroots, `xorg-xwayland`, `foot` | greetd | Wayland | `swaymsg -t get_outputs`, `wlr-randr` second | `arch` | push |
-| `nixos-gnome` | NixOS 26.05 | GNOME 50.4 | `display-manager` (GDM) | Wayland | `gdbus` on `org.gnome.Mutter.DisplayConfig` | `nixos` | on demand |
+| `nixos-gnome` | NixOS 26.05 | GNOME 50.4 | `display-manager` (GDM) | Wayland | `gdbus` on `org.gnome.Mutter.DisplayConfig` | `nixos` | push |
 | `nixos-sway` | NixOS 26.05 | sway 1.12 | greetd | Wayland | `swaymsg -t get_outputs` (and `wlr-randr`) | `nixos` | push |
 
 **Four of these images are the same compositor.** labwc is the Wayland session of Xfce 4.20,
