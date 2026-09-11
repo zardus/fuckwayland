@@ -19,6 +19,8 @@ In the box:
 - **wxrandr**, xrandr, with first-class multimonitor: reshape crazy layouts in one atomic call
 - **warandr**, arandr, the drag-your-monitors GUI, on Wayland (via wxrandr) and X11 (via xrandr)
 - **wmirror**, the one that clones nothing: mirror a *region*, or an odd-shaped output, on wlroots
+- **xw11**, the other direction entirely: an X11 display in front of the session's X server, so the
+  *original* xdotool, wmctrl, xprop, xrandr and every other X client answer about the whole desktop
 
 ## Motivation
 
@@ -53,14 +55,19 @@ sudo apt install ./release/w11_0.4.0_all.deb
 
 `sh scripts/build-deb.sh` rebuilds that same file in place from the source beside it.
 
-That is the six tools in `/usr/bin`, the GNOME Shell bridge extension where
+That is the six tools in `/usr/bin` — seven commands, counting
+[`xw11`](docs/XW11.md), the X11 proxy the four wrappers start for themselves — the
+GNOME Shell bridge extension where
 `gnome-shell` looks for it, the udev rule that opens `/dev/uinput` to whoever is at
 the seat, the `warandr` menu entry, and one thing that is put there and left switched
 off, the [overlap extension](#overlapping-monitors-on-gnome). **One**
 `Architecture: all` package for **both** releases, because every module here is pure
 standard library and your own `python3` byte compiles it at install time. The real `xdotool`, `wmctrl`, `xprop` and
 `xrandr` stay exactly as they were, so a script that calls both keeps working, and
-`sudo apt remove w11` takes every piece away again.
+`sudo apt remove w11` takes every piece away again. The package **Recommends** `xdotool`,
+`wmctrl`, `x11-utils` and `x11-xserver-utils`, which apt installs by default: with them
+present the tools you already know are what runs, on Wayland as on X11, through
+[`xw11`](docs/XW11.md) — and `W11_PROXY=never` asks for the clones instead.
 
 **On GNOME, log out and back in once.** That is the whole of the manual procedure.
 `gnome-shell` reads extension directories only when a session starts, so until you do
@@ -410,6 +417,14 @@ sudo ln -sfn ~/.venvs/w11/bin/wxprop  /usr/local/bin/xprop
 sudo ln -sfn ~/.venvs/w11/bin/wxrandr /usr/local/bin/xrandr
 ```
 
+**On a Wayland session those four symlinks now run the originals.** Since the X11
+proxy, a wrapped tool with the original installed execs the original against
+[`xw11`](docs/XW11.md)'s display instead of running our own code, so `xdotool search
+--class foot` is the real xdotool answering about a real Wayland toplevel. The clone
+still runs when the original is not installed, when `W11_PROXY=never` asks for it, and
+whenever the command uses one of our own options; the whole rule is
+[docs/XW11.md § The wrapper rules](docs/XW11.md#the-wrapper-rules).
+
 From pipx or a `--user` install the source is `~/.local/bin/wdotool` instead. From a
 single-file build, copy rather than link:
 `sudo install -m 755 dist/wdotool /usr/local/bin/xdotool`. A clone that finds itself
@@ -487,6 +502,7 @@ If something did not work, the first thing to try:
 | `cannot create uinput devices: [Errno 13] Permission denied` | `sudo wdotool …`, or install the [udev rule](#input-access). `sudo sh gnome/install-bridge.sh --udev --check` should end `uinput usable by <your user>: yes (logind ACL)` |
 | `warandr: GTK 3 for Python is not available` | `sudo apt install python3-gi gir1.2-gtk-3.0`, and the venv must have been made `--system-site-packages` |
 | `xdotool: … no real xdotool was found on PATH`, exit 127 | you are on X11: `sudo apt install xdotool wmctrl` |
+| the same line with `W11_PROXY=always` set | that variable says "the original's bytes or an error", and there is no original. Install it (`sudo apt install xdotool`), point `WDOTOOL_REAL_XDOTOOL` at one, or drop the variable and let the clone answer |
 | the tool does something you did not expect on X11 | it *is* the original there. `W11_PASSTHROUGH=never` runs our own code instead |
 | `gnome backend: the w11 bridge is unavailable while the screen is locked` | unlock the session. GNOME Shell shuts its extensions down behind the lock screen, so every window command stops until you unlock, and a **default** Ubuntu desktop locks itself after 5 minutes idle. `wxrandr`, `warandr` and `wdotool`'s input commands are unaffected: they do not go through the extension |
 
@@ -1011,6 +1027,42 @@ the support matrix is the route left there and what it costs.
 
 Contract: [docs/WMIRROR.md](docs/WMIRROR.md).
 
+### xw11
+
+The one that is not a clone of anything. `xw11` is an X11 display: it binds a display
+number, forwards every byte to the session's X server, and answers the requests that
+server has no answer for, because the windows they are about are native Wayland
+toplevels that were never X windows. Point the **real** xdotool at it and it works.
+
+```console
+$ DISPLAY=$(xw11 --print-display) xdotool search --class footw
+6291457
+$ DISPLAY=$(xw11 --print-display) xdotool getwindowname 6291457
+WXL-Foot
+```
+
+That is `/usr/bin/xdotool`, unmodified, from the distribution, listing a `foot` window
+that has no Xwayland window at all. The same display answers `wmctrl -l`, `xprop -id`,
+`xrandr --output HEADLESS-1 --mode 800x600`, `xprop -spy`, `xdotool type`, python-xlib
+and the rest of the thirty-year X11 tail. Measured on headless sway on 2026-09-11:
+`xdotool get_desktop`, `set_desktop`, `get_num_desktops` and `wmctrl -d` exited 1 on a
+Wayland session and exit 0 through it; `xrandr --mode`, `--off`, `--rotate`, `--scale`
+and `--right-of` were `BadMatch` and exit 1 and now really move the compositor's
+outputs; and three commands that used to block until a timeout print their line
+instead.
+
+You do not have to start it. With the originals installed and the four symlinks in
+place, a wrapped `xdotool` on a Wayland session execs the original against `xw11` and
+starts one if there is none — about 105 ms the first time, then nothing. It exits
+fifteen minutes after its last client leaves.
+
+What it does not do yet is a table rather than a policy: decoration extents, icons,
+size hints, reparenting, a physical mouse in Enter/Leave, `wmctrl -k`, `--panning`,
+free transform matrices. Each row names the route that would close it and what that
+route costs.
+
+Contract: [docs/XW11.md](docs/XW11.md).
+
 ## Desktop support
 
 What each tool does on each desktop, measured rather than assumed, on 21 golden VM
@@ -1392,7 +1444,7 @@ GNOME. Running this README against that install is also what found the last of
 it, an overlap route whose every message spoke only to somebody who had a clone
 rather than the package. Both desktops report their active layout there, `wayland + kwin` on one and
 `wayland + gnome input-sources` on the other, and stderr is silent on both. The suite
-stands at **5146 tests**.
+stands at **5172 tests**.
 <!-- release-notes: 0.3 -->
 ### 0.3
 
@@ -1440,7 +1492,7 @@ Developed against real desktops, not against a model of them. `vm/` is the rig:
 `vmctl` builds and runs 38 flavors over four distributions, each with up to four virtual monitors
 that can be plugged, resized and unplugged from outside the guest, and every head
 screenshotted. `vm/README.md` documents the whole thing and `vm/SETUP.md` is how to
-set the rig up on a machine of your own. `tests/` holds the suite, 5146 tests: unit
+set the rig up on a machine of your own. `tests/` holds the suite, 5172 tests: unit
 tests, wire-level fake compositors and X servers, live-compositor integration,
 hostile-input torture, byte-parity oracles against the real xdotool, wmctrl, xprop
 and xrandr, and one static check that no package ever reaches for PolicyKit or for
@@ -1462,6 +1514,7 @@ Ubuntu VM before it shipped. Vibe-check the code yourself, it can take it.
 | [docs/WXRANDR.md](docs/WXRANDR.md) | wxrandr's contract: the backends, overlaps, keeping a layout, the command surface |
 | [docs/WARANDR.md](docs/WARANDR.md) | warandr's contract: backend selection, the model, layout scripts, the GUI |
 | [docs/WMIRROR.md](docs/WMIRROR.md) | wmirror's contract: why it exists, the policy, lifetime, what it costs |
+| [docs/XW11.md](docs/XW11.md) | the X11 proxy: how it starts, the request policy, shadow windows, and the What differs table |
 | [docs/Technical.md](docs/Technical.md) | how the tree is put together, for whoever changes it next, plus the install routes and the threat model in full |
 | [docs/Blogpost.md](docs/Blogpost.md) | the long story: what X11 got right, a compositor per answer, and what the measurements found |
 | [CHANGELOG.md](CHANGELOG.md) | the long form release notes |

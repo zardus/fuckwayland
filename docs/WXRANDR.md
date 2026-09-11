@@ -5,6 +5,26 @@ reshape real multi-output layouts — relative positioning, mirroring, rotation,
 reflection, per-output scale, custom modes, monitors — the crazy configurations are
 the point, not an afterthought. House rules per Technical.md.
 
+## On Wayland, with xrandr installed, this runs xrandr
+
+Since the X11 proxy, `wxrandr` hands over on a **Wayland** session as well as on an X11 one:
+the original is exec'd with `DISPLAY` pointing at [`xw11`](XW11.md), which answers for
+native Wayland windows as well as for Xwayland's. The clone still runs when the original
+is not installed, when `W11_PROXY=never` (or `WXRANDR_PROXY=never`) asks for it, when
+`W11_PASSTHROUGH=never` is set, and whenever the command uses one of our own options --
+`--persistent`, `--backend`, `--backends`, `--print-backend` and the four
+`--*gnome-overlap*` flags.
+Everything this document says about the clone's output is still what the clone prints;
+through the proxy the output is the original's, byte for byte, because it **is** the
+original. The six rules in order are
+[XW11.md § The wrapper rules](XW11.md#the-wrapper-rules).
+
+`wxrandr` stays the front end for the things xrandr has never had: `--persistent`,
+`--backend`, `--backends`, `--print-backend` and the GNOME overlap consent flow. A
+command carrying any of those runs the clone on every session. Everything else on a
+Wayland session with `xrandr` installed is the original, through the proxy -- and an
+apply through the proxy is always a temporary, non-overlap apply.
+
 ## Planes / backends
 
 - **sway/i3-compatible (flagship)**: query from `GET_OUTPUTS` (+ `w11common.wayland_mini`

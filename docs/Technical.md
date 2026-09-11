@@ -16,7 +16,9 @@ extension and [vm/README.md](../vm/README.md) for the rig.
 ## 1. The six tools
 
 Six commands, seven Python packages, no third-party dependency anywhere except the
-system GTK 3 bindings that `warandr` imports at run time.
+system GTK 3 bindings that `warandr` imports at run time — plus `xw11`, which is the
+seventh command and the eighth package and is not a clone of anything
+([§ 13](#13-the-x11-proxy)).
 
 | package | command | clones | talks to |
 |---|---|---|---|
@@ -27,6 +29,7 @@ system GTK 3 bindings that `warandr` imports at run time.
 | `warandr/` | `warandr` | arandr | `wxrandr` or the real `xrandr`, as a child process |
 | `wmirror/` | `wmirror` | nothing — there is no X11 original | the external `wl-mirror`, whose lifetime it owns |
 | `w11common/` | — | — | shared by all six |
+| `xw11/` | `xw11` | nothing — it is an X **server** front end, not a client clone | the session's X server upstream, one window backend, one display backend and the input daemon downstream ([§ 13](#13-the-x11-proxy)) |
 
 `w11common/` holds what more than one tool needs and nothing else does, in eight
 modules: `session.py` (which session is this, and where are its sockets), `passthrough.py`
@@ -555,6 +558,7 @@ knowing before writing one.
 | **Wayfire** (`backend_wayfire.py`) | the view's own `id` from `window-rules/list-views`, unchanged | while the view lives | nothing is minted, and nothing collides with an Xwayland id — Wayfire's ids start at 1 and count up |
 | **COSMIC** (`backend_cosmic.py`) | `backend.mint_id(identifier)` over the 32-character `identifier` — `0x40000000 \| 30 bits of blake2b` | for the life of the window, across processes | no, and it is out of Xwayland's range on purpose |
 | **wlr** (`backend_wlr.py`) | `1000000 + enumeration order` | within one process only — closing the first-arrived window renames the survivor | no |
+| **a shadow, through `xw11`** (`xw11/shadow.py`) | `rid_base \| n` out of the 21-bit range the X server allocated to the proxy's own connection — `0x600001` for the first one on the rig | for the life of the proxy, which is the session or fifteen idle minutes, whichever ends first. An Xwayland restart re-bases every one of them | it **is** one, in the sense that matters: it is inside the range that X server promised the proxy, so it can never collide with a real Xwayland window and an upstream error for one is impossible. A toplevel the compositor reports a real X id for gets no shadow at all |
 
 KWin's minting is 32-bit clean because every X-shaped consumer truncates there
 (`wxprop -id` parses into an XID, the synthesized `_NET_CLIENT_LIST`, wmctrl's
@@ -2052,9 +2056,11 @@ way out and make the status 120 exactly as stdout's do.
 
 ## 8. The environment
 
-Eighteen rows below, and rather more names than rows, because some of them group.
+Twenty-five rows below, and rather more names than rows, because some of them group.
 All but seven are also written down in the README, in a tool contract or in
-`gnome/README.md`; the seven in **bold** are written down only here.
+`gnome/README.md`; the seven in **bold** are written down only here. Five of the rows and
+six of the names are the proxy's, and [XW11.md](XW11.md#variables-and-options) is where
+they are explained.
 
 | variable | read by | effect |
 |---|---|---|
@@ -2077,6 +2083,12 @@ All but seven are also written down in the README, in a tool contract or in
 | `WDOTOOL_GNOME_AUTOLOAD=1` | `backend_gnome` | opt in to one `org.gnome.Shell.Eval` that tries to load the installed extension. Eval is a privileged interface and this is off by default |
 | **`XPROPFORMATS`** | `wxprop.cli` | a format file, exactly as real xprop's `-fs` and `$XPROPFORMATS` do |
 | **`DEBUG`** | `wdotool` | set to anything: print the traceback instead of the one-line error. Every `main()` catches broadly, which is right for users and wrong for whoever is debugging |
+| `W11_PROXY` | the four wrapped `main()`s, through `xw11.wrap` | `auto` (the default), `never`, `always`: whether a **Wayland** session runs the ORIGINAL against the proxy. `never` is our own code; `always` is the original or exit 127. `WDOTOOL_PROXY`, `WWMCTL_PROXY`, `WXPROP_PROXY` and `WXRANDR_PROXY` do the same per tool, and each beats it. The spellings are `W11_PASSTHROUGH`'s, and `W11_PASSTHROUGH=never` already means "no proxy either" |
+| `XW11_DISPLAY` | `xw11` | the display number to take, `:N`. Taken or nothing: there is no scan, and a proxy given one takes no session lock, which is what lets a second one run beside the session's |
+| `XW11_LOG` | `xw11` | where the log goes; default `/tmp/xw11-<uid>.log`, opened `O_NOFOLLOW` and refused when it is not ours. The proxy's log is where a refused write's diagnostic goes, because the wire has no error for one |
+| `XW11_DEBUG=1` | `xw11`, and `xw11.wrap` | one line per request and per packet down; and, in the wrapper, the one line that says why the clone ran instead of the original |
+| `W11_PARITY_PROXY`, `W11_PARITY_PROXY_DISPLAY` | `scripts/parity-oracle.sh` | run the whole oracle through a pass-through proxy on `:98`, which is the framing's regression test |
+| `WDOTOOL_BACKEND`, `WXRANDR_BACKEND` | also `xw11` | the proxy keeps both across its spawn, because a user who forces a backend for `wxrandr` means it for `xrandr` through the proxy too |
 
 `WARANDR_TEST_*`, `FAKE_XRANDR_*`, `FAKE_REAL_*`, `W11_SHIM_SEAMS`, `WD_TEST_*` and
 `SLOW_QUERY` are test seams and are documented where they are used, in
@@ -2085,7 +2097,7 @@ themselves. They are not part of the interface.
 
 ## 9. Module → test file → fake
 
-5146 tests, run as `python3 -m unittest discover -s tests` or file by file. Two rules
+5172 tests, run as `python3 -m unittest discover -s tests` or file by file. Two rules
 hold across all of them and are enforced by tests of their own:
 
 * **every `tests/test_*.py` sets `W11_PASSTHROUGH=never`**, or the suite
@@ -2170,6 +2182,15 @@ real comparison.
 | `wxrandr/gnome_overlap.py` + `gnome/w11-overlap@w11/` against a compositor that is really running | `test_gnome_overlap_live` | a private headless sway (`support.HeadlessSway`) as the negative — the flag has to be a refusal off GNOME before any bus call — and, gated on `WXRANDR_LIVE_GNOME=1` *and* an `org.gnome.Shell` that owns its name, a real gnome-shell on the rig: status, the agreement against `readelf -n` of the mapped libmutter, the apply and its printed undo, the forced-`--dryrun` refusal, and whether the moved-monitors.xml branch can be reached at all |
 | `warandr/` | `test_warandr_model`, `test_warandr_parse`, `test_warandr_gui`, `test_overlap_consent` | `tests/fixtures/fake_xrandr.py`, a RandR simulator (which also simulates a GNOME with the overlap extension and its agreement); Xvfb plus xdotool driving the real editor, dialog included; the fake's `FAKE_XRANDR_OVERLAP_WITHDRAW_ON_APPLY` replays wxrandr withdrawing an agreement under the running window, with wxrandr's own `consent_drift()` sentence |
 | `wmirror/` | `test_wmirror_cli`, `test_wmirror_lifetime`, `test_wmirror_live` | a fake `wl-mirror` (`support.WL_MIRROR_STUB`), and the detach protocol driven for real; then a real headless sway (`swaymsg create_output` for the second head) with the same stub, where the supervisor's watch reads real zwlr_output_management events for the only time in the suite |
+| `xw11/wire.py`, `xw11/client.py` | `test_xw11_wire`, `test_xw11_client`, `test_xw11_read`, `test_xw11_write` | the layouts rendered out of `/usr/share/xcb/*.xml` and pinned as fixtures, so a locally built packet is compared byte for byte and never field by field; `support.ProxyRig`'s `raw()`, a bare socket with the setup done, for pipelined bytes |
+| `xw11/display.py`, `xw11/upstream.py` | `test_xw11_display`, `test_xw11_upstream` | `support.FakeUpstream`, a real AF_UNIX X server with a programmable `QueryExtension` table, per-connection resource-id bases stepping by `0x200000`, `hold_reply`/`release` to reorder deliberately and `close_when_idle` for Xwayland's `-terminate` shape; a real `/tmp/.X11-unix` for the socket-and-corpse rules, because a spawned child cannot be monkeypatched |
+| `xw11/server.py`, `xw11/policy.py`, `xw11/req_read.py`, `xw11/req_write.py` | `test_xw11_server`, `test_xw11_subst`, `test_xw11_read`, `test_xw11_write` | `support.ProxyRig` — the real `Server` on a thread in a temporary socket directory — against `FakeUpstream` and `support.FakeBackend`, whose `wedge(seconds)` is how the 10 s stall bound is measured without a compositor that hangs |
+| `xw11/shadow.py`, `xw11/ewmh.py` | `test_xw11_shadow`, `test_xw11_ewmh` | `FakeBackend` records every write as `(op, args)` and mutates its own list, so a routed `ClientMessage` is asserted as the backend call it became rather than as the bytes that went nowhere |
+| `xw11/events.py`, `xw11/pump.py` | `test_xw11_events`, `test_xw11_pump` | `support.FakeBackend` for the packets themselves, and `support.FakeBackendEvents`, which feeds `events()` from a queue, for the pump; `has_events=False` there drives the 250 ms poll path the wlr floor and COSMIC take |
+| `xw11/xtest.py` | `test_xw11_xtest` | `support.FakeDaemon`: the input daemon's line protocol on a temporary socket, every operation recorded, the pointer answering as configured, warnings settable, and a mode that refuses the connection outright |
+| `xw11/randr.py` | `test_xw11_randr` | `support.RandrTables` replaying a captured `GetScreenResources`/`GetOutputInfo`/`GetCrtcInfo` set, and `support.FakeRandrBackend` recording what one apply was handed |
+| `xw11/cli.py`, `xw11/wrap.py` | `test_xw11_wrap` | real forks and real `execve`s into `tests/fixtures/w11_shim.py` under an original's name, and `/proc/<pid>/cmdline` read back — which is the only way to say what argv a daemonised child was re-exec'd with |
+| the whole proxy against a real X server | `test_xw11_live`, `test_xw11_replay`, `test_xw11_parity` | nothing is faked: `support.HeadlessSway` with Xwayland, one `xterm` and one `foot`, the pinned `xdotool 4.20260303.1` and `wmctrl 1.07` on PATH. `test_xw11_replay` puts eleven captured command streams through it byte for byte; `test_xw11_parity` runs `scripts/parity-oracle.sh` twice, direct and with `W11_PARITY_PROXY=1`, and diffs the two with the timing lines normalised |
 | `procs.py`, `stdio.py` | `test_wmirror_lifetime`, `test_stdout_gone` | real forks; `>/dev/full`, `\| head -1`, `>&-` |
 | the no-dialog guarantee | `test_no_portal` | nothing — it is a static check that no package here names PolicyKit or any portal interface but `Settings`, the one read with no consent step |
 | what actually ships | `test_release_deb` | nothing — it unpacks the .deb committed in `release/` (with `unpack_deb()`, an `ar` + `compression.zstd` reader in the standard library, proved byte-identical to `dpkg-deb -x` wherever dpkg is installed) and compares its payload with the tree: every module, every non-Python file, both maintainer scripts, the typelib per generation in `generations.json`, the autostart symlink, and one version across `w11common`, pyproject, `debian/changelog`, `flake.nix` and the file name. It caught the v0.3 build still committed while 0.4 was being finished |
@@ -2250,6 +2271,20 @@ is not.
 of having no answer both exit 2 and name what is missing — an unknown desktop token, and a
 desktop tool that is not installed on the guest — because an empty answer would otherwise
 read as "no enabled output" and pass every display check by default.
+
+The smoke gained a **`proxy` phase** with the X11 proxy, appended after `wm` in every
+Wayland step file's `SMOKE_PHASES` and in no X11 one. It is the only place in the tree
+where the ORIGINAL `xdotool`, `wmctrl`, `xprop` and `xrandr` are driven through `xw11`
+against a real compositor: every golden installs the four as test-support packages, so
+the phase points them at the proxy's display and compares their answers with the ones the
+clones gave in `windows` and `wm`, ids tokenised. The X11 flavors' `passthrough` phase
+carries the mirror claim, read off the pid file rather than a process pattern: no
+`$XDG_RUNTIME_DIR/xw11/display` exists after the four tools have run, because on an X11
+session the handover happens one line above the wrapper's call. First run on
+**resolute-sway (sway 1.11, Xwayland 24.1.10) on 2026-09-11: 27 pass, 0 fail**, recorded
+as `tests/fixtures/live/resolute-sway-1.11-windows-wm-proxy-replay.txt`;
+`tests/fixtures/live/NOT-YET-RUN` carries a `proxy:<flavor>` line for each of the other
+28 Wayland flavors until their own run.
 
 That script has a regression of its own that needs no VM. `vm/live-smoke.d/selftest-offline.sh`
 runs the `windows` and `wm` phases against `vm/live-smoke.d/fake-vmctl`, which replays
@@ -2661,3 +2696,105 @@ before they are believed, the daemon refuses to talk to a socket somebody else i
 listening on, a state file that is not ours is ignored rather than obeyed, the
 real-tool search never looks in the current directory, and a root run with no session
 never hands a planted X server another user's cookie.
+
+## 13. The X11 proxy
+
+`xw11/` is the one package here that is not a clone. It is an X11 **display**: it binds a
+display number, forwards every byte to the session's X server, and answers the requests
+that server has no answer for, because the windows they are about are native Wayland
+toplevels that were never X windows. The user-facing contract, every variable and the
+**What differs** table AGENTS.md asks for are [XW11.md](XW11.md); this section is the
+shape of the thing, for whoever changes it.
+
+**One process per session, one loop.** A single `selectors` loop owns every socket: the
+two listening sockets of its own display number (abstract name and filesystem path, the
+abstract one first, because libxcb tries that first and a proxy that owns only the path is
+silently bypassed), one upstream socket per client, one connection of the proxy's own, and
+one pipe the event pump writes a byte on. Reads are `recvmsg` with a 64-byte ancillary
+buffer, because a plain `recv()` takes the payload and drops any `SCM_RIGHTS` descriptor
+silently. Buffers are watermarked at 4 MiB and 1 MiB: a client that stops reading stops
+being read *from*, and nothing is dropped. An EOF on either side reaches the other side
+**after** the bytes that came before it — the read half is shut down, the write half keeps
+flushing, and the pair closes when both buffers are empty.
+
+**The proxy's own connection** is opened at the first client accept and never at startup.
+Its five steps cost **65 requests in two round trips, measured at 0.9-1.3 ms** against a
+live X server on this box: it selects `PropertyChange | SubstructureNotify` on the root,
+asks `QueryExtension` for eight extensions, interns 54 atom names, reads
+`GetKeyboardMapping(8, 248)` whole and reads the root's `_NET_SUPPORTED`. The first open of
+a *process*, with the imports in it, is 13.3 ms. That connection is what the shadow ids are
+minted out of, and it is held while any client is connected and for `_IDLE_SECONDS = 900.0`
+after the last one leaves, checked every `_CHECK_SECONDS = 15.0`.
+
+No extension major number is written down anywhere in `xw11`. They are per server — RANDR
+is 139 on Xwayland and 140 on Xvfb 21.1.22 — and the same proxy against a fake that answers
+152 for XTEST resolves 152. Atoms are interned once on that connection and never per
+client: they are server-global (the same name came back `0x187` on three independent
+connections), so `InternAtom` and `GetAtomName` are forwarded untouched and the ids in a
+synthesized property are the ids the client resolves.
+
+**Five classes.** Every request is PASS (forwarded, reply untouched), EDIT (forwarded,
+reply rewritten on the way back), CONSUME (nothing for the client), ANSWER (the proxy
+synthesizes the reply) or BATCH (a RandR write inside a grab, applied when the grab
+closes). The whole table is [XW11.md § The request policy](XW11.md#the-request-policy).
+
+**The sequence axiom**, which is why CONSUME and ANSWER send something upstream rather than
+nothing. X sequence numbers are the client's own request count, and the client is counting;
+so a request the proxy handles itself still has to consume exactly one sequence upstream.
+CONSUME sends `NoOperation` (opcode 127) and ANSWER sends `GetInputFocus` (opcode 43). The
+second is not only a counter: libxcb sets `request_completed = request_read - 1` on *any*
+packet it reads, so a locally written reply for request N+1 that goes out before the
+forwarded reply for N arrives makes the client read `NULL` for N. The `GetInputFocus`
+reply comes back **in stream order** carrying the substituted request's sequence, and the
+proxy writes the stored packet in its place — exact ordering with no opcode-has-reply
+table, no timer and 32 bytes of state. It costs one round trip, about **70 µs** on this box,
+per locally answered reply-bearing request: under 2 ms for a whole `xdotool search`.
+
+The same axiom runs backwards for events. An event stamped above a reply that has not gone
+out marks that request completed with no reply, and the reply arriving afterwards with a
+lower 16-bit sequence is widened by 65536 and the connection tears down. So an event
+carries not the client's request count but the count held back behind anything it is still
+owed. One half is open and is a known risk rather than a behaviour: a reply the proxy
+*forwarded* is invisible to that watermark, because knowing one is in flight needs the
+opcode-has-reply table the proxy does not keep. Nothing measured has hit it; the route if
+something does is that table, built from `/usr/share/xcb/*.xml`, which this tree already
+parses in its tests.
+
+**What it costs to forward.** A Python byte forwarder moved 549 MB/s on this box, a
+round trip through one is about 70 µs, and a 1 MB reply streams with a peak buffer under
+128 KiB. The whole parity oracle runs through a pass-through proxy and differs from a
+direct run only in the `Ran N tests in` lines — `W11_PARITY_PROXY=1 sh
+scripts/parity-oracle.sh` is that check, and `tests/test_xw11_parity.py` runs both and
+diffs them with the timing normalised.
+
+**Where the window answers come from.** The registry re-reads the compositor when its last
+read is older than **20 ms** or the event pump has invalidated it; `list()` is 0.08 ms on
+sway and `get_desktop()` 0.02 ms. Backend calls are made on the loop thread under one lock,
+so a compositor that hangs delays every other client by at most that backend's own timeout,
+10 s, and loses no byte. A write the proxy consumes arms a re-read at **+50 ms** and
+**+250 ms**, because sway sends no event at all for a floating `move position`: measured on
+headless sway 1.11, the new rect was in `get_tree` on the first 5 ms poll of all ten runs,
+0.9 to 3.6 ms after the IPC call returned, so the first poll is fourteen times the measured
+worst case and the second is the backstop for a compositor an order of magnitude slower.
+One RandR apply through the sway backend takes 1 to 44 ms over eleven invocations; Mutter's
+`ApplyMonitorsConfig` waits up to 5 s for `MonitorsChanged`, which is why the apply runs on
+a worker thread and only the applying client's reads are paused.
+
+**The wrapper.** `xw11/wrap.py` is the second hook every wrapped `main()` calls, right after
+`passthrough.maybe_exec_real()`: on a Wayland session with the original installed, the
+process is replaced by the original with `DISPLAY` pointing at the proxy. Six rules decide
+it and the first five cost no process at all; they are listed in
+[XW11.md § The wrapper rules](XW11.md#the-wrapper-rules). The import is *inside* `main()`
+and guarded with `try/except ImportError`, for two load-bearing reasons: on an X11 session
+`maybe_exec_real` has already replaced the process one line above, so the import never
+happens there; and the four zipapps carry no `xw11/` at all, so the guard is what keeps
+`dist/wdotool` working. `tests/test_passthrough.py` holds an AST scan that keeps it that
+way.
+
+The spawn is `wdotool/daemon.py`'s, not re-invented: fork, setsid, fork, stdio to the log,
+every inherited descriptor closed, out of the launcher's transient scope, cwd `/`, re-exec
+as `xw11 __serve`. The wrapper then polls the display file for two seconds at 50 ms;
+measured on 2026-09-11, six runs, **53, 105, 104, 105, 109 and 203 ms** from the fork to a
+display file a client can dial. Ten wrappers starting at once leave exactly one `__serve`,
+because the session lock is an abstract socket bind and a starter killed between the bind
+and the display file leaves nothing to recognise.
