@@ -220,10 +220,10 @@ removed before the original runs. `--persistent` is dropped with a line saying s
 and `--unsafe-gnome-overlap` is refused.
 
 Because the handover keeps the interface, the same script runs on either session
-type. When invoked through
-`sudo`, `ssh root@box` or cron, w11 locates the session's `DISPLAY` and `XAUTHORITY`
-before starting the original tool. This makes `sudo xdotool key a` work in cases
-where `sudo /usr/bin/xdotool key a` reports `Can't open display`.
+type. When invoked through `sudo`, `ssh root@box` or cron, w11 locates the session's
+`DISPLAY` and `XAUTHORITY` before starting the original tool. This makes
+`sudo xdotool key a` work in cases where `sudo /usr/bin/xdotool key a` reports
+`Can't open display`.
 
 ```console
 $ W11_PASSTHROUGH=never xdotool key a   # our own code, whatever the session
