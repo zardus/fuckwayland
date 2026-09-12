@@ -5,8 +5,8 @@ installs the five these scripts use on a `vmctl` guest (`wmirror` has no reprodu
 here), then
 `vmctl user <vm> -- sh /tmp/<script>.sh` runs one as the desktop user
 (`vmctl ssh <vm> -- sh ...` runs it as root). The two `kde-outreg-*` scripts
-are the exception: they need no guest at all. What they exercise — how Plasma
-6.7 publishes outputs — does have an image now (`stonking-kde`), but that one
+are the exception: they need no guest at all. What they exercise, how Plasma
+6.7 publishes outputs, does have an image now (`stonking-kde`), but that one
 is a moving development release, and these two keep the same path checkable on
 a machine with no Plasma 6.7 on it.
 
@@ -19,13 +19,13 @@ a machine with no Plasma 6.7 on it.
 | `kde-tools-3-argv0-oracle.sh` | what the real wmctrl/xprop print as their program name | any |
 | `kde-xid-twins.py` | one X11 client, N windows sharing a pid, a class, a title and a rectangle: the tie the Plasma 6 xid matcher used to settle by coin flip. `WM_WINDOW_ROLE` carries the truth (KWin exposes it, the matcher ignores it), so `wwmctl -l` can be graded against it | `resolute-kde` |
 | `kdex11-1-sddm-x-cookie.sh` | Plasma on X11: SDDM keeps the X cookie in `/tmp/xauth_*`, so from a root shell the handover found no cookie at all (run as **root**) | `noble-kde-x11` |
-| `kde5-verify.sh` | SHADED on a native window, the X-plane state fallback, WM_CLASS case, `-l -G` | `noble-kde` |
+| `kde5-verify.sh` | SHADED on a native window, the X11 state fallback, WM_CLASS case, `-l -G` | `noble-kde` |
 | `kde6-before.sh`, `kde6-verify-a.sh`, `kde6-verify-b.sh` | the Plasma 6.6 sweep | `resolute-kde` |
 | `kde-keys-1-group-guess.sh` | typing and chords into a real Kate window under a German layout: right on one configured layout, wrong on `us, de` switched to German, where group 1 was assumed. The picture of the defect `kde-keys-3` closed, kept because the one-layout case has to keep working either way | `resolute-kde`, `noble-kde` |
 | `kde-keys-3-live-layout.sh` | the same `us, de` session, once with each build: `type 'yz@'` arrives as `zy""` while group 1 is assumed and as `yz@` once KWin is asked for the live layout, with the group switched back and forth under one running daemon | `resolute-kde`, `noble-kde` |
 | `gnome-keys-1-group-guess.sh` | GNOME's half of the same question, in a real `gnome-text-editor` window: one German source (where the notice used to fire on every command), `us, de` switched to German with the panel menu, and five sources with the fifth picked, which is where Mutter chunks the keymap. Each case is typed once with the build that assumed the group and once with the one that reads it | `resolute-gnome-iso`, `noble-gnome-iso` |
 | `kde-keys-2-nonlatin-chord.sh` | the same on Greek: `type` warns and skips the Latin it cannot reach, and `key ctrl+s` did the opposite -- it silently pressed the US position, which is sigma there. The defect this found; it now warns the same way, and this is what shows it | `resolute-kde`, `noble-kde` |
-| `kde-outreg-conformance.py` | every wire constant in `wxrandr/kwin.py` against the upstream protocol XML — run it when a new Plasma lands | none (host, needs network) |
+| `kde-outreg-conformance.py` | every wire constant in `wxrandr/kwin.py` against the upstream protocol XML, run it when a new Plasma lands | none (host, needs network) |
 | `kde-outreg-specfake.py` | a Plasma 6.7 compositor generated from that XML: the registry discovery path end to end, and its three failure modes | none (host) |
 | `matrix-1-warandr-empty-env.sh` | `env -i warandr --command` | any |
 | `sway-1-layout-flag-fr.sh` | `--layout us` ignored by the daemon (needs a French keymap to show) | `resolute-sway` |
@@ -69,7 +69,7 @@ tools:
 | `daemon` | the input daemon's model of what it injected (`DaemonClient.pointer()`), read first because `getmouselocation` reseeds it |
 | `query` | `wdotool getmouselocation` |
 | `comp` | the compositor itself: Mutter's `global.get_pointer()` through the bridge, KWin's `workspace.cursorPos` |
-| `hw` | the **KMS cursor plane**, `/sys/kernel/debug/dri/*/state`, device pixels on the scanout (vm/README.md's oracle; the path is not always `dri/0`). Where the compositor draws its own cursor instead of using that plane — KWin at 200%, whose sprite does not fit the 64x64 virtio-gpu one — a QMP screendump differenced against a parked one |
+| `hw` | the **KMS cursor plane**, `/sys/kernel/debug/dri/*/state`, device pixels on the scanout (vm/README.md's oracle; the path is not always `dri/0`). Where the compositor draws its own cursor instead of using that plane, KWin at 200%, whose sprite does not fit the 64x64 virtio-gpu one, a QMP screendump differenced against a parked one |
 
 The KMS oracle is blind in two places, and both are the oracle's doing rather
 than a coordinate's: the plane goes dark within one hotspot of a head's
@@ -81,10 +81,10 @@ head.
 |---|---|
 | `scale-probe.py` | guest side, run as **root** against a repo tree at `$W11` (default `/root/w11`): takes the four readings for a list of targets and prints JSON. A target is `[x, y]`, or `{"frac": [fx, fy]}` of the layout box, or `{"mon": i, "off": [dx, dy]}` from one monitor's own origin |
 | `scale-runmatrix.py` | host side: `scale-runmatrix.py <vm> <outdir> <configs.json>` applies each layout (heads, scales) and runs the probe in the guest |
-| `scale-spaces.py` | scores every reading against BOTH candidate maps — `dev = (asked - origin) * scale` and `dev = asked - origin` — and reports the one whose residual is *constant*. It determines the pixel space rather than assuming one: the constant is the cursor hotspot, the spread is the error |
+| `scale-spaces.py` | scores every reading against BOTH candidate maps, `dev = (asked - origin) * scale` and `dev = asked - origin`, and reports the one whose residual is *constant*. It determines the pixel space rather than assuming one: the constant is the cursor hotspot, the spread is the error |
 | `scale-summary.py` | one line per config: the worst error each reading showed |
 | `scale-shotcursor.py` | the screendump oracle, for a compositor that composites its own cursor |
-| `scale-wldump.py` | `wl_output` and `zxdg_output_v1` side by side — the two numbers `_wayland_bbox()` chooses between |
+| `scale-wldump.py` | `wl_output` and `zxdg_output_v1` side by side, the two numbers `_wayland_bbox()` chooses between |
 | `scale-1-gnome46-xdg-output-stale.sh` | **the Mutter defect.** Walks GNOME 46 through turning "Fractional Scaling" on while the monitor is already at 200%, printing the layout box, Mutter's two reports of the same thing and where the cursor really went, at each step. The advertised layout goes stale, the cursor still lands where it was asked for (Mutter maps absolute motion across the stale rectangle too), and `getdisplaygeometry` is the thing that is then wrong |
 
 Everything agreed to 0 px on 26.04 and on Plasma 6.6, at every scale and on

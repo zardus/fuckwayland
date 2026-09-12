@@ -34,7 +34,7 @@ positioning. Somebody else asks
 [what UI automation looks like on KWin](https://discuss.kde.org/t/questions-about-ui-automation-on-kwin-wayland/1778)
 and gets a patient and entirely accurate reply: propose a protocol, get it reviewed,
 implement it in the compositors, wire it through the portal. That is the right process
-and it takes years. Meanwhile there is a footswitch on the floor that does not work.
+and it takes years. Meanwhile there is a footswitch on the generic backend that does not work.
 
 So I checked whether the survey's conclusion was actually true, and it turns out to be
 true about *protocols* and false about *reach*. The reach did not go away. Every

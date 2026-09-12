@@ -145,29 +145,32 @@ API has no numeric id at all. **Plasma on X11** is none of that: it is a plain
 
 #### sway, Hyprland, Wayfire and the wlroots family
 
-Stock sway (1.11 on Ubuntu 26.04) works with **nothing to install** for the four
-command-line tools: they speak sway's own IPC, and `wxrandr --print-backend` answers
-`sway`. **Hyprland** (0.53.3 on 26.04, 0.56.2 on Arch) is the same deal on its own IPC
-socket, with a first-class backend on both sides — `wxrandr --print-backend` answers
-`hypr`. **Wayfire** (0.10) needs one line of its own config and nothing installed:
-`plugins = ... ipc ipc-rules` in `~/.config/wayfire.ini`, because that list *replaces*
-the default rather than adding to it and every IPC method comes from a loaded plugin;
-without it Wayfire uses the generic protocol backend and `wdotool` says so by name. **labwc**
-(0.9.3, which is also the Wayland session of Xfce 4.20, Ubuntu Budgie 10.10 and LXQt
-2.3), **river** and **COSMIC** need nothing installed either and get the operations available through their protocols; see the
-[desktop support table and limitations](#desktop-support).
-This is also the family where **input needs no privilege at all**, see
-[Input access](#input-access) — COSMIC's pointer half excepted; see [COSMIC setup](#cosmic). The GUI is the exception, and the one place a sway
-install differs from a GNOME, KDE or Xfce one: a minimal sway install has
-`python3-gi` but **not** the GTK 3 typelib, so `warandr` exits 1 naming the package,
-and `sudo apt install python3-gi gir1.2-gtk-3.0` is the whole fix. Such an image has
-no `acl` package either, which changes one line of `install-bridge.sh --udev --check`
-and nothing else.
+The command-line tools use the native IPC interfaces on **sway** (1.11 on Ubuntu
+26.04) and **Hyprland** (0.53.3 on Ubuntu 26.04, 0.56.2 on Arch), with no additional
+service or extension to install. `wxrandr --print-backend` reports `sway` or `hypr`,
+respectively.
+
+**Wayfire** (0.10) requires `ipc` and `ipc-rules` in the `[core] plugins` list in
+`~/.config/wayfire.ini`. Preserve your existing plugins when adding them because
+this setting replaces the default list. Without these plugins, wdotool uses the
+generic protocol backend and reports its limitations.
+
+**labwc** (0.9.3, also used by the Wayland sessions of Xfce 4.20, Ubuntu Budgie 10.10
+and LXQt 2.3), **river** and **COSMIC** require no additional window-management
+service. Available operations depend on their protocols, as described in the
+[desktop support table](#desktop-support). Keyboard and pointer injection normally
+use unprivileged protocols in this group; [COSMIC's pointer input](#cosmic) is the
+exception.
+
+A minimal sway installation may have `python3-gi` without the GTK 3 typelib required
+by `warandr`. On Ubuntu, install both with
+`sudo apt install python3-gi gir1.2-gtk-3.0`. If `acl` is also absent, the input-rule
+check reports that it cannot inspect the ACL; this does not change the rule itself.
 
 #### COSMIC
 
-**Nothing to install**: no extension, no session-bus service, and detection needs no help
-— the socket scan finds the session with nothing set. The udev rule is wanted for the
+COSMIC needs no extension or session-bus service, and socket discovery identifies
+the session even when its environment variables are missing. The udev rule is needed for the
 **pointer** only: cosmic-comp publishes `zwp_virtual_keyboard_manager_v1` and no virtual
 pointer, so `wdotool type` needs no privilege at all and `wdotool mousemove` needs the rule
 or root. For capture, `wmirror` uses `ext_image_copy_capture_manager_v1` there
@@ -187,9 +190,9 @@ window-management interface needs no extension of any kind; displays go over
 own bus name, likewise with nothing to install. That is the KDE security note, only
 stronger: the method is there whether or not this project exists, and what `wdotool`
 sends is one constant program per operation with only integers ever interpolated into
-it. Input on Cinnamon 6.4 is `/dev/uinput` only — muffin advertises no virtual-keyboard
-and no virtual-pointer protocol — so it wants the udev rule or root, like GNOME and
-KDE. **Cinnamon on X11** is a plain [X11](#x11-sessions) session and is handled as one.
+it. Cinnamon 6.4 requires `/dev/uinput` for input injection because Muffin advertises
+neither a virtual-keyboard nor a virtual-pointer protocol. Install the udev rule
+or run the input command as root, as on GNOME and KDE. **Cinnamon on X11** is a plain [X11](#x11-sessions) session and is handled as one.
 
 #### X11 sessions
 
@@ -197,18 +200,20 @@ KDE. **Cinnamon on X11** is a plain [X11](#x11-sessions) session and is handled 
 `sudo apt install xdotool wmctrl`. (`xprop` and `xrandr` come with every X11 desktop,
 in `x11-utils` and `x11-xserver-utils`.) Nothing else: no extension, no udev rule, no
 `/dev/uinput`. Without them you get exit **127** and a line naming the package to
-install — and the package manager it names is your own box's, read from
+install, and the package manager it names is your own box's, read from
 `/etc/os-release`: `apt install x11-utils` on Debian and Ubuntu, `dnf install xprop` on
 Fedora, `pacman -S xorg-xprop` on Arch, `nix-env -iA nixpkgs.xorg.xprop` on NixOS. A
 distribution it cannot identify gets Debian's, which is what every box printed before.
 
-The tools are meant to be installed **over** the originals, so on a plain X11 session
-(Xfce, i3, MATE, Cinnamon, LXQt/Openbox, GNOME/KDE on Xorg) they detect the session and hand over to the
-real `xdotool`, `wmctrl`, `xprop` or `xrandr` with `execve`, argv untouched but for
-wxrandr's own options — `--backend`, `--persistent` and `--unsafe-gnome-overlap`, which
-the original has never had — and the same exit status, signals and stdio, no extra
-process. `--persistent` is dropped with a line saying so; `--unsafe-gnome-overlap`
-is refused.
+When installed **over** the originals, the four CLI clones detect an X11 session
+and execute the real `xdotool`, `wmctrl`, `xprop` or `xrandr`. This applies to Xfce,
+i3, MATE, Cinnamon, LXQt/Openbox and GNOME or KDE on Xorg. Arguments, exit status,
+signals and standard streams are preserved, and no wrapper process remains.
+
+The exceptions are wxrandr's additional options, which the original does not
+recognize. `--backend` controls the handover and is removed before executing
+xrandr; `--persistent` is removed with a diagnostic, and
+`--unsafe-gnome-overlap` is rejected on X11.
 
 One script then runs on both session types. Run under `sudo`, over `ssh root@box` or
 from cron and we find the session's `DISPLAY` and `XAUTHORITY` and hand those over
@@ -232,7 +237,7 @@ Injecting input goes through the kernel's `/dev/uinput`, which is `root:root 060
 a stock Ubuntu, so `wdotool`'s **input** commands (`key`, `type`, `click`,
 `mousemove`, `mousedown` and `mouseup`, `behave`, and any chain containing one) need
 either root or the udev rule this repo ships. On **sway and the wlroots family** they
-need neither, because the compositor offers both halves as unprivileged Wayland
+need neither, because the compositor offers both input paths as unprivileged Wayland
 protocols and wdotool uses them exactly where the kernel device is closed. Everything
 else needs nothing at all: the window commands, all of `wwmctl`, `wxprop`, `wxrandr`
 and `warandr` reach the compositor over your own session bus and run as you.
@@ -334,7 +339,7 @@ not by what is possible.
   [docs/Technical.md § The single-file builds](docs/Technical.md#the-single-file-builds)
   has the table of what is in each.
 * **A Fedora package**: `sh scripts/build-rpm.sh` produces three noarch rpms into
-  `dist/` — `w11`, `gnome-shell-extension-w11-bridge`
+  `dist/`, `w11`, `gnome-shell-extension-w11-bridge`
   (`Supplements: (w11 and gnome-shell)`, so dnf installs it wherever both
   halves are present and on no sway or KDE box) and
   `gnome-shell-extension-w11-overlap` (no `Supplements` at all: nothing
@@ -347,8 +352,8 @@ not by what is possible.
 * **An Arch package**: `sh scripts/build-pkgbuild.sh` produces one `.pkg.tar.zst` into
   `dist/`. It is a CI artefact and is never committed, because Arch's site-packages is
   version-pinned. `arch=('any')` holds only because `build()` regenerates the overlap
-  extension's three type descriptions with gobject-introspection — the checked-in ones
-  are LP64 blobs — measured working on Arch's g-ir-compiler 1.86.0. Arch's `extra`
+  extension's three type descriptions with gobject-introspection, the checked-in ones
+  are LP64 blobs, measured working on Arch's g-ir-compiler 1.86.0. Arch's `extra`
   carries xdotool 4.20260303.1, wmctrl 1.07, xorg-xprop 1.2.8 and xorg-xrandr 1.5.4,
   the exact four versions these tools clone, so there the handover lands on the parity
   target. `packaging/arch/README.Arch` has the rest.
@@ -361,7 +366,7 @@ not by what is possible.
   puts the six tools on the system path, ships the project's own uaccess rule for
   `/dev/uinput` (never `hardware.uinput.enable`, and the module asserts against it),
   and on a GNOME machine installs the bridge extension and turns it on for every user
-  through a system dconf profile — enabled at the **first** login, with no logout
+  through a system dconf profile, enabled at the **first** login, with no logout
   step. `homeManagerModules.default` does the per-user half and warns, in the module
   itself, that home-manager cannot grant `/dev/uinput` at all. The packages are
   `w11` (five of the six tools, stdlib, 216.0 MiB of closure), `warandr` (the
@@ -369,15 +374,15 @@ not by what is possible.
   `gnome-bridge`, `gnome-overlap`, `udev-rules` and `x11-shadows`;
   `programs.w11.shadowOriginals = true` puts that last one over the real
   xdotool/wmctrl/xprop/xrandr/arandr with `lib.hiPrio`, which on NixOS is the only way
-  to say "installed over the originals" — without it the system path resolves the
+  to say "installed over the originals", without it the system path resolves the
   collision in the **originals'** favour, silently (measured:
   `/run/current-system/sw/bin/xdotool` was xdotool-3.20211022.1 on a Wayland session).
   The two installable packages have deliberately disjoint file sets, because `buildEnv`
   resolves a collision silently in `environment.systemPackages` and fatally in
   home-manager's `home.path`.
 
-None of the rpm, the Arch package or the flake is published anywhere yet — no COPR, no
-AUR, no nixpkgs, no NUR — and that is now a decision rather than a licence problem: the
+None of the rpm, the Arch package or the flake is published anywhere yet, no COPR, no
+AUR, no nixpkgs, no NUR, and that is now a decision rather than a licence problem: the
 tree is BSD-2-Clause, the spec says `License: BSD-2-Clause`, the PKGBUILD says
 `license=('BSD-2-Clause')` and installs the text under
 `/usr/share/licenses/w11/`, `meta.license` is `lib.licenses.bsd2`, and both
@@ -596,7 +601,7 @@ raise.
 On GNOME (with the [bridge extension](#gnome)) the same list mixes XWayland windows
 under their real X ids with native windows under Mutter's ids, `-d` prints GNOME's
 workspace names and work areas, and every action goes through Mutter, including
-`-b add,maximized_vert` as a real per-axis maximize. The X plane is reached with
+`-b add,maximized_vert` as a real per-axis maximize. The X11 connection is reached with
 Mutter's own Xwayland cookie, so it works from a custom shortcut, under `sudo` and
 from `ssh root@` alike.
 
@@ -739,7 +744,7 @@ plain widgets, so the GTK 3 bindings are the whole dependency, not even cairo.
 #### What your desktop will not let warandr do
 
 warandr sends what you drew. Where a layout is refused, the compositor refused it,
-and the window says so in that compositor's own words rather than ours. The rules
+and the window says so using the error returned by the compositor. The rules
 differ, and **GNOME is much the strictest**, which matters because it is what a stock
 Ubuntu desktop runs.
 
@@ -886,7 +891,7 @@ mirroring, and two mirrors pointing at each other. A running mirror ends itself 
 the layout moves out from under it.
 
 **What it costs**, and it says so up front: a resident process and a frame of latency
-(median about 63 ms measured, at the rig's floor). A mirror asks for a frame every
+(median about 63 ms measured, at the measurement resolution of the VM setup). A mirror asks for a frame every
 frame, so an otherwise idle desktop never idles again while it lives, which was 88%
 of a software-rendered core in the test VM. `wl-mirror` is invisible to output
 management, so `--query` cannot show it, but `wmirror --list` verifies every pid it
@@ -907,7 +912,7 @@ What each tool does on each desktop, measured rather than assumed, on 21 prepare
 images: GNOME 46 and 50, Plasma 5.27 and 6.6 on Wayland and the same two again on
 **Xorg**, Xfce 4.18 and 4.20, sway 1.11 on wlroots, Hyprland 0.53.3, Wayfire 0.10,
 labwc 0.9.3 under four desktops, Cinnamon 6.4 on both of its session types, MATE 1.26,
-i3 4.25.1, LXQt 2.3 on Openbox and GNOME 46 on Xorg — twice per image, once **inside
+i3 4.25.1, LXQt 2.3 on Openbox and GNOME 46 on Xorg, twice per image, once **inside
 the session** and once as **root over ssh with an empty environment**, against real
 windows on a two- or three-head layout. Four more images stand behind the table without
 being counted in it: a default Ubuntu 26.04 and a default 24.04 desktop installed from
@@ -915,8 +920,8 @@ the release ISOs, on which this whole install guide was re-run verbatim, a Plasm
 cloud image, which is a probe for one protocol change rather than a support target,
 and a GNOME 51 desktop on 26.10, which is where the third GNOME of the overlap route
 was measured and is not a support target either. Thirteen more flavors exist and have
-not been built in CI yet — Fedora 43 and 44, Arch and NixOS, and with them COSMIC and
-river — so nothing about those is claimed here; `vm/README.md` says what each is and
+not been built in CI yet, Fedora 43 and 44, Arch and NixOS, and with them COSMIC and
+river, so nothing about those is claimed here; `vm/README.md` says what each is and
 what it is waiting for.
 `vm/README.md` keeps the rig and the verbatim messages behind these cells, and
 [docs/Technical.md § 10](docs/Technical.md#10-the-vm-rig) is what the images are and
@@ -933,7 +938,7 @@ setup. The VM reference records the measurements; this summary does not duplicat
 job totals that can become inconsistent as the matrix changes.
 
 A **version number in the table header below** is only there where that flavor's prepared VM image has
-been built *and* its package list is checked in under `vm/reference/` — that file is what
+been built *and* its package list is checked in under `vm/reference/`, that file is what
 a version claim is read back out of. MATE, LXQt and labwc have prepared images and no such file
 yet, so the header names them without a number and their measured versions sit in **(b)**
 and **(m)**.
@@ -999,8 +1004,7 @@ windows front to back, so nothing could read a lower back.
 
 Tiling is the wrong explanation for the **generic backend on labwc**, and the refusals there say so.
 labwc is a *stacking* compositor and still cannot move a window, because
-`zwlr_foreign_toplevel_management_v1` has `set_rectangle` — a minimise-animation hint —
-and no geometry request at all. The four refusals name the protocol:
+`zwlr_foreign_toplevel_management_v1` has `set_rectangle`, a minimise-animation hint, and no geometry request at all. The four refusals name the protocol:
 
 ```console
 $ wdotool windowmove 0x000f4240 100 100
@@ -1010,19 +1014,25 @@ XWayland window (AGENTS.md route 5, a real ConfigureWindow) or a patched composi
 native one (route 6)
 ```
 
-That is one line, wrapped here; `wdotool/backend_wlr.py`'s `NO_GEOMETRY` is the whole of
-it, and the window id and the rc 1 are a live labwc's, 2026-09-08. **COSMIC**'s is the
-same shape with its own reason and its own rung: `the COSMIC toplevel protocol has no
-move, resize, raise or lower; not yet here, and the route is a patched cosmic-comp
-(AGENTS.md route 6)`. COSMIC carries no pid either, so `kill` answers `no pid for window
-N`. Neither gap is settled — taking only the XWayland half would leave a listing where
-half the windows can be moved and half cannot, which is worse than a refusal that says
-what is missing.
+The example wraps a single error message for readability. In the labwc test on
+2026-09-08, the command returned exit status 1. Window movement and resizing are
+not yet implemented by the generic backend: XWayland support would require X11
+configuration requests, while native-window support would require compositor
+changes. The latter must expose geometry and stacking operations that the current
+protocol lacks.
 
-Native-window *geometry* on the generic backend on labwc is the output rectangle plus `0,0` for the
-same reason, and `wwmctl -d` works there only where the compositor publishes
-`ext_workspace_manager_v1` — labwc, Budgie and Xfce-on-Wayland do, sway 1.11 and
-Wayfire 0.10 do not.
+COSMIC has similar limitations because its toplevel protocol does not expose move,
+resize, raise or lower operations. Supporting them requires changes to
+`cosmic-comp`, corresponding to route 6 in `AGENTS.md`. It also omits process IDs,
+so window-kill commands report that no PID is available. Both remain implementation
+gaps, and the documentation distinguishes XWayland support from native-window
+support rather than treating partial coverage as complete.
+
+For native windows on labwc, the generic backend reports the output rectangle with
+a window offset of `0,0` instead of the window's actual geometry. Desktop listing
+through `wwmctl -d` requires `ext_workspace_manager_v1`. The tested labwc, Budgie
+and Xfce Wayland sessions provide it; sway 1.11 and Wayfire 0.10 do not, although
+their dedicated backends can obtain workspace information through IPC.
 
 **(d)** On Plasma 6.6 plasmashell's own desktop windows carry an empty caption, so
 those `wwmctl -l` rows have a blank title where 5.27 prints `Desktop @ QRect(…)`.
@@ -1042,15 +1052,15 @@ is the desktop's business.
 **(h)** `warandr` is the one tool with a dependency, the GTK 3 bindings named in
 [Install](#other-ways-to-install), which a minimal sway image may lack.
 
-**(i)** The wlroots family — sway, Hyprland, Wayfire, labwc and the desktops on it,
-river — implements `zwp_virtual_keyboard_v1` *and* `zwlr_virtual_pointer_v1`, so on all
+**(i)** The wlroots family, sway, Hyprland, Wayfire, labwc and the desktops on it,
+river, implements `zwp_virtual_keyboard_v1` *and* `zwlr_virtual_pointer_v1`, so on all
 of them every injecting command runs with no root, no group and no udev rule. Mutter,
 KWin and muffin implement neither, all three measured. **COSMIC is the split case**:
 cosmic-comp's 53 globals carry the virtual keyboard and **not** the virtual pointer, so
 `wdotool type 'hello cosmic'` landed byte-exact on a box with no `/dev/uinput` node at
-all while `wdotool mousemove 400 300` answered `cannot create uinput devices` — keyboard
+all while `wdotool mousemove 400 300` answered `cannot create uinput devices`, keyboard
 free, pointer needs the udev rule. Wayfire is a second *measured* member of the
-free-keyboard half (`wdotool type` byte for byte through `zwp_virtual_keyboard_v1` on a
+free-keyboard input path (`wdotool type` byte for byte through `zwp_virtual_keyboard_v1` on a
 guest with no `/dev/uinput`), and so is labwc.
 [docs/WDOTOOL.md](docs/WDOTOOL.md#typing-and-clicking-with-no-privilege---vkbd).
 
@@ -1063,7 +1073,7 @@ that answer do not is
 `zwlr_screencopy_manager_v1` or the standard `ext-image-copy-capture-v1`. Both are
 first-class routes, not one and an alternative: sway and Hyprland publish the first,
 COSMIC publishes only the second, and labwc and sway 1.12 publish both. Neither KWin
-nor Mutter nor muffin implements either — muffin's 23 globals carry neither — so the
+nor Mutter nor muffin implements either, muffin's 23 globals carry neither, so the
 route on GNOME, KDE and Cinnamon is the portal's ScreenCast (AGENTS.md route 4), which
 asks once per session; that is useless from a hotkey and it is not wired up here yet,
 so wmirror says exactly that and exits 1 rather than half working.
@@ -1072,7 +1082,7 @@ so wmirror says exactly that and exits 1 rather than half working.
 and fractional scaling, so logical pixels on GNOME 50 and Plasma and raw pixels on
 GNOME 46 with "Fractional Scaling" off, which is that release's own layout mode and
 not a defect. Measured at 100%, 150% and 200%, one head and two of different scales,
-against the cursor plane on the scanout: 0px. One Mutter 46 state *is* a defect.
+against the hardware cursor in the displayed output: 0px. One Mutter 46 state *is* a defect.
 Switching Fractional Scaling on under an already-scaled monitor leaves GNOME
 advertising a layout it has stopped drawing, and there `mousemove` still lands on the
 coordinate you ask for, because Mutter maps the pointer across that same advertised
@@ -1086,7 +1096,7 @@ wlroots 0.19.2, and Ubuntu Budgie 10.10.2, Xfce 4.20 (`startxfce4 --wayland`) an
 2.3 (`startlxqtwayland`), each of which *is* labwc with its own panels on top. The
 registry of labwc under Xfce is byte-identical to a bare labwc's. Two more members are
 in the tree with no prepared image built yet and nothing about them is claimed above: **river**
-0.4.8 — see **(n)** — and **COSMIC** 1.6/1.7, which is not in this family on the window
+0.4.8, see **(n)**, and **COSMIC** 1.6/1.7, which is not in this family on the window
 side at all (cosmic-comp publishes no `zwlr_foreign_toplevel_manager_v1`, so it gets a
 backend of its own over the COSMIC toplevel protocols: activate, close, and the
 maximize/minimize/fullscreen trio gated on the manager's capability array, with no move,
@@ -1099,15 +1109,15 @@ only ever pushes title, app_id and activated at it; it registers no listener for
 handle request. Measured on a live 0.4.8: `windowclose` (twice, five seconds apart),
 `windowactivate` with another window focused, `windowminimize` and `windowstate --add
 FULLSCREEN` each returned rc 0 and changed nothing, while river-classic 0.3.17 really
-closed and really set fullscreen. There is no version bit to gate on — river advertises
-manager v3 like sway — so the wlr backend waits 0.5 s for the handle to say the request
+closed and really set fullscreen. There is no version bit to gate on, river advertises
+manager v3 like sway, so the wlr backend waits 0.5 s for the handle to say the request
 happened and reports the silence, in three lines rather than one, because the causes
 differ: a compositor that accepted `set_fullscreen` and did not apply it, a compositor
 with no minimized state (sway and river-classic have none either), and a window that did
 not close within 0.5 s, which can as easily be a client asking to save. `wdotool` prints
 it and exits 0; `wwmctl` then tries its EWMH route. Real window control on river 0.4 is
 **not yet**: the lowest route is 1, `river_window_manager_v1`, and it is closed by the
-protocol's own exclusivity — binding it while a window manager holds it answers
+protocol's own exclusivity, binding it while a window manager holds it answers
 `unavailable` as the first and only event, and a session with no window manager maps no
 windows at all. Route 6, a patched river that wires `request_close` and
 `request_activate` into the handle it already creates, is next, and it is a package
@@ -1115,8 +1125,8 @@ nobody has costed. Ubuntu and Debian have no river to `apt install`, so there is
 install line to give either.
 
 **(o)** Wayfire's JSON IPC is **opt-in**, and three optional plugins buy three more
-capabilities: `wm-actions` (minimize, fullscreen, sticky, always-on-top, lower) — which
-is **not** in Wayfire's stock plugin list — `grid` (maximize) and `vswitch` (desktops).
+capabilities: `wm-actions` (minimize, fullscreen, sticky, always-on-top, lower), which
+is **not** in Wayfire's stock plugin list, `grid` (maximize) and `vswitch` (desktops).
 Each is refused by name when it is missing. Two things Wayfire has that sway does not:
 a real `windowlower` (`wm-actions/send-to-back`), and a `getmouselocation` that answers
 from the compositor **before any move**. Two it does not have: a plain raise
@@ -1126,9 +1136,8 @@ Wayfire has no flat workspace list either: each output owns a 3x3 grid of viewpo
 flattened `y * grid_width + x`, so `get_num_desktops` is 9 on a stock Wayfire and
 `set_desktop 4` is the middle cell.
 
-**(p)** On Cinnamon, `wdotool windowstate --add SHADED` really shades the window —
-muffin kept `shade`/`unshade`/`is_shaded` where mutter dropped shading and KWin 6
-removed it — but `wxprop -id` does not print `_NET_WM_STATE_SHADED` back, because
+**(p)** On Cinnamon, `wdotool windowstate --add SHADED` really shades the window, muffin kept `shade`/`unshade`/`is_shaded` where mutter dropped shading and KWin 6
+removed it, but `wxprop -id` does not print `_NET_WM_STATE_SHADED` back, because
 `wxprop` has no arm and no atom for it yet, where the real `xprop` on a Cinnamon X11
 session does. **Not yet**, and the fix is one atom in our own code.
 
@@ -1163,7 +1172,7 @@ load a script into KWin. **Cinnamon is the same note, only stronger**:
 the session bus, with no consent step and no unsafe-mode gate, and it is there whether
 or not this project exists. wdotool uses what is already open; it opens nothing. What
 it sends is one constant program per operation out of `wdotool/cinnamon_js.py`, and
-only integers are ever interpolated into one — window ids, coordinates and workspace
+only integers are ever interpolated into one, window ids, coordinates and workspace
 numbers. Titles and `WM_CLASS` strings come out and never go back in. And **running as
 root** grants nothing standing to anybody.
 

@@ -1,4 +1,4 @@
-"""warandr command line — arandr's (``warandr [savedfile]``, --version, --randr-display, --force-version) plus
+"""warandr command line: arandr's (``warandr [savedfile]``, --version, --randr-display, --force-version) plus
 non-GUI conveniences for scripts: ``--save FILE`` writes the current layout as a layout script, ``--command``
 prints the command Apply would run, ``--backend NAME`` pins the backend for this run (the GUI's Layout ▸
 Backend, spelled the same as wxrandr's own flag) and ``--print-backend`` prints the backend token and exits;
@@ -54,7 +54,7 @@ def _parser():
                    help="Even run with untested XRandR versions (accepted for "
                         "arandr compatibility; warandr never refuses one)")
     p.add_argument("--save", metavar="FILE",
-                   help="write the current layout (or SAVEDFILE re-based on "
+                   help="write the current layout (or SAVEDFILE adapted to "
                         "the current outputs) as a layout script and exit; "
                         "no GUI")
     p.add_argument("--command", action="store_true",
@@ -68,8 +68,8 @@ def _parser():
                    help="print the backend token (x11, sway, hypr, wlr, "
                         "mutter, cinnamon, kwin) and exit; no GUI")
     p.add_argument("--verbose", action="store_true",
-                   help="with --print-backend: add what runs, why it was "
-                        "picked, and what that tool says about the session")
+                   help="with --print-backend: show the backend command, why it was "
+                        "selected, and the detected session details")
     p.add_argument("--unsafe-gnome-overlap", action="store_true",
                    help="apply overlapping layouts on GNOME without asking "
                         "first, for a window started from a hotkey or a "
@@ -104,8 +104,8 @@ def load_layout(backend, savedfile):
 
 
 def script_notes(layout, backend):
-    """The comment header a saved layout carries: the forced backend, if one was forced, and — when the layout
-    has a partial overlap — what that overlap means on the backend that wrote it.  Comments only: the script
+    """The comment header a saved layout carries: the forced backend, if one was forced, and, when the layout
+    has a partial overlap, what that overlap means on the backend that wrote it.  Comments only: the script
     still runs anywhere."""
     notes = []
     forced = backend.script_note()

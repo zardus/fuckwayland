@@ -27,39 +27,39 @@ and the bytes are named wherever a number is.
 
 - **Hyprland gets a first-class backend on both sides.** `wdotool/backend_hypr.py` and
   `wxrandr/hypr.py` speak Hyprland's own request socket, one connection per request,
-  where the generic wlroots floor had reported the whole output as every window's
+  where the generic wlroots backend had reported the whole output as every window's
   rectangle, pid 0 and desktop -1. Window ids are a hash of the compositor's `address`,
   so they no longer move when another window closes; `getwindowgeometry`, `windowmove`
   and `windowsize` are real; XWayland windows are listed under their real X id.
   `wxrandr --print-backend` answers `hypr` and not `wlr`, and that is not a preference:
   Hyprland advertises `zwlr_output_manager_v1` v4 and takes exactly one apply per
-  session through it — the second times out after 10 s having changed nothing, with
+  session through it, the second times out after 10 s having changed nothing, with
   `wlr-randr`, the reference client, hanging for ever on the same request. Measured on
   0.53.3 and again on 0.56.2.
-- **A Wayfire backend over Wayfire's JSON IPC.** Where the wlr floor refused
+- **A Wayfire backend over Wayfire's JSON IPC.** Where the generic wlr backend refused
   `windowmove`, `windowsize`, `windowraise`, `windowlower`, `getwindowpid`,
   `selectwindow` and every desktop command, Wayfire with `plugins = ipc ipc-rules` now
   answers all of them. `wwmctl -l -x` prints the real X window id and `xterm.XTerm`
   where it printed a synthetic id and `XTerm.XTerm`. Wayfire has a real `windowlower`,
   which sway has never had, and a `getmouselocation` that answers from the compositor
   before anything has warped the pointer.
-- **Cinnamon, both session types.** `org.Cinnamon.Eval` carries the window plane with
+- **Cinnamon, both session types.** `org.Cinnamon.Eval` carries the window-management interface with
   nothing installed, and `wxrandr --backend cinnamon` is Mutter's DisplayConfig under
-  Muffin's bus name — eight behaviours that used to be keyed on the token `mutter` are
+  Muffin's bus name, eight behaviours that used to be keyed on the token `mutter` are
   keyed on the implementation's flavour instead, so `--dryrun`, `--noprimary`,
   `--listmonitors`, the overlap-status sentences and `--brightness`/`--gamma` all answer
   on Cinnamon where they used to answer about GNOME or die. `--persistent` writes
   `~/.config/cinnamon-monitors.xml` behind Cinnamon's own *Keep these display settings?*
   dialog, and that dialog has now been answered live over Eval.
-- **A COSMIC backend, and the wlroots floor made honest.** cosmic-comp publishes no
+- **A COSMIC backend, and the generic wlroots backend made honest.** cosmic-comp publishes no
   `zwlr_foreign_toplevel_manager_v1` at all, so `wdotool/backend_cosmic.py` drives the
   COSMIC toplevel protocols instead: real workspaces, ids minted from the 32-character
   `identifier`, and activate/close/maximize/minimize/fullscreen gated on the manager's
-  own capability array. On the generic wlr floor the four geometry refusals stopped
+  own capability array. On the generic wlr backend the four geometry refusals stopped
   borrowing sway's tiling excuse and now name the protocol; desktops work wherever the
   compositor publishes `ext_workspace_manager_v1`; toplevels are joined to
   `_NET_CLIENT_LIST` so XWayland windows appear under their real X ids; and a compositor
-  that accepts a request and does nothing — river 0.4 — is waited for and reported
+  that accepts a request and does nothing, river 0.4, is waited for and reported
   rather than believed.
 - **i3 is a dialect and not a lie.** The sway backend asks `GET_VERSION` once and knows
   which compositor it is talking to: every id is the window's X id and not i3's 47-bit
@@ -79,11 +79,11 @@ and the bytes are named wherever a number is.
   **not yet** plus the lowest-numbered route on [AGENTS.md](AGENTS.md)'s ladder and what
   that route costs, in the tools' own stderr as well as in these documents.
   `windowreparent` used to print a sentence saying reparenting was not possible; it now
-  names one `XReparentWindow` over the X plane for an XWayland window and a patched
+  names one `XReparentWindow` over the X11 connection for an XWayland window and a patched
   compositor for a native one, and stays a warn-and-succeed.
   `tests/test_one_rule.py` is the gate.
 - **A Fedora package and an Arch package.** `packaging/rpm/` and `packaging/arch/`,
-  built by `scripts/build-rpm.sh` and `scripts/build-pkgbuild.sh` — `build-deb.sh`'s
+  built by `scripts/build-rpm.sh` and `scripts/build-pkgbuild.sh`, `build-deb.sh`'s
   siblings, same options, same first gate: the version has to agree everywhere before
   anything runs, and it is now written in eight places rather than four. Neither package
   is committed and neither is published yet, though since the tree became BSD-2-Clause
@@ -96,7 +96,7 @@ and the bytes are named wherever a number is.
   because both Fedora's systemd-udev file trigger and Arch's
   `35-systemd-udev-reload.hook` run *after* the scriptlet.
 - **`debian/enable-bridge` and its `.desktop` are now `packaging/common/`.** They were
-  never Debian-specific — a per-user gsettings enable and an XDG autostart entry — and an
+  never Debian-specific, a per-user gsettings enable and an XDG autostart entry, and an
   Arch recipe reaching into a directory named for dpkg is what said so. Same bytes, one
   copy, three packagings.
 - **The flake is more than one derivation.** `nixosModules.default` and
@@ -115,8 +115,8 @@ and the bytes are named wherever a number is.
   builder, and `arch-river` is the rig's first from-source build step, pinned to a commit
   and a sha256.
 - **The smoke has a package axis per distribution.** `vm/live-smoke.sh --pkg` installs
-  the flavor's own package — the `.deb` on Ubuntu, the rpms on Fedora, the
-  `.pkg.tar.zst` on Arch — and on NixOS nothing at all, because the package is in the
+  the flavor's own package, the `.deb` on Ubuntu, the rpms on Fedora, the
+  `.pkg.tar.zst` on Arch, and on NixOS nothing at all, because the package is in the
   image; `--remove` is the mirror, and on NixOS it is a `switch-to-configuration test`
   into a `without-w11` specialisation. Two phases belong to a distribution
   rather than to a desktop and the driver appends them itself: `selinux` on Fedora and
@@ -159,19 +159,19 @@ by using the tools on one rather than by reading them.
   session with two layouts configured and the second one switched on typed the first
   one's characters and printed a notice saying which layout it had assumed: measured on
   Plasma 6.6 with `us, de` switched to German, `wdotool type 'yz@'` arrived in Kate as
-  `zy""`. KWin publishes the live layout on the session bus — `org.kde.KWin` `/Layouts`
+  `zy""`. KWin publishes the live layout on the session bus, `org.kde.KWin` `/Layouts`
   `org.kde.KeyboardLayouts.getLayout`, a 0-based index into the configured list, which
-  is the keymap's group order name for name — so the active group is that index plus
+  is the keymap's group order name for name, so the active group is that index plus
   one, and wdotool now asks. The same string arrives as `yz@`, byte-exact, on Plasma
   6.6 *and* 5.27 (the earlier claim that 5.27 needed `org.kde.kded5
   /modules/keyboard` was wrong: KWin 5.27 has `/Layouts` too), a switch made while the
   daemon is running is followed command by command, and the notice says nothing where
-  nothing is assumed — `wdotool keys explain` reports `group 2 of 2, from wayland +
+  nothing is assumed, `wdotool keys explain` reports `group 2 of 2, from wayland +
   kwin` rather than `group 1 of 2 (assumed)`. The bus is opened only where the group
   would otherwise be a guess, so a plain US session, a one-layout session and GNOME's
   `us,us` never open one; KWin is asked and kded never is, because both kded copies of
-  that interface crash on `getLayout`; and every failure — no bus, no KWin, an older
-  KWin without the object, an index the keymap cannot hold — leaves the old guess and
+  that interface crash on `getLayout`; and every failure, no bus, no KWin, an older
+  KWin without the object, an index the keymap cannot hold, leaves the old guess and
   the old notice exactly as they were, measured unchanged on a two-source GNOME
   session. `WDOTOOL_XKB_GROUP` still outranks it. (GNOME is the entry below; nothing
   changes on sway or X11.)
@@ -180,13 +180,13 @@ by using the tools on one rather than by reading them.
   arrived in a real `gnome-text-editor` window as `zy"` on GNOME 50.1 *and* 46.0.
   GNOME publishes the answer in `org.gnome.desktop.input-sources`, which
   `xdg-desktop-portal` serves on the session bus, so wdotool now reads it before every
-  `type` and `key` with the D-Bus client it already ships — no new dependency, and
+  `type` and `key` with the D-Bus client it already ships, no new dependency, and
   nothing to install on a default Ubuntu desktop. The head of `mru-sources` is the
   live source, written on every switch by every means a user has, and `current` is
   deprecated and ignored by the shell whatever it looks like; Mutter appends its own
   `us` group after the user's sources and compiles them in chunks of three, so the
   active group is the source's index within its chunk. The string arrives as `yz@`,
-  byte-exact, on both generations — after `Super+Space`, after the panel menu, and on
+  byte-exact, on both generations, after `Super+Space`, after the panel menu, and on
   the first command of a session rebooted with German last used, where the old build
   typed `zy"` before the user had touched anything. With five sources and the fifth
   picked, where the old guess assumed Russian and typed **nothing at all**, it types.
@@ -194,8 +194,7 @@ by using the tools on one rather than by reading them.
   1.2 ms a command as the session user, 6.3 ms as root, where the read has to happen
   in a forked child because the portal answers the session user only.
 - **The layout notice is gone wherever the layout is known.** It existed because we
-  were guessing, and on GNOME it fired on every command of every non-US desktop —
-  with a *single* layout configured too, because Mutter's appended `us` fallback makes
+  were guessing, and on GNOME it fired on every command of every non-US desktop, with a *single* layout configured too, because Mutter's appended `us` fallback makes
   a one-layout session look exactly like a two-layout one in the keymap. The setting
   tells them apart, so a one-layout GNOME session now says nothing at all, and
   `wdotool keys explain` reports `group 1 of 2, from wayland + gnome input-sources`
@@ -213,7 +212,7 @@ by using the tools on one rather than by reading them.
   exactly that one call to the portal and no other, nothing appears on screen, and
   the permission store lists nothing for `settings`. `tests/test_no_portal.py` now
   exempts that one interface by name, keeps every other interface on the same bus
-  name a failure — `RemoteDesktop` and `InputCapture` first among them — and has a
+  name a failure, `RemoteDesktop` and `InputCapture` first among them, and has a
   test of its own for the width of the hole.
 - **Keeping a layout on GNOME says what happened to it.** A persistent apply reports
   when GNOME has already discarded `~/.config/monitors.xml` (one entry that fails the
@@ -343,15 +342,15 @@ documentation set that no longer disagrees with itself.
   `__keymap --group`, and a layout script saved non-atomically. And no tool prints a
   traceback or exits 120 when its own stdout is gone: the status is 1, or silence for
   a closed pipe, as the originals do. The release check on a default 26.04 desktop
-  found the other half of that still open — `tool >/dev/full 2>&1`, where the one-line
-  diagnostic about the lost output cannot land either — tracebacking in all six and
+  found the other half of that still open, `tool >/dev/full 2>&1`, where the one-line
+  diagnostic about the lost output cannot land either, tracebacking in all six and
   exiting 120 in five, with apport filing crash reports for two of them. Every last
   word a tool writes now goes through `w11common/stdio.py`'s `warn()`, which closes
   stderr when it cannot write to it. The same run found one more, in a diagnostic
   rather than in a tool: `gnome/install-bridge.sh --check` looked for the udev rule
   under `/etc` only, so on a machine installed from the package, which ships it in
   `/usr/lib/udev/rules.d` where a package belongs, it printed `udev rule: no` two
-  lines above `uinput usable by test: yes (logind ACL)` — the check the README's
+  lines above `uinput usable by test: yes (logind ACL)`, the check the README's
   troubleshooting table sends people to, contradicting itself. It now names whichever
   copy is on disk, `/etc` first, and says when the one it found came from the package.
 - **One package for Ubuntu 24.04 and 26.04**, `Architecture: all`, built by
@@ -392,7 +391,7 @@ Six tools, and on sway nothing wdotool injects needs a privilege at all.
 
 - **On sway, nothing wdotool injects needs a privilege any more.** The pointer goes
   through `zwlr_virtual_pointer_v1` where the kernel device is closed to us, as the
-  keyboard already went through `zwp_virtual_keyboard_v1` — so `click`, `mousemove`
+  keyboard already went through `zwp_virtual_keyboard_v1`, so `click`, `mousemove`
   and the rest join `type` and `key` in needing no root, no group and no udev rule
   there. The two halves are chosen separately and by the same rule, so a compositor
   that implements one and not the other gets the protocol for that one and the kernel
@@ -418,7 +417,7 @@ Six tools, and on sway nothing wdotool injects needs a privilege at all.
 - **KWin 6.7 stopped publishing outputs the way `wxrandr` found them.** From Plasma
   6.7.0 an output is no longer a `kde_output_device_v2` `wl_registry` global; the
   compositor hands the device objects out through a `kde_output_device_registry_v2`
-  object instead (kwin `7e32e00c`, never backported — 6.6 still publishes the
+  object instead (kwin `7e32e00c`, never backported, 6.6 still publishes the
   globals). On a real Plasma 6.7.4 session the old global is simply absent, so the
   second path is the only way to see an output at all, and `wxrandr` takes it. Query,
   mode, position, rotation, scale, `--off`, `--primary`, `--same-as` and hotplug all
@@ -426,7 +425,7 @@ Six tools, and on sway nothing wdotool injects needs a privilege at all.
 - **wmirror**, a sixth tool and the only one here that clones nothing. On wlroots it
   mirrors a **region** of an output, or a whole output onto a **differently shaped**
   one, by running the packaged
-  [`wl-mirror`](https://github.com/Ferdi265/wl-mirror) and owning its lifetime — the
+  [`wl-mirror`](https://github.com/Ferdi265/wl-mirror) and owning its lifetime, the
   two pictures output geometry alone cannot produce, and nothing else. Two outputs of
   the same size at the same position already mirror byte for byte on wlroots, so
   `wxrandr --output B --same-as A` stays the answer there and wmirror sends you to it
@@ -434,8 +433,8 @@ Six tools, and on sway nothing wdotool injects needs a privilege at all.
   wrong, chief among them two outputs that **share pixels**, where a fullscreen mirror
   window is drawn on its own source: run that deliberately and both heads go entirely
   black, every pixel. Nothing it starts is left running that `wmirror --list` cannot
-  find and `wmirror --stop` cannot end — not when its own supervisor is killed, not
-  when a start is interrupted, not when two of them race — and a mirror ends itself
+  find and `wmirror --stop` cannot end, not when its own supervisor is killed, not
+  when a start is interrupted, not when two of them race, and a mirror ends itself
   when the layout moves out from under it. **GNOME and KDE have no unprivileged
   capture protocol at all**, and `wmirror --check` names what is missing instead of
   half working; on X11 the answer is `xrandr --same-as`, and it says so rather than
@@ -478,7 +477,7 @@ rather than pretending.
 
 Behind it: a rig of seven desktop images with monitors that could be plugged, resized
 and unplugged from outside the guest, and 1884 tests. The tools were stressed
-deliberately on each desktop, and what that found is in the history — roughly fifty
+deliberately on each desktop, and what that found is in the history, roughly fifty
 defects, including a few that mattered: typing captured by another user, commands
 that reported success while failing, and a monitor placed ten pixels wrong on the
 wlroots backend at most fractional scales.

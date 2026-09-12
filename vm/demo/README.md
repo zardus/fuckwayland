@@ -1,4 +1,6 @@
-# vm/demo — recording the README GIFs
+<a id="vmdemo-recording-the-readme-gifs"></a>
+
+# vm/demo: recording the README GIFs
 
 Three GIFs in `media/` are recorded here, all of them on **`resolute-gnome-iso`**,
 the image built by the real Ubuntu 26.04 desktop installer, because a README example

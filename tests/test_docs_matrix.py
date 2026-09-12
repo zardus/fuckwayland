@@ -111,8 +111,10 @@ def unfenced(text):
 def anchors(text):
     """Every anchor a rendered file offers, duplicates numbered as GitHub
     numbers them (`-1`, `-2`, ...)."""
-    out, seen = set(), {}
-    for _hashes, title in HEADING.findall(unfenced(text)):
+    text = unfenced(text)
+    out = set(re.findall(r"<a\s+(?:id|name)=[\"']([^\"']+)[\"']", text))
+    seen = {}
+    for _hashes, title in HEADING.findall(text):
         base = slugify(title)
         n = seen.get(base, 0)
         seen[base] = n + 1
@@ -143,8 +145,9 @@ class TheSlugRules(unittest.TestCase):
                          "whats-in-it-and-what-is-not")
 
     def test_a_repeated_heading_gets_a_numbered_anchor(self):
-        text = "## One\n\n## One\n\n## One\n"
-        self.assertEqual(anchors(text), {"one", "one-1", "one-2"})
+        text = ('<a id="old-title"></a>\n\n## One\n\n## One\n\n## One\n'
+                '```html\n<a id="example-only"></a>\n```\n')
+        self.assertEqual(anchors(text), {"old-title", "one", "one-1", "one-2"})
 
 
 class EveryLinkResolves(unittest.TestCase):

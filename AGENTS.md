@@ -1,4 +1,6 @@
-# AGENTS.md — the one principle, for anyone or anything working in this tree
+<a id="agentsmd-the-one-principle-for-anyone-or-anything-working-in-this-tree"></a>
+
+# AGENTS.md: the one principle, for anyone or anything working in this tree
 
 ## Wayland is morally wrong. X is king.
 
