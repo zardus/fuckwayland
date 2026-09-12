@@ -813,6 +813,7 @@ positions. It accesses Mutter's private structures, so an incompatible build or 
 bug can end the graphical session. Save your work before using it.
 
 1. From a clone, run `sh gnome/install-overlap.sh`, then log out and back in.
+   The installer exits 1 until that first session restart is complete.
    With the `.deb` installed, log out and back in first, then run
    `gnome-extensions enable w11-overlap@w11`. The package does not enable it for you.
 2. Run `wxrandr --gnome-overlap-status` to report availability and any saved
@@ -821,6 +822,13 @@ bug can end the graphical session. Save your work before using it.
 3. Apply positions, for example:
    `wxrandr --unsafe-gnome-overlap --output Virtual-2 --pos 960x0`.
    This path changes positions only and cannot be combined with `--persistent`.
+
+After applying the example, `wxrandr --query` includes a line like this on the
+1920x1080 VM display (physical dimensions come from the display's EDID):
+
+```text
+Virtual-2 connected 1920x1080+960+0 (normal left inverted right x axis y axis) 480mm x 270mm
+```
 
 Optionally run `wxrandr --gnome-overlap-allow` to run the checks and record your
 acknowledgment for the current GNOME build. This shortens subsequent warnings; it

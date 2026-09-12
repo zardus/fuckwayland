@@ -370,7 +370,7 @@ class TheRigImages(unittest.TestCase):
         m = re.search(r"That\s*\n?\s*leaves (\d+) images under the matrix", text)
         self.assertTrue(m, "vm/README.md's matrix-image sentence has been reworded")
         self.assertEqual(int(m.group(1)), len(under), sorted(under))
-        m = re.search(r"measured rather than assumed, on (\d+) golden VM\s*\n?\s*images",
+        m = re.search(r"measured rather than assumed, on (\d+) (?:golden|prepared) VM\s*images",
                       self.docs["README.md"])
         self.assertTrue(m, "README.md's matrix-image sentence has been reworded")
         self.assertEqual(int(m.group(1)), len(under), sorted(under))

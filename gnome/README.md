@@ -134,7 +134,7 @@ Nobody gets this one by accident, and nothing else in w11 needs it.
 ### Install, check and remove
 
 ```sh
-sh gnome/install-overlap.sh          # then log out and back in on first install
+sh gnome/install-overlap.sh          # exit 1 until you log out and back in on first install
 sh gnome/install-overlap.sh --check  # run the compatibility probe without applying a layout
 sh gnome/install-overlap.sh --uninstall
 ```
