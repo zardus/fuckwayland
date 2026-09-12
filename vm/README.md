@@ -3,7 +3,7 @@
 # vm/: test VMs
 
 `vmctl` runs desktop tests in QEMU/KVM across **38 flavors**, covering Ubuntu,
-Fedora, Arch and NixOS with 19 desktop identifiers. A flavor defines the operating
+Fedora, Arch and NixOS with 19 desktop tokens. A flavor defines the operating
 system, desktop, display manager and test configuration.
 
 Most flavors start with a cloud image and install a desktop metapackage. The

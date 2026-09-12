@@ -479,11 +479,19 @@ class Formatting(unittest.TestCase):
         """repro/README.md carried "## The scaling pass" twice with one line
         between them -- a paste that duplicated the heading and its first
         sentence, one of the two copies spelling `wdotool`s for
-        `wdotool`'s."""
+        `wdotool`'s.
+
+        Fenced blocks are skipped: WARANDR.md prints two layout scripts eight
+        lines apart and both of them open with `#!/bin/sh`, which is a shebang
+        and not a heading."""
         for name, text in self.docs.items():
             seen = {}
+            fenced = False
             for i, line in enumerate(text.splitlines(), 1):
-                if not line.startswith("#"):
+                if line.startswith("```"):
+                    fenced = not fenced
+                    continue
+                if fenced or not line.startswith("#"):
                     continue
                 head = line.strip()
                 if head in seen and i - seen[head] <= 8:

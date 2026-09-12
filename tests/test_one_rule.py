@@ -89,13 +89,15 @@ BY_DESIGN = re.compile(r"by design", re.I)
 #: against the tool's own stderr.
 STEP_REFUSAL = re.compile(r'"([^"\n]*is not supported by the (?:wlr|cosmic) backend[^"\n]*)"')
 
-#: Lines that RESTATE the rule rather than lean on it.  README.md's Philosophy
-#: section quotes AGENTS.md's second paragraph, which is the one place outside
-#: AGENTS.md where a reader has to be shown the wrong answer to be told it is
-#: wrong.  Stripped text, same shape as ALLOWED_BY_DESIGN.
-QUOTING_THE_RULE = {
-    "[AGENTS.md](AGENTS.md): **if X supports it, we support it.** What Wayland forbids is",
-}
+#: Lines that RESTATE the rule rather than lean on it.  Stripped text, same
+#: shape as ALLOWED_BY_DESIGN.  It held one line until 2026-09-12: README.md's
+#: Philosophy section used to quote AGENTS.md's second paragraph, the one place
+#: outside AGENTS.md where a reader was shown the wrong answer in order to be
+#: told it is wrong.  That paragraph now says a missing Wayland capability is an
+#: implementation gap to investigate, which is the same rule with nothing
+#: banned left in it, so the set is empty and the check below keeps it honest:
+#: an exemption that outlives its line fails the suite.
+QUOTING_THE_RULE = set()
 
 
 def tracked_files():
@@ -143,10 +145,11 @@ class TheBannedSentences(unittest.TestCase):
         self.assertEqual(self.hits(BANNED[0]), [])
 
     def test_no_file_says_wayland_forbids_or_disallows_it(self):
-        """One exemption, and it is the rule being quoted: README.md's
-        Philosophy section repeats AGENTS.md's own sentence about what Wayland
-        forbids being a cost.  QUOTING_THE_RULE holds it by its bytes, so a
-        reworded Philosophy section has to come back through here."""
+        """No exemptions left: the README's Philosophy section was reworded on
+        2026-09-12 and no longer quotes the sentence.  QUOTING_THE_RULE holds
+        any such quote by its bytes, and the second assertion fails when an
+        entry outlives the line it exempts, which is how the rewrite was
+        caught."""
         self.assertEqual(self.hits(BANNED[1]), [])
         with open(os.path.join(ROOT, "README.md"), encoding="utf-8") as f:
             readme = [ln.strip() for ln in f]

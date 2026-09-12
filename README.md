@@ -209,14 +209,15 @@ Fedora, `pacman -S xorg-xprop` on Arch, `nix-env -iA nixpkgs.xorg.xprop` on NixO
 distribution it cannot identify gets Debian's, which is what every box printed before.
 
 When installed **over** the originals, the four CLI clones detect an X11 session
-and execute the real `xdotool`, `wmctrl`, `xprop` or `xrandr`. This applies to Xfce,
-i3, MATE, Cinnamon, LXQt/Openbox and GNOME or KDE on Xorg. Arguments, exit status,
-signals and standard streams are preserved, and no wrapper process remains.
+and hand over to the real `xdotool`, `wmctrl`, `xprop` or `xrandr` with `execve`,
+argv untouched but for wxrandr's own `--persistent` and `--unsafe-gnome-overlap`,
+which the original has never had. This applies to Xfce, i3, MATE, Cinnamon,
+LXQt/Openbox and GNOME or KDE on Xorg. Exit status, signals and standard streams
+are preserved, and no wrapper process remains.
 
-The exceptions are wxrandr's additional options, which the original does not
-recognize. `--backend` controls the handover and is removed before executing
-xrandr; `--persistent` is removed with a diagnostic, and
-`--unsafe-gnome-overlap` is rejected on X11.
+`--backend` is wxrandr's own as well, and it chooses the handover itself, so it is
+removed before the original runs. `--persistent` is dropped with a line saying so,
+and `--unsafe-gnome-overlap` is refused.
 
 Because the handover keeps the interface, the same script runs on either session
 type. When invoked through

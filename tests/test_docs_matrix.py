@@ -342,7 +342,7 @@ class TheRigImages(unittest.TestCase):
         three said "twenty" until 2026-09-09, which is what a hand-written count
         does."""
         self.assertGreater(len(self.desktops), 10, self.desktops)
-        for name, pattern in (("vm/README.md", r"and (\d+) desktop tokens"),
+        for name, pattern in (("vm/README.md", r"(\d+) desktop tokens"),
                               ("vm/README.md", r"one script gets (\d+) desktops"),
                               ("docs/Technical.md", r"one script gets (\d+) desktops")):
             with self.subTest(name + " " + pattern):
