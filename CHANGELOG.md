@@ -20,18 +20,11 @@ and the bytes are named wherever a number is.
   and every environment variable the tools read (`W11_PASSTHROUGH`, `W11_SYSTEM_STAMP`,
   and the rig's `W11_ORACLE_PATH`, `W11_NIX_LIVE`, `W11_SHIM_SEAMS`, `W11_PARITY_DISPLAY`,
   `W11_ROOT`). No behaviour moved with the name and no test lost a claim. There is no
-  compatibility shim and nothing reads the old names; what the rename does owe an
-  installed 0.4 is the hand-over, and the packages declare it: both names claim the same 75
-  files (the six commands in `/usr/bin`, every module under `dist-packages/`,
-  `warandr.desktop`; measured on 2026-09-10 with dpkg 1.23.7, 0.4.0's own .deb unpacked into
-  a `dpkg --root` sandbox and `release/w11_0.4.0_all.deb` put on top of it, which without a
-  declaration is `trying to overwrite '/usr/bin/warandr', which is also in package
-  fuckwayland (0.4.0)`, exit 1), so `debian/control` carries `Conflicts: fuckwayland` and
-  `Replaces: fuckwayland`, the spec `Obsoletes: fuckwayland < 0.4.1`, the PKGBUILD
-  `conflicts=` and `replaces=`, and apt, dnf and pacman take the old package off as they
-  put the new one on. The flake is the one side that can hold both at once: drop the old
-  input. The pre-1.0 version number is 0.4.0 on both sides and it is not going to sort
-  that out for you.
+  compatibility shim and nothing reads the old names. Current packages no longer
+  declare automatic replacement of the legacy package. Uninstall that package before
+  installing `w11`, since both own some of the same files. For Nix, replace the old
+  flake input. The version remains 0.4.0.
+
 - **Hyprland gets a first-class backend on both sides.** `wdotool/backend_hypr.py` and
   `wxrandr/hypr.py` speak Hyprland's own request socket, one connection per request,
   where the generic wlroots floor had reported the whole output as every window's

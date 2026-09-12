@@ -1,12 +1,84 @@
 # wmirror — design contract
 
-Mirror an output, or a **region** of one, onto another output on wlroots
-compositors, by running the existing [`wl-mirror`](https://github.com/Ferdi265/wl-mirror)
-and owning its lifetime. Pure stdlib (wl-mirror is a program we drive, never
-a module we import). House rules per Technical.md.
+Mirror an output, or a **region** of one, onto another output by starting and
+stopping [`wl-mirror`](https://github.com/Ferdi265/wl-mirror). The Python wrapper
+uses the standard library; `wl-mirror` is an external program you must install.
+
+The compositor must expose `zwlr_output_manager_v1` and a supported capture
+protocol: `zwlr_screencopy_manager_v1` or `ext_image_copy_capture_manager_v1`.
+Examples include sway, Hyprland, Wayfire, labwc and COSMIC. On sessions offering
+only the latter capture protocol, `wl-mirror` 0.17 or newer is required. Run
+`wmirror --check` to inspect your session; see [detection](#detection) for details.
 
 It is the one tool in this box that clones nothing: there is no X11 original
 called `wmirror`, and `xrandr` has no syntax for what it does.
+
+## Quick start
+
+```sh
+wmirror --check
+wmirror DP-1 --to HDMI-A-1 --region 800x600+0+0
+wmirror --list
+wmirror --stop HDMI-A-1
+```
+
+Replace the output names and rectangle with values from `wxrandr --query`. Source
+and destination must not overlap in the desktop layout. For a same-size mirror,
+use `wxrandr --output TARGET --same-as SOURCE`, or add `--keep-layout` to wmirror
+when the destination must keep its separate position.
+
+## The interface
+
+```
+wmirror SOURCE --to TARGET [--region WxH+X+Y] [--scaling fit|cover|exact]
+               [--keep-layout] [--replace] [--dry-run]
+wmirror --list                # list running mirrors; remove records for exited processes
+wmirror --stop TARGET         # or --stop-all
+wmirror --check               # can this session mirror at all, and what is missing
+```
+
+* **`--region WIDTHxHEIGHT+X+Y`** selects a rectangle in desktop layout coordinates.
+  X and Y are measured from the desktop origin, not from the source output's
+  corner. Use `wxrandr --query` to find output positions. `slurp` uses the same
+  coordinate space but prints `x,y widthxheight`; convert that to the syntax above.
+
+* **`--scaling`** is passed straight through: `fit` letterboxes (default),
+  `cover` fills and crops the sides, and `exact` enlarges by whole-number factors
+  (2×, 3×, …) or reduces by their reciprocals (½×, ⅓×, …), centering the result.
+  Measured on a 1920x1080 → 1280x1024 pair, content box sampled from a
+  screendump of the target head: `fit` gives 1280x720+0+152, `cover` fills
+  it (1280x1024+0+0, sides cropped), and `exact` gives **960x540+160+242**
+  — wl-mirror centres what it cannot fill, horizontally as well as
+  vertically.
+* **`--keep-layout`** is the way to ask for a mirror the layout could
+  deliver: two same-sized outputs, mirrored while the target keeps its own
+  rectangle (so the desktop keeps its area). Without it, that case is
+  refused with the `wxrandr` command that does it for free.
+* **exit codes**: 0 started (or the picture already exists), 1 refused or
+  failed, 2 usage. `--stop TARGET` with nothing running is 1; `--stop-all`
+  is always 0.
+
+## The policy, in one sentence
+
+By default, wmirror starts a helper for regions or differently sized outputs.
+`--keep-layout` also permits same-size outputs at separate positions. It never
+starts a helper when source and target overlap: the capture would include its
+own fullscreen window.
+
+What that means at the command line, all decided before the helper is
+started:
+
+| situation | wmirror |
+|---|---|
+| target already at the source's rectangle, same size, no region | **exit 0, starts nothing**: "already shows", because it does |
+| same logical size, apart | **refused**, naming `wxrandr --output T --same-as S`; `--keep-layout` overrides |
+| different logical size (or transform, or scale) | **runs** — the case a shared position crops |
+| any `--region` | **runs** — no geometry expresses it |
+| the two rectangles overlap at all | **refused**: the helper would capture its own window |
+| region not wholly inside the source | **refused** with the source's rectangle (wl-mirror would silently clamp it — measured) |
+| source == target, unknown output, disabled output | **refused**, naming it |
+| target already mirroring | **refused** (wl-mirror would run two, the older invisible); `--replace` swaps it |
+| source already mirroring the target | **refused**: they would capture each other |
 
 ## Why it exists (and why it is this small)
 
@@ -36,19 +108,18 @@ Two consequences of that first row decide this whole design:
   (`AE 77`, the ticking clock only). Per-output workspaces do not partition
   the pixels.
 
-So, of the three things geometry might not be able to express, sway has
-one and a half:
+The measurements identify two cases that need a helper and one that does not:
 
 1. **a region** of an output on another output — no layout expresses it.
-   **Genuinely absent.**
+   **Needs a helper.**
 2. **a whole output onto a differently-shaped one** — a shared position
    *crops*, exactly the case KWin needed `set_replication_source` for, and
-   `zwlr_output_management_v1` has no replication request. **Genuinely
-   absent.**
-3. **two outputs that cannot share a position** — **empty**: every shared
+   `zwlr_output_management_v1` has no replication request. **Needs a helper.**
+3. **two outputs that cannot share a position** — **no helper needed**: every shared
    position and every overlap in the table above was accepted, silently.
 
-wmirror exists for 1 and 2, and refuses everything else by name.
+wmirror handles cases 1 and 2. `--keep-layout` also permits a same-size mirror
+when the destination must retain its separate position.
 
 ## Why a separate command, and not `wxrandr --same-as`
 
@@ -78,58 +149,6 @@ Three reasons, all measured rather than stylistic:
 `wxrandr`, `warandr` and the rest are untouched by this feature. No other
 package in the tree mentions wmirror — `tests/test_wmirror_cli.py` fails if
 one starts to.
-
-## The interface
-
-```
-wmirror SOURCE --to TARGET [--region WxH+X+Y] [--scaling fit|cover|exact]
-               [--keep-layout] [--replace] [--dry-run]
-wmirror --list                # what is running, verified, stale records reaped
-wmirror --stop TARGET         # or --stop-all
-wmirror --check               # can this session mirror at all, and what is missing
-```
-
-* **`--region WxH+X+Y`** is X11 geometry order — what `xrandr --fb`/`--pos`
-  and `wwmctl -g` speak — in **layout coordinates**, the same numbers
-  `wxrandr --query` prints beside each output and the same ones `slurp`
-  produces. (wl-mirror's own region syntax is slurp's `x,y wxh`; we
-  translate.)
-* **`--scaling`** is passed straight through: `fit` letterboxes (default),
-  `cover` fills and crops the sides, `exact` uses whole multiples only.
-  Measured on a 1920x1080 → 1280x1024 pair, content box sampled from a
-  screendump of the target head: `fit` gives 1280x720+0+152, `cover` fills
-  it (1280x1024+0+0, sides cropped), and `exact` gives **960x540+160+242**
-  — wl-mirror centres what it cannot fill, horizontally as well as
-  vertically.
-* **`--keep-layout`** is the way to ask for a mirror the layout could
-  deliver: two same-sized outputs, mirrored while the target keeps its own
-  rectangle (so the desktop keeps its area). Without it, that case is
-  refused with the `wxrandr` command that does it for free.
-* **exit codes**: 0 started (or the picture already exists), 1 refused or
-  failed, 2 usage. `--stop TARGET` with nothing running is 1; `--stop-all`
-  is always 0.
-
-## The policy, in one sentence
-
-**wl-mirror runs only for what the layout cannot express — a region, or a
-whole output onto one of a different logical size — and never for two
-outputs that share pixels, because a fullscreen window on the target is
-drawn on the source too.**
-
-What that means at the command line, all decided before the helper is
-started:
-
-| situation | wmirror |
-|---|---|
-| target already at the source's rectangle, same size, no region | **exit 0, starts nothing**: "already shows", because it does |
-| same logical size, apart | **refused**, naming `wxrandr --output T --same-as S`; `--keep-layout` overrides |
-| different logical size (or transform, or scale) | **runs** — the case a shared position crops |
-| any `--region` | **runs** — no geometry expresses it |
-| the two rectangles overlap at all | **refused**: the helper would capture its own window |
-| region not wholly inside the source | **refused** with the source's rectangle (wl-mirror would silently clamp it — measured) |
-| source == target, unknown output, disabled output | **refused**, naming it |
-| target already mirroring | **refused** (wl-mirror would run two, the older invisible); `--replace` swaps it |
-| source already mirroring the target | **refused**: they would capture each other |
 
 ## Lifetime
 

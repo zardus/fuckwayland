@@ -3,7 +3,7 @@
 **X11 was the X that stuck. w11 is the Wayland that behaves like it.**
 
 The X11 power tools, `xdotool`, `wmctrl`, `xprop` and `xrandr`, reborn as no-bullshit
-drop-in clones that work on Wayland. Same commands, same flags, same output bytes,
+drop-in clones that work on Wayland. Same commands, same flags, same output bytes (or, at least, we tried),
 same scripts, bugs faithfully included. Symlink them over the originals and your
 muscle memory never finds out the compositor changed underneath it.
 
@@ -44,7 +44,7 @@ tools did, that is a gap in this tree with a route beside it, not a policy, and 
 On a default Ubuntu 24.04 or 26.04 desktop, one file and one command. The built
 package is in the clone, at
 [`release/w11_0.4.0_all.deb`](release/w11_0.4.0_all.deb), and on the
-[releases page](https://github.com/zardus/w11/releases). From the
+[releases page](https://github.com/fixing-wayland/w11/releases). From the
 top of a clone:
 
 ```sh
@@ -57,10 +57,15 @@ That is the six tools in `/usr/bin`, the GNOME Shell bridge extension where
 `gnome-shell` looks for it, the udev rule that opens `/dev/uinput` to whoever is at
 the seat, the `warandr` menu entry, and one thing that is put there and left switched
 off, the [overlap extension](#overlapping-monitors-on-gnome). **One**
-`Architecture: all` package for **both** releases, because every module here is pure
+`Architecture: all` package for **both** releases, because (almost) every module here is pure
 standard library and your own `python3` byte compiles it at install time. The real `xdotool`, `wmctrl`, `xprop` and
 `xrandr` stay exactly as they were, so a script that calls both keeps working, and
-`sudo apt remove w11` takes every piece away again.
+`sudo apt remove w11` takes every piece away again. The GUI needs the system
+PyGObject/GTK 3 bindings, and mirroring needs the external `wl-mirror` program.
+
+**Upgrading from the legacy package:** uninstall the package published under the
+previous project name before installing `w11`. Both packages own some of the same
+files, and the current packages do not declare automatic replacement.
 
 **On GNOME, log out and back in once.** That is the whole of the manual procedure.
 `gnome-shell` reads extension directories only when a session starts, so until you do
@@ -101,22 +106,17 @@ sh gnome/install-bridge.sh          # copies the extension, enables it
 sh gnome/install-bridge.sh --check  # is it loaded? is org.w11.Bridge owned?
 ```
 
-Expect one session restart on a **first** install. That install exits 1 asking you to
-log out and back in, because gnome-shell scans extension directories at login and
-until it has, the window commands say the bridge is not running. After that the shell
-knows the extension and can take it out and put it back in the running process:
-measured on GNOME Shell 46.0 (2026-09-09), `gnome-extensions disable` releases
-`org.w11.Bridge` about 3 s later and `enable` takes it back about 4 s later
-with gnome-shell's pid unchanged, on X11 and on Wayland alike, which is what the
-package's own autostart uses. A bridge whose `extension.js` has **changed** still
-wants a logout, and that is **not yet**:
-[docs/WDOTOOL.md § Reloading the bridge](docs/WDOTOOL.md#reloading-the-bridge) has the
-route and what it costs. `wxrandr` and `warandr` never need
-it (monitors go through Mutter's own DisplayConfig), so those two work meanwhile.
-Everything `wdotool`, `wwmctl` and `wxprop` do on GNOME goes through it. What it
-exports, where it puts itself and which hotkey chords Mutter will not hand to a
-script are in [gnome/README.md](gnome/README.md), and what installing it grants, to
-whom, is [Threat model](#threat-model).
+Log out and back in after the first installation: GNOME Shell discovers the new
+extension at login. Changes to its JavaScript also require a new session. The
+installer exits 1 until that first restart is complete; rerun `--check` afterwards.
+[Reloading the bridge](docs/WDOTOOL.md#reloading-the-bridge) explains the current
+reload limitations and the route to removing them.
+
+GNOME window-management operations in `wdotool`, `wwmctl` and `wxprop` require the
+bridge. Keyboard and pointer injection use separate input paths. `wxrandr` and
+`warandr` configure monitors through Mutter's DisplayConfig and work without the
+bridge. See [the bridge reference](gnome/README.md) for its interface and
+[Threat model](#threat-model) for the access it grants.
 
 The package carries a **second, separate** extension that almost nobody needs, for
 the one thing GNOME will not do at all: place two monitors so that they share screen
@@ -152,12 +152,12 @@ socket, with a first-class backend on both sides — `wxrandr --print-backend` a
 `hypr`. **Wayfire** (0.10) needs one line of its own config and nothing installed:
 `plugins = ... ipc ipc-rules` in `~/.config/wayfire.ini`, because that list *replaces*
 the default rather than adding to it and every IPC method comes from a loaded plugin;
-without it Wayfire is a wlr-floor compositor and `wdotool` says so by name. **labwc**
+without it Wayfire uses the generic protocol backend and `wdotool` says so by name. **labwc**
 (0.9.3, which is also the Wayland session of Xfce 4.20, Ubuntu Budgie 10.10 and LXQt
-2.3), **river** and **COSMIC** need nothing installed either and get the capability
-floor their protocols carry, which footnotes **(c)**, **(m)** and **(n)** describe.
+2.3), **river** and **COSMIC** need nothing installed either and get the operations available through their protocols; see the
+[desktop support table and limitations](#desktop-support).
 This is also the family where **input needs no privilege at all**, see
-[Input access](#input-access) — COSMIC's pointer half excepted, footnote **(i)**. The GUI is the exception, and the one place a sway
+[Input access](#input-access) — COSMIC's pointer half excepted; see [COSMIC setup](#cosmic). The GUI is the exception, and the one place a sway
 install differs from a GNOME, KDE or Xfce one: a minimal sway install has
 `python3-gi` but **not** the GTK 3 typelib, so `warandr` exits 1 naming the package,
 and `sudo apt install python3-gi gir1.2-gtk-3.0` is the whole fix. Such an image has
@@ -170,17 +170,19 @@ and nothing else.
 — the socket scan finds the session with nothing set. The udev rule is wanted for the
 **pointer** only: cosmic-comp publishes `zwp_virtual_keyboard_manager_v1` and no virtual
 pointer, so `wdotool type` needs no privilege at all and `wdotool mousemove` needs the rule
-or root. `wmirror` works there on `ext_image_copy_capture_manager_v1` alone. What the
-window half does and does not do is footnote **(m)** — no move, no resize, no raise, no
-lower and no pid — and none of it is in the support matrix above, because no COSMIC golden
-has been built in CI yet.
+or root. For capture, `wmirror` uses `ext_image_copy_capture_manager_v1` there
+(with wl-mirror 0.17 or newer); it also needs the output-management protocol.
+The window backend currently has no move, resize, raise, lower or pid operation;
+see [COSMIC backend details](docs/WDOTOOL.md#the-wlroots-floor-and-cosmic).
+Its live CI coverage is listed separately from implementation support in
+[Desktop support](#desktop-support), because no COSMIC VM image has been built in CI yet.
 
 #### Cinnamon, on Wayland or on X11
 
 **Nothing to install**, and for a blunter reason than KDE's. Cinnamon exports
 `org.Cinnamon.Eval` on the session bus and implements it as a bare
 `JSON.stringify(eval(code))`, with no unsafe-mode gate anywhere in its JS tree, so the
-window plane needs no extension of any kind; displays go over
+window-management interface needs no extension of any kind; displays go over
 `org.cinnamon.Muffin.DisplayConfig`, which is Mutter's DisplayConfig under Cinnamon's
 own bus name, likewise with nothing to install. That is the KDE security note, only
 stronger: the method is there whether or not this project exists, and what `wdotool`
@@ -262,7 +264,7 @@ by hand, or leave it alone for the quarter of an hour of idleness that ends it.
 
 ```sh
 sudo apt install git python3-venv
-git clone https://github.com/zardus/w11.git
+git clone https://github.com/fixing-wayland/w11.git
 cd w11
 python3 -m venv --system-site-packages ~/.venvs/w11
 ~/.venvs/w11/bin/pip install -e .
@@ -350,7 +352,7 @@ not by what is possible.
   carries xdotool 4.20260303.1, wmctrl 1.07, xorg-xprop 1.2.8 and xorg-xrandr 1.5.4,
   the exact four versions these tools clone, so there the handover lands on the parity
   target. `packaging/arch/README.Arch` has the rest.
-* **Nix / NixOS**: `nix run github:emolabs/w11 -- --version` runs the tools
+* **Nix / NixOS**: `nix run github:fixing-wayland/w11 -- --version` runs the tools
   without installing anything, and `nix build` gives you `result/bin/` with all six
   plus `xdotool`, `wmctrl`, `xprop`, `xrandr` and `arandr` symlinks next to them
   (`wmirror` gets none, because there is no X11 original to shadow). The flake wraps
@@ -465,7 +467,17 @@ $ wwmctl -l
 $ wdotool key a          # types an 'a' into the focused window
 ```
 
-The backend token is `mutter` on GNOME, `kwin` on Plasma and `sway` on wlroots. The
+The display backend token depends on the desktop:
+
+| Desktop or interface | Token |
+|---|---|
+| GNOME | `mutter` |
+| Plasma | `kwin` |
+| sway / i3 IPC | `sway` |
+| Hyprland | `hypr` |
+| Cinnamon | `cinnamon` |
+| Generic output-management protocol | `wlr` |
+ The
 second line of `wxrandr --version` is whatever RandR version your own session
 reports. `wwmctl -l` on GNOME is the one that needs the [bridge
 extension](#gnome). If it says so instead of listing windows, that is the step still
@@ -594,7 +606,7 @@ Contract: [docs/WWMCTL.md](docs/WWMCTL.md).
 
 ![wxprop rendering a _NET_WM_ICON as ASCII art, byte-identical to real xprop](media/wxprop-demo.gif)
 
-`xprop`, dual-plane. XWayland windows report their **real** X properties, byte for
+`xprop`, for both native Wayland and XWayland windows. XWayland windows report their **real** X properties, byte for
 byte identical to xprop 1.2.8. The whole formatting machine is ported, down to the
 `WM_HINTS` and `WM_SIZE_HINTS` structured dumps, the dformat mini-language, 32-bit
 sign-extension quirks, and yes, the `_NET_WM_ICON` ASCII-art renderer. Native Wayland
@@ -609,7 +621,7 @@ $ wxprop -id 5 WM_CLASS                # a native Wayland window, synthesized
 WM_CLASS(STRING) = "foot", "foot"
 ```
 
-`-set`, `-remove` and `-spy` work on the X plane. `-f`, `-fs`, dformats, `-len`,
+`-set`, `-remove` and `-spy` work on XWayland properties. `-f`, `-fs`, dformats, `-len`,
 `-root`, `-name` and click-to-select all match the real tool, including which
 double-dash forms it rejects. Verified byte-identical against the real xprop on a
 live XWayland server. `-font` is real too: XWayland serves the core fonts, so
@@ -796,172 +808,42 @@ and how to bind one to a key on each desktop.
 
 #### Overlapping monitors on GNOME
 
-GNOME refuses to place two monitors so that they share screen area, as the table
-above says. There is one way to have it anyway. It is off, and it is the only thing in this
-repository that can cost you the session you are sitting in. Three steps:
+The optional `w11-overlap@w11` extension lets GNOME apply overlapping monitor
+positions. It accesses Mutter's private structures, so an incompatible build or a
+bug can end the graphical session. Save your work before using it.
 
-```sh
-sh gnome/install-overlap.sh     # a second Shell extension, then log out and back in
-wxrandr --gnome-overlap-allow   # read it once, agree to this build of GNOME (optional)
-wxrandr --unsafe-gnome-overlap --output Virtual-2 --pos 960x0
-```
+1. From a clone, run `sh gnome/install-overlap.sh`, then log out and back in.
+   With the `.deb` installed, log out and back in first, then run
+   `gnome-extensions enable w11-overlap@w11`. The package does not enable it for you.
+2. Run `wxrandr --gnome-overlap-status` to report availability and any saved
+   acknowledgment. This queries status; it does not apply a layout or run the
+   private-memory checks.
+3. Apply positions, for example:
+   `wxrandr --unsafe-gnome-overlap --output Virtual-2 --pos 960x0`.
+   This path changes positions only and cannot be combined with `--persistent`.
 
-The first step installs `w11-overlap@w11`, which is not the bridge
-extension the other tools use and is installed by hand for exactly that reason. It
-exits 1 until the log out and back in it asks for, the same as the bridge installer
-does, so a script that runs these in order stops there on purpose. From the package
-rather than a clone the files are already in `/usr/share/gnome-shell/extensions` and
-the first step is instead `gnome-extensions enable w11-overlap@w11`:
-nothing in the package turns this one on for you. That one needs no second log out —
-`gnome-shell` scanned the directory at the login the install itself asks for, so
-enabling it there brings it up at once (measured on 26.04) — and it does need one if
-you enable it in the same session you installed the package in, before that relogin. The
-second prints what the flag does, what it risks and what it saves, runs every check
-against the GNOME that is running, and records what those checks measured, down to
-the build id of the `libmutter` they ran against, because a version number does not
-change when Ubuntu replaces that library, so that later runs say one line instead of
-the paragraph, and an update ends the agreement rather than outliving it. It is the
-one of the three that can be left out: nothing is gated on it, and without it the
-third step still works and prints the whole paragraph every single time. The third is
-an ordinary `wxrandr` line with the flag added, and the flag does nothing at all unless
-the layout is one GNOME refuses. In `warandr` there is nothing to type at all: drag two
-monitors into an overlap and press Apply, and the window explains it once, in a dialog
-with a *Do not ask again on this GNOME* box.
+Optionally run `wxrandr --gnome-overlap-allow` to run the checks and record your
+acknowledgment for the current GNOME build. This shortens subsequent warnings; it
+does not bypass checks. A library update invalidates that acknowledgment.
+`--gnome-overlap-forget` removes it and works from a text console.
 
-Every option, safe ones and dangerous ones together:
+In `warandr`, drag the monitors into an overlap and press Apply. Its warning offers
+*Do not ask again on this GNOME*. The GUI's `--unsafe-gnome-overlap` flag suppresses
+that question for the current run without saving an acknowledgment.
 
-| option | tool | what it does |
-|---|---|---|
-| `--gnome-overlap-status` | wxrandr | says whether the route is there and whether you have agreed. Reads nothing and changes nothing |
-| `--gnome-overlap-allow` | wxrandr | runs every check, prints what you are agreeing to, and records it for this build of GNOME. Agreeing changes what is printed later and nothing else |
-| `--gnome-overlap-forget` | wxrandr | withdraws the agreement. Needs no desktop, so it works from a text console |
-| `--unsafe-gnome-overlap` | wxrandr | **the one that applies it.** Ignored unless the layout really overlaps and the route is really there. Every check still runs |
-| `--unsafe-gnome-overlap` | warandr | applies overlapping layouts without ever asking, for a window started from a hotkey or a desktop entry. Waives the question, not the checks, and records no agreement |
-| `--unsafe-gnome-overlap-unmeasured N` | wxrandr | **the only thing here that gets past a refusal.** On a GNOME nobody has measured, and only there, it says *I know this machine, try anyway*, and `N` is the GNOME Shell major that is running, so a line copied from a forum is refused on your machine. It skips that one check and no other, is never remembered, and can end your session, which is why `--dryrun` is refused with it rather than offered: the remaining checks run inside `gnome-shell`, so a dry run of a forced run is not dry. `warandr` has no way to reach it |
+If GNOME rejects the operation, read the named check before retrying. An unmeasured
+build requires a separate explicit override; its remaining checks can themselves
+end the session. See the [complete flags and compatibility checks](docs/WXRANDR.md#--unsafe-gnome-overlap-the-one-route-through)
+before considering it. If the session fails, use a text console to disable the
+extension (`gnome-extensions disable w11-overlap@w11`) before logging in again;
+[recovery details](docs/Technical.md#the-risk-that-is-left-and-getting-a-session-back)
+cover cases where the graphical session cannot be reached.
 
-The checks are what stands between this and a lost session, so read what they are
-before reaching for anything that gets past them. There is exactly one thing that
-gets past one of them, and it is the last row of that table: on a GNOME this
-project has not measured, which is what a release upgrade produces,
-`--unsafe-gnome-overlap-unmeasured 52` says *this is my machine, try anyway*, with
-the number being the GNOME in front of you. It
-skips the check that says the build is known and nothing else: the struct size,
-the sentinel, the modal-grab guard, the bounded read, the comparison against
-GNOME's own view of the monitors and Mutter's own validator all still run, and
-still refuse. It prints what may happen and how to get back before it happens,
-records nothing, and asks in full again next time. If a refusal names any other
-check, there is nothing to force: something is missing or has just proved itself
-wrong, and the answer stays no.
-
-**`--dryrun` cannot rehearse a forced run, so it is refused with it.** The checks a
-forced run makes happen inside `gnome-shell` and read through a description nobody
-has proved on this build, so they can end the session before anything of ours decides
-whether to write, and writing nothing is all a dry run ever promised. That is
-measured rather than theoretical: the first forced run ever attempted on a real GNOME
-51 was a dryrun, and it took the session with it. The two flags together are now one
-line saying so, and pointing at the two honest answers, which are to run it for real
-on a machine you can afford to lose the session on, or to add the build to the table
-first. A `--dryrun` **without** the forcing flag is unaffected: on a measured build it
-runs every guard and writes nothing, which is what it is for.
-
-What it looks like when it works:
-
-```console
-$ wxrandr --unsafe-gnome-overlap --output Virtual-2 --pos 960x0
-xrandr: --unsafe-gnome-overlap: applying a layout GNOME refuses ("logical monitors not adjacent (an overlap counts, and so does a gap)"), as agreed on 2026-09-06
-$ wxrandr --query | grep Virtual-2
-Virtual-2 connected 1920x1080+960+0 (normal left inverted right x axis y axis) 480mm x 270mm
-```
-
-Both monitors then really draw the shared region, the same pixels on each one, and a
-window inside it is on both at once. The pointer crosses the seam without a jump and
-clicks land on the window that is drawn where you clicked.
-
-**The layout is gone at the next login**, and that is deliberate rather than
-unfinished. The file GNOME saves layouts in is read back through the same validator
-that refused this one, and one entry that fails throws the whole file away at every
-boot, taking every other arrangement you had saved with it. So nothing here writes
-that file. Getting the layout back after a login is running the command again, from a
-startup script or a hotkey if you want it every time.
-
-Withdrawing the agreement is `wxrandr --gnome-overlap-forget`, which needs no desktop
-and works from a text console, and `wxrandr --gnome-overlap-status` says where you
-stand. Removing the route altogether is `sh gnome/install-overlap.sh --uninstall`
-from a clone, and `gnome-extensions disable w11-overlap@w11` from the
-package, which is the first step of the three undone whichever way you took it.
-
-The honest part: this works by writing eight bytes per monitor into the running
-`gnome-shell`, at a place that is a private detail of one build of it, and if that
-place is ever wrong `gnome-shell` dies and takes every program in your session with
-it. Six checks run before every write and refuse any build they do not recognise,
-which today means GNOME 46, GNOME 50 and GNOME 51 and nothing else.
-
-**Adding the next GNOME is meant to be small.** Everything version-specific, the
-library's file name, the typelib version, the type description and the size that
-structure has to be, is one record per release in
-`gnome/w11-overlap@w11/generations.json`, and the refusal on an
-unmeasured build prints the versions it found, the size that build reports, what
-was expected, and the two files a record goes in. Every name in a record is
-written out rather than computed, because GNOME 51 is where computing one stopped
-working: mutter 51 renumbered its library to match the GNOME version, so
-GNOME 51 carries `libmutter-51.so.0` and not the `libmutter-19` the old counting
-would have produced. The procedure, including how to regenerate a type
-description from the release's own source and how to prove it before trusting it,
-is [docs/Technical.md § 6](docs/Technical.md#the-table-and-adding-a-gnome-generation).
-
-**GNOME 51 was added by following exactly that, and nothing else**, on Ubuntu
-26.10 with `libmutter-51.so.0`: the offsets came out of mutter 51's own header,
-the record went into the two files the refusal names, and every guard was then
-watched passing and watched failing on a three head desktop. The one thing the
-procedure did not say, and now does, is that a type description must not name a
-shared library: a forced run picks its description by size on a machine whose
-`libmutter` is by definition the wrong one, and a description that names a file
-which is not there made `gjs` abort `gnome-shell` on the first call through it.
-The descriptions name none now, and an old one that does is refused by name.
-
-**So does it survive a GNOME update? Measured, and yes, so far and only so far.**
-Every update Ubuntu can deliver today was tried on desktops the Ubuntu installer
-built: eight version pairs across 24.04 and 26.04, including the pair each ISO ships,
-the newest in `-updates`, the 26.04 update sitting in `-proposed` that nobody has
-received yet, and, the case a version number cannot see, the GA library swapped
-under a newer shell. All eight applied with all six checks passing, and the private
-structure this depends on had not moved in any of them. No session was lost, none was
-damaged, nothing was ever written to the file GNOME saves layouts in, and an `apt
-upgrade` performed while an overlap was on screen changed nothing. Inside one Ubuntu
-release it cannot break by a GNOME change at all, because Ubuntu ships one `libmutter`
-generation per release and keeps it for the release's life. What moves it is a release
-upgrade, 24.04 → 26.04, and there this is meant to refuse until somebody measures the
-new GNOME.
-
-**And when it is wrong it refuses rather than breaking anything.** Twelve
-deliberately wrong descriptions of that structure have been installed on purpose
-across the three releases, wrong generation, fields of the same size swapped, the
-list read out of the wrong slot, a description naming a library that is not there,
-each of them put there the way a user would get one, at a login, and every one was
-refused by name, before any write, with `gnome-shell` still running afterwards. That
-last one is also the only input that ever did take a session down, and it did that
-before the guard which now refuses it existed, which is the dryrun described above.
-That is the bet this feature makes, and it has not lost it yet. It is still a bet:
-twelve caught is not proof that a thirteenth would be, and what would beat all of
-it is an Ubuntu update that moves that structure without moving the version number
-the checks read. Nothing in 24.04's 28 months has done it, and one
-26.04 update in `-proposed` today does exactly that to a *different* private
-structure, so the mechanism is real.
-
-**What to expect after an update**, which is the part worth knowing before you enable
-this: almost always nothing, the same command keeps working. Once per library update,
-one line saying the agreement has been withdrawn, because what you agreed to was one
-measured build of GNOME and that build is gone. Run it again and read the paragraph
-again. Once per release upgrade, a refusal naming the check that refused. And, seen
-once in all the testing, a refusal saying something holds a modal grab with nothing on
-screen, seconds after a post-update login: run the command again a moment later.
-
-The long form, with every check, what each was measured catching, what every update
-did and what risk is left, is
-[docs/WXRANDR.md § --unsafe-gnome-overlap](docs/WXRANDR.md#--unsafe-gnome-overlap-the-one-route-through),
-and the maintainer's account is
-[docs/Technical.md § 6](docs/Technical.md#why-mutter-refuses-monitors-that-share-area).
-If you are not sure you want this, you do not.
+The [extension installation guide](gnome/README.md#the-other-extension-w11-overlap)
+covers packaging and enablement. [WXRANDR.md](docs/WXRANDR.md#--unsafe-gnome-overlap-the-one-route-through)
+defines command behavior, [WARANDR.md](docs/WARANDR.md#overlapping-monitors-on-gnome)
+covers the GUI, and [Technical.md](docs/Technical.md#why-mutter-refuses-monitors-that-share-area)
+keeps the structure layouts, validation measurements and remaining risks.
 
 ### wmirror
 
@@ -1013,7 +895,7 @@ Contract: [docs/WMIRROR.md](docs/WMIRROR.md).
 
 ## Desktop support
 
-What each tool does on each desktop, measured rather than assumed, on 21 golden VM
+What each tool does on each desktop, measured rather than assumed, on 21 prepared VM
 images: GNOME 46 and 50, Plasma 5.27 and 6.6 on Wayland and the same two again on
 **Xorg**, Xfce 4.18 and 4.20, sway 1.11 on wlroots, Hyprland 0.53.3, Wayfire 0.10,
 labwc 0.9.3 under four desktops, Cinnamon 6.4 on both of its session types, MATE 1.26,
@@ -1030,25 +912,28 @@ river — so nothing about those is claimed here; `vm/README.md` says what each 
 what it is waiting for.
 `vm/README.md` keeps the rig and the verbatim messages behind these cells, and
 [docs/Technical.md § 10](docs/Technical.md#10-the-vm-rig) is what the images are and
-where a cloud flavor is measurably not a desktop install. The last whole-rig measurement
-is CI run **34340513060** (commit `a544dec`, the rig installing the `.deb` built from the
-tree): of its 29 jobs, 25 ran the smoke and every one of them was green with no FAIL
-anywhere — `noble-gnome` and `resolute-gnome` printing `90 pass, 0 fail` apiece, the X11
-handovers `19 pass, 0 fail` — while five ended before the smoke started, because CI has
-no golden-fetch rule for a Fedora, Arch or NixOS image yet. The per-flavor tallies are
-the table in
-[vm/README.md § What the tools do on each flavor](vm/README.md#what-the-tools-do-on-each-flavor).
+where a cloud flavor is measurably not a desktop install. The [per-flavor results](vm/README.md#what-the-tools-do-on-each-flavor)
+record completed live checks. Interpret the coverage separately:
 
-A **version number in the header above** is only there where that flavor's golden has
+- **Implemented:** the backend and operation exist in this tree.
+- **Verified live:** the operation was exercised on the desktop version named in the table.
+- **CI coverage:** the required VM image is available and the job reaches its smoke checks.
+  A job that stops while preparing an image provides no result for the tools.
+
+Fedora, Arch and NixOS image-fetch support is still pending in the documented CI
+setup. The VM reference records the measurements; this summary does not duplicate
+job totals that can become inconsistent as the matrix changes.
+
+A **version number in the table header below** is only there where that flavor's prepared VM image has
 been built *and* its package list is checked in under `vm/reference/` — that file is what
-a version claim is read back out of. MATE, LXQt and labwc have goldens and no such file
+a version claim is read back out of. MATE, LXQt and labwc have prepared images and no such file
 yet, so the header names them without a number and their measured versions sit in **(b)**
 and **(m)**.
 
 The X11 column is a *session type*, not a desktop: what an X11 session gets is the
 real tools, whichever desktop is drawing it.
 
-| | GNOME 46 / 50 | Plasma 5.27 / 6.6 (Wayland) | X11 sessions: Xfce 4.18 / 4.20, MATE, i3 4.25.1, LXQt, Cinnamon 6.4, GNOME and Plasma on Xorg **(j)** | sway 1.11 (wlroots) | Hyprland 0.53.3 | Wayfire 0.10 **(o)** | the labwc floor **(m)** | Cinnamon 6.4 on Wayland |
+| | GNOME 46 / 50 | Plasma 5.27 / 6.6 (Wayland) | X11 sessions: Xfce 4.18 / 4.20, MATE, i3 4.25.1, LXQt, Cinnamon 6.4, GNOME and Plasma on Xorg **(j)** | sway 1.11 (wlroots) | Hyprland 0.53.3 | Wayfire 0.10 **(o)** | the generic backend on labwc **(m)** | Cinnamon 6.4 on Wayland |
 |---|---|---|---|---|---|---|---|---|
 | **wdotool** | all 48 commands, and the window ones need the [bridge extension](#gnome) **(l)** | all 48, nothing to install **(a)** | hands over to the installed `xdotool` **(b)** | all 48, four differences **(c)** | all 48, nothing to install; no minimize and no lower | all 48, nothing skipped for tiling | all 48; no move, resize, raise or lower **(c)** | all 48, nothing to install |
 | **wwmctl** | works, the window list needs the bridge | works **(d)** | hands over to `wmctrl` | works | works, X and native windows under their real ids | works | works, X and native windows; desktops over `ext_workspace_manager_v1` | works |
@@ -1104,7 +989,7 @@ marco 1.26.2** and `resolute-lxqt` is **LXQt 2.3 on Openbox**, both of them 26.0
 Hyprland has no minimize, and it publishes nothing in `hyprctl -j clients` that orders
 windows front to back, so nothing could read a lower back.
 
-Tiling is the wrong explanation for the **labwc floor**, and the refusals there say so.
+Tiling is the wrong explanation for the **generic backend on labwc**, and the refusals there say so.
 labwc is a *stacking* compositor and still cannot move a window, because
 `zwlr_foreign_toplevel_management_v1` has `set_rectangle` — a minimise-animation hint —
 and no geometry request at all. The four refusals name the protocol:
@@ -1126,7 +1011,7 @@ N`. Neither gap is settled — taking only the XWayland half would leave a listi
 half the windows can be moved and half cannot, which is worse than a refusal that says
 what is missing.
 
-Native-window *geometry* on the labwc floor is the output rectangle plus `0,0` for the
+Native-window *geometry* on the generic backend on labwc is the output rectangle plus `0,0` for the
 same reason, and `wwmctl -d` works there only where the compositor publishes
 `ext_workspace_manager_v1` — labwc, Budgie and Xfce-on-Wayland do, sway 1.11 and
 Wayfire 0.10 do not.
@@ -1187,12 +1072,12 @@ layout, while `getdisplaygeometry` describes a desktop that is not there. wdotoo
 so when it happens, and changing the scale once clears it:
 [docs/WDOTOOL.md § Pointer accuracy](docs/WDOTOOL.md#pointer-accuracy).
 
-**(m)** The **labwc floor** is one compositor under four desktops, and the version the
+**(m)** The **generic backend on labwc** is one compositor under four desktops, and the version the
 matrix header does not name for want of a checked-in package list: labwc 0.9.3 on
 wlroots 0.19.2, and Ubuntu Budgie 10.10.2, Xfce 4.20 (`startxfce4 --wayland`) and LXQt
 2.3 (`startlxqtwayland`), each of which *is* labwc with its own panels on top. The
 registry of labwc under Xfce is byte-identical to a bare labwc's. Two more members are
-in the tree with no golden built yet and nothing about them is claimed above: **river**
+in the tree with no prepared image built yet and nothing about them is claimed above: **river**
 0.4.8 — see **(n)** — and **COSMIC** 1.6/1.7, which is not in this family on the window
 side at all (cosmic-comp publishes no `zwlr_foreign_toplevel_manager_v1`, so it gets a
 backend of its own over the COSMIC toplevel protocols: activate, close, and the
@@ -1285,8 +1170,9 @@ validated before they are believed, the real-tool search never looks in the curr
 directory, and a root run with no session never hands a planted X server another
 user's cookie.
 
-**If you want less exposure:** do not install the bridge extension or the udev rule,
-and run the tools under `sudo` when you need them. The long form of all of this, with
+**If you want less exposure:** for input injection, use `sudo` instead of
+installing the udev rule. GNOME window-management operations still require the
+bridge; running as root does not replace it. The long form of all of this, with
 the ACL mechanics and every invariant the tests pin, is
 [docs/Technical.md § 12](docs/Technical.md#12-the-threat-model-in-full).
 
@@ -1323,21 +1209,21 @@ throughout:
 [docs/Technical.md § 10](docs/Technical.md#the-no-dialog-measurement) is the method
 and the result. `tests/test_no_portal.py` is what keeps it true.
 
-**The one prompt that does exist** is GNOME's own *Keep these display settings?*, and
-only an explicit `wxrandr --persistent` asks for it. Leave the flag off and nothing
-appears. KWin has no equivalent: it applies and saves at once, and says so.
+These authorization prompts are separate from layout confirmations. GNOME shows
+*Keep these display settings?* for persistent display changes (`--persistent`, or
+`WXRANDR_PERSIST`); KWin applies and saves directly. `warandr` also has its own
+warning before using the optional GNOME overlap extension. See
+[overlap setup](#overlapping-monitors-on-gnome) for that acknowledgment.
 
 ## Releases
 
 The long form of each release, with the measurements behind it, is
 [CHANGELOG.md](CHANGELOG.md).
 
-Through 0.4 this project was called `fuckwayland`. The rename to `w11` took the
-package, the extension UUIDs, the bus names, the udev rule and the environment
-variables with it, and there is no compatibility shim. The packages declare the
-hand-over (`Conflicts`/`Replaces`, `Obsoletes`, `conflicts=`/`replaces=`), so
-installing `w11` over an old install takes the old package off with it; on the
-flake side, drop the old input.
+Through 0.4 this project was called `fuckwayland`. The rename to `w11` also changed
+package names, extension UUIDs, bus names, the udev rule and environment variables.
+There is no compatibility shim. Uninstall the legacy package before installing
+`w11` to avoid file ownership conflicts. For Nix, replace the old flake input.
 
 <!-- release-notes: 0.4 -->
 ### 0.4

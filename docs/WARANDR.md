@@ -5,6 +5,67 @@ Drop-in `arandr` clone that works on **Wayland** (through `wxrandr`) and on
 files — arandr's layout scripts load here and ours load in arandr. House rules
 per Technical.md, with one exception spelled out below.
 
+## Quick start
+
+The GUI requires GTK 3 and PyGObject; see [installation](../README.md#install).
+Open `warandr`, drag the monitor rectangles, then choose **Apply**. Save layouts
+as scripts in `~/.screenlayout/`. Loading a script does not execute arbitrary shell
+commands; see [layout scripts](#layout-scripts) for the supported format.
+
+```sh
+warandr
+warandr ~/.screenlayout/desk.sh
+warandr --print-backend --verbose
+warandr --command
+```
+
+## CLI
+
+Usage: `warandr [options] [savedfile]`. The optional file is a saved layout to open.
+
+| Option | Behavior |
+|---|---|
+| `--randr-display D` | Selects the display to configure; the GUI uses its normal display. |
+| `--force-version` | Accepted for arandr compatibility and ignored. |
+| `--save FILE` | Writes the current layout, or the loaded layout adapted to current outputs, then exits without opening the GUI. |
+| `--command` | Prints the command Apply would run, including a forced backend, then exits. |
+| `--backend NAME` | Selects `auto`, `x11`, `sway`, `hypr`, `wlr`, `mutter`, `cinnamon` or `kwin`. Aliases: `hyprland`, `gnome`, `muffin`, `kde`. Applies to the GUI, `--command` and `--save`. |
+| `--print-backend` | Prints the selected backend token and exits. |
+| `--verbose` | With `--print-backend`, explains the selection and reports session details. |
+| `--version` | Prints the warandr release and exits. |
+| `--unsafe-gnome-overlap` | Suppresses the GUI overlap warning for this run; all compatibility checks still apply. |
+| `-h`, `--help` | Prints command-line help. |
+
+An unknown backend produces an error listing the valid names. To inspect a valid
+selection, use:
+
+```console
+$ warandr --print-backend --verbose
+mutter
+kind: Wayland
+runs: /usr/bin/python3 -m wxrandr
+chosen by: wxrandr package at /usr/lib/python3/dist-packages
+session: wayland
+compositor: Mutter
+protocol: org.gnome.Mutter.DisplayConfig (D-Bus)
+available: yes
+```
+
+The report combines warandr's selection with the child backend's session details.
+Backend, argument and file errors print `warandr: ...` and exit 1.
+
+`--unsafe-gnome-overlap` is the last option and the only dangerous one, and
+it is the command-line half of [Overlapping monitors on
+GNOME](#overlapping-monitors-on-gnome): it applies an overlapping
+layout without ever opening that dialog, for a window started from a hotkey
+or a desktop entry where there is nobody to answer it. It waives the
+question and not one check, and it records no agreement — the window's box
+is what records one, so a hotkey cannot agree on the user's behalf. Where
+the route is not there, or the layout does not overlap, it changes nothing.
+The flag that gets past an *unmeasured* GNOME is a wxrandr option with no
+warandr spelling at all, on purpose: WXRANDR.md §
+[`--unsafe-gnome-overlap-unmeasured`](WXRANDR.md#forcing-past-a-refusal-on-a-gnome-nobody-has-measured).
+
 ## Toolkit rule (the exception)
 
 Everything in this repo is pure-stdlib Python, except the warandr GUI, which
@@ -47,12 +108,16 @@ First match wins:
    (`x11`/`wayland`) overrides the kind. Tests point this at the fake. A
    forced Wayland backend appends `--backend NAME` to it (it is still "the
    command to run instead"), a forced `x11` does not.
-2. `$WAYLAND_DISPLAY` set and the `wxrandr` package importable (the repo
+2. shared session detection identifies Wayland and the `wxrandr` package is importable (the repo
    checkout, or the pyz that bundles it): run the **same interpreter** with
    `-m wxrandr`, `PYTHONPATH` pointing at wherever the package was found (a
    zipapp path works — zipimport). No second copy of wxrandr is needed.
-3. `$WAYLAND_DISPLAY` set and `wxrandr` on `PATH`.
-4. `xrandr`.
+3. shared session detection identifies Wayland and `wxrandr` is on `PATH`.
+4. `xrandr`. Automatic selection can fall back to the XWayland view when
+   wxrandr is absent. An explicitly forced Wayland backend instead errors.
+
+Session detection also works with missing environment variables; see
+[session discovery](Technical.md#2-session-discovery-and-the-x11-handover).
 
 warandr **never hands its own process over** to the real tool (no `execve`,
 unlike the four clones): it chooses which one to *run*, as a child — which is
@@ -603,52 +668,6 @@ no `wxrandr`), appends `- note: wxrandr is not on PATH, the script needs
 it` — arandr's scripts call bare `xrandr`, ours call bare `wxrandr`, and a
 hotkey running the script needs it installed. Without a display warandr
 exits 1 with one line (`warandr: cannot open display ...`).
-
-## CLI
-
-`warandr [--randr-display D] [--force-version] [savedfile]` (arandr's, the
-last one accepted and ignored — warandr never refuses a RandR version), plus
-`--save FILE` (write the current layout — or SAVEDFILE re-based on the
-current outputs — as a layout script, no GUI), `--command` (print what
-Apply would run, the `--backend` flag included when one is forced) and the
-two backend spellings, the same as wxrandr's so a hotkey can pin one:
-`--backend NAME` (applies to the GUI, `--command` and `--save` alike; an
-unknown name is `warandr: unknown backend 'banana' (valid: auto, x11, sway,
-wlr, mutter, kwin)`) and `--print-backend`, which prints the token
-(`x11`, `mutter`, ...) and exits without a GUI — with `--verbose`, the same
-explanation the indicator's tooltip carries, under a first line that is
-still the bare token, spelled like wxrandr's own `--print-backend
---verbose`:
-
-```console
-$ warandr --print-backend --verbose
-mutter
-kind: Wayland
-runs: /usr/bin/python3 -m wxrandr
-chosen by: wxrandr package at /usr/lib/python3/dist-packages
-session: wayland
-compositor: Mutter
-protocol: org.gnome.Mutter.DisplayConfig (D-Bus)
-available: yes
-```
-
-(One `chosen by:` line, never two: warandr passed the `--backend` flag that
-wxrandr would otherwise report back to it, so the inner answer is dropped
-where it only restates the outer one.) `--version` prints `warandr
-<release>` and exits. Exit 1 with `warandr: ...` on backend/parse/file
-errors.
-
-`--unsafe-gnome-overlap` is the last option and the only dangerous one, and
-it is the command-line half of [Overlapping monitors on
-GNOME](#overlapping-monitors-on-gnome) above: it applies an overlapping
-layout without ever opening that dialog, for a window started from a hotkey
-or a desktop entry where there is nobody to answer it. It waives the
-question and not one check, and it records no agreement — the window's box
-is what records one, so a hotkey cannot agree on the user's behalf. Where
-the route is not there, or the layout does not overlap, it changes nothing.
-The flag that gets past an *unmeasured* GNOME is a wxrandr option with no
-warandr spelling at all, on purpose: WXRANDR.md §
-[`--unsafe-gnome-overlap-unmeasured`](WXRANDR.md#forcing-past-a-refusal-on-a-gnome-nobody-has-measured).
 
 ## Launching on GNOME (verified live: Ubuntu 24.04 / GNOME 46, 26.04 / GNOME 50)
 

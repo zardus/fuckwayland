@@ -61,12 +61,12 @@ def _parser():
                    help="print the command Apply would run and exit; no GUI")
     p.add_argument("--backend", metavar="NAME",
                    help="force the backend for this run: %s (aliases gnome, "
-                        "kde); auto is the default and picks the supported "
-                        "one. Beats $WXRANDR_BACKEND, which beats detection"
+                        "kde, hyprland, muffin); auto detects the session. "
+                        "Beats $WXRANDR_BACKEND, which beats detection"
                         % ", ".join(randr.BACKENDS))
     p.add_argument("--print-backend", action="store_true",
-                   help="print the backend token (x11, sway, wlr, mutter, "
-                        "kwin) and exit; no GUI")
+                   help="print the backend token (x11, sway, hypr, wlr, "
+                        "mutter, cinnamon, kwin) and exit; no GUI")
     p.add_argument("--verbose", action="store_true",
                    help="with --print-backend: add what runs, why it was "
                         "picked, and what that tool says about the session")
@@ -75,7 +75,7 @@ def _parser():
                         "first, for a window started from a hotkey or a "
                         "desktop entry. Waives the question, not the checks, "
                         "and records no agreement. To agree once instead, "
-                        "see the wxrandr flag that records it")
+                        "use wxrandr --gnome-overlap-allow")
     return p
 
 

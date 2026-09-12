@@ -2,8 +2,10 @@
 
 There is a four-line script on a lot of machines. Find the terminal, raise it, type
 the command, press Return. It has worked since 2007, which is when `xdotool` shipped.
-Then the session underneath it becomes a Wayland session, and the script prints
-nothing, because `xdotool` no longer does anything at all, and it does not say so.
+Then the session underneath it becomes a Wayland session and the terminal runs
+as a native Wayland application. The script can no longer find that window through
+X11. `xdotool` can still address XWayland clients, but that does not restore the
+script's ability to control native Wayland windows.
 
 Go looking and the first thing you find is that this is already well known. Jordan
 Sissel, who wrote xdotool, knows it better than anyone. His post
@@ -472,5 +474,5 @@ why I am not happy about it either. But the four-line script works again, on GNO
 on KDE and on sway and on X11, and it does not know which. That was the entire
 requirement.
 
-The tools are at [github.com/zardus/w11](https://github.com/zardus/w11).
+The tools are at [github.com/fixing-wayland/w11](https://github.com/fixing-wayland/w11).
 [Technical.md](Technical.md) is where to start if you want to change something.

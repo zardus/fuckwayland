@@ -29,7 +29,10 @@ pkgdesc="The X11 power tools (xdotool, wmctrl, xprop, xrandr, arandr) as drop-in
 # gobject-introspection 1.86.0-2 and python-gobject 3.56.3-1
 # [recon2/pkg-arch.md 5].  The other honest option was arch=('x86_64').
 arch=('any')
-url="https://github.com/zardus/w11"
+url="https://github.com/fixing-wayland/w11"
+# Homepage updated to the canonical repository. The release checksum below is
+# retained; verify the tagged archive here before publishing to the AUR. CI uses
+# a local source archive, as described below.
 
 # BSD-2-Clause, copied from the SPDX-License-Identifier header on line 1 of the
 # LICENSE the owner added in HEAD 375d815; pyproject.toml and debian/copyright

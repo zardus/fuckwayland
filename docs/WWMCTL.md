@@ -6,6 +6,13 @@ its machinery. Pure-stdlib Python, same rules as the rest of the tree
 ([Technical.md](Technical.md)): no third-party dependency, byte-parity output against
 the installed original.
 
+## Help and additional options
+
+`wwmctl --help` reproduces the installed wmctrl generation's help text; it can
+therefore omit options accepted by wwmctl. The [complete command surface](#wmctrl-surface-byte-parity-against-wmctrl-107)
+and the “Two oracle generations” paragraph below describe those additions and
+`WWMCTL_WMCTRL_GENERATION`. Original help wording is kept for byte compatibility.
+
 ## The dual-plane trick
 
 On wlroots compositors the *compositor itself* is the X window manager for XWayland, so

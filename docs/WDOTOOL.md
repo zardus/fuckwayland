@@ -11,37 +11,22 @@ session discovery, the X11 handover, the two wire clients, the environment table
 the test map. Read [gnome/README.md](../gnome/README.md) for the bridge extension's own
 interface.
 
-## Architecture
+## Common commands
 
-- **Input injection**: virtual evdev devices via `/dev/uinput` (keyboard, relative
-  mouse, absolute pointer mimicking a QEMU USB tablet). Compositor-agnostic — injection
-  happens at the kernel input layer, so it works on GNOME, KDE, wlroots, everything.
-  Both halves have a second path where the kernel one is closed:
-  `zwp_virtual_keyboard_v1` (`vkbd.py`) for keys and `zwlr_virtual_pointer_v1`
-  (`vptr.py`) for the pointer, neither of which needs any privilege on wlroots — see
-  [Typing and clicking with no privilege](#typing-and-clicking-with-no-privilege---vkbd)
-  for the one policy that picks them.
-- **Daemon**: first invocation auto-spawns itself as a daemon (`argv[1] == "__daemon"`,
-  double-fork; see `__main__.py`). The daemon owns the uinput devices (device creation
-  costs ~600ms of compositor hotplug latency — pay it once), tracks the injected cursor
-  position, and serves JSON-lines on a unix socket in `session.runtime_dir()`.
-- **Window management**: per-compositor backends behind `backend.WindowBackend`.
-  Detection order (`backend_detect.py`): `WDOTOOL_BACKEND` → sway/i3 IPC socket →
-  KWin (`org.kde.KWin` owned) → GNOME (`org.gnome.Shell` owned) → wlr
-  foreign-toplevel → error; the two D-Bus checks are one `ListNames` over
-  `dbus_mini`, and the connection is reused by the GNOME backend. A GNOME session
-  without the bridge extension fails with the install hint instead of falling
-  through (Mutter has no foreign-toplevel protocol). Window IDs are backend-native
-  numeric ids (sway: node id; GNOME: `Meta.Window.get_id()`), printed in decimal
-  like xdotool.
-- **Running under sudo / as root over ssh**: the session's sockets, bus and X cookie
-  are found for us by `w11common/session.py`. What it looks at, in which order, and
-  why `session.py` and `passthrough.py` answer different questions, is
-  [Technical.md § Session discovery](Technical.md#2-session-discovery-and-the-x11-handover).
-- **On an X11 session wdotool does not run at all**: it `execve`s the real `xdotool`
-  with argv untouched. [Technical.md § The X11 handover](Technical.md#2-session-discovery-and-the-x11-handover)
-  is the contract, including the four "not us" guards and what stays ours (`keys`,
-  `__keymap`, `--layout`, `--vkbd`).
+On GNOME, install the [bridge](../README.md#gnome) for window operations. Input
+injection needs the [input access setup](../README.md#input-access).
+
+```sh
+wdotool search --name Terminal       # find window IDs
+wdotool getactivewindow              # print the focused window ID
+wdotool type 'Hello'                 # type into the focused window
+wdotool key ctrl+l                   # send a key combination
+wdotool click --repeat 2 1            # double-click the left button
+```
+
+See the [options table](#the-option-surface-per-command),
+[current differences](#current-compatibility-differences), and
+[keyboard layouts](#keyboard-layouts). Implementation details follow below.
 
 ## `click --repeat`
 
@@ -73,19 +58,59 @@ MAXIMIZED_HORZ` maximizes horizontally only, exactly as upstream does). That is 
 own code, i.e. every Wayland session; on an X11 session we hand over, so what you get
 there is the command set of the `xdotool` that is installed.
 
-Wayland forces a few honest approximations:
+### Current compatibility differences
 
-| | |
-|---|---|
-| `key`/`type` `--window` | activates the target first, then injects (no XSendEvent) |
-| `getmouselocation` | asks the compositor where the pointer is (GNOME, KDE); on sway/wlroots nothing can be asked — the IPC has no pointer query and `zwlr_virtual_pointer_v1` has no events at all — so it reports the position wdotool itself put the pointer at, which is exact, and **refuses with that reason** rather than guessing when wdotool has not moved it — and the refusal names what would close it: a wlr-layer-shell overlay whose `wl_pointer.motion` IS the cursor (route 1), at the cost of a surface that eats the events it reads and has to be unmapped before the user's next click, or evdev off `/dev/input` (route 4), at the cost of read access to the devices and an anchor to count from. Wayfire is the one member of the family that needs none of that: its IPC publishes the cursor. Where the compositor *has* a pointer query and it failed — a bridge marked out of date for the running GNOME Shell, KWin's scripting service refusing — the refusal is that failure, the same line every other command prints, not the wlroots one |
-| `--clearmodifiers` | clears and restores the modifiers **wdotool itself** holds (from `keydown`). One held on a physical keyboard cannot be cleared through uinput at all — the kernel drops a key-up from a device that does not hold the key — and pressing it back afterwards would leave it stuck, so it is left alone; wdotool names it if it may read `/dev/input/event*` (root), and is silent, with identical behaviour, if it may not. On the virtual-keyboard path there is no such gap: modifier state there is per device, so a modifier on a real keyboard does not reach our keystrokes in the first place. On a *pointer* command the modifier still rides the click whichever device sends it, because modifier state reaches the seat from the seat's keyboards, so that warning stays |
-| `type` non-US chars | typed through the session's active layout; characters it cannot produce warn and skip |
-| `search --role` | roles don't exist on Wayland; matches against empty string |
-| `windowraise`/`lower` | floating windows only (tiling has no z-order) |
-| `set_window`, `windowreparent`, viewport/desktop-count setters | warn and succeed (cosmetic here; scripts keep running). `windowreparent`'s warning names its routes: one `XReparentWindow` over the X plane for an XWayland window (route 5), a request in the compositor for a native one (route 6) |
-| `behave`, `behave_screen_edge` | both wait on X events that do not exist here, so both are unsupported and fail cleanly. Every other `--sync`, `windowmap`'s included, is implemented and bounded: see [`--sync` waits are bounded](#--sync-waits-are-bounded) |
-| `selectwindow` | click-to-select on GNOME (a bridge grab, needs bridge v2 or newer) and on KDE (KWin's own picker); Escape cancels with rc 1, as does a second picker or a shell that is already modal (the GNOME overview, a menu). sway and i3 have no picker in their IPC, so there the wait ends on the next focus *change* and re-selecting the focused window never returns |
+These describe our Wayland implementation. On X11, the installed original's
+behavior applies. A command that warns and returns success may have made no change;
+check the backend-specific entry before relying on it.
+
+| Operation | Affected backend or input path | Current behavior |
+|---|---|---|
+| `key`/`type --window` | Wayland input | Activates the target before injection; does not send an XSendEvent to it. |
+| `getmouselocation` | Backend-dependent | Queries the compositor where available; otherwise reports a position established by wdotool or fails. See [pointer queries](#pointer-queries). |
+| `--clearmodifiers` | uinput / virtual keyboard | Treatment of physically held modifiers depends on the input path. See [physically held modifiers](#physically-held-modifiers). |
+| `type` non-US characters | Active layout | Warns and skips characters the layout cannot produce. |
+| `search --role` | Backends without role metadata | Matches against an empty role. Reading `WM_WINDOW_ROLE` for XWayland clients is route 5; native clients need compositor metadata (routes 2–3), with a per-backend reader. |
+| `windowraise` / `windowlower` | Backend-dependent | Support and focus side effects vary; see [backend notes](#backend-notes) and the [KDE differences](#what-differs-from-x-on-kde-plasma). |
+| `set_window`, `windowreparent` | Current Wayland command handlers | Warn and return success without applying the operation. XWayland support needs X property/reparent requests (route 5); native support needs compositor hooks (routes 2–3, or 6), implemented per operation. |
+| Desktop count / viewport setters | Backend-dependent | Some backends change workspaces; others warn and return success. KWin changes the desktop count subject to its limits. See [KDE differences](#what-differs-from-x-on-kde-plasma) and [base-class fallbacks](#what-the-base-class-answers-and-for-whom). |
+| `behave`, `behave_screen_edge` | Current Wayland handlers | Not yet implemented; they fail. Per-window events need backend event subscriptions (routes 1–3); screen edges need pointer tracking, with a compositor hook or input-device access where no query exists (routes 2–4). These require persistent listeners and mapping events to xdotool semantics. |
+| `selectwindow` | GNOME / KWin | Uses the compositor's picker. Cancellation and concurrent-picker behavior differ; see the backend notes. |
+| `selectwindow` | sway / i3 | Waits for the next focus change. Selecting the already focused window does not complete it. A dedicated picker needs an input-grabbing surface or compositor integration (routes 1–3), with a temporary UI and event handling. |
+
+### Pointer queries
+
+GNOME, KDE and Wayfire can report the current cursor position. If such a query
+fails, the command reports that backend's error. sway IPC and the generic virtual
+pointer protocol do not supply a position query, so wdotool reports the position
+it established itself and refuses when no such position is known.
+
+Tracking arbitrary pointer movement there is not yet implemented. A layer-shell
+overlay could read `wl_pointer.motion` (route 1), but it would intercept input and
+must be removed before the next click. Reading evdev events (route 4) needs device
+permissions and a known starting position. See [pointer accuracy](#pointer-accuracy)
+for coordinate and scaling details.
+
+### Physically held modifiers
+
+On uinput, `--clearmodifiers` clears and restores keys held by wdotool itself.
+A key-up on its virtual device does not release a key held by a physical keyboard.
+Those keys remain held; wdotool warns when it has permission to inspect the input
+devices. Without that permission the behavior is the same, but no warning is emitted.
+
+The virtual-keyboard path has separate modifier state for its keystrokes. Pointer
+clicks still inherit keyboard modifiers at the seat, so the physical-modifier warning
+also applies to pointer commands. Clearing physical modifiers through uinput is not
+yet supported; a compositor input hook (routes 2–3) would need to save and restore
+seat state without leaving keys stuck.
+
+### Help and additional options
+
+`wdotool <command> --help` preserves the original command's help text, including
+upstream wording. Our additional leading options, `--layout` and `--vkbd`, are
+documented under [forcing the layout](#forcing-the-layout) and
+[unprivileged input](#typing-and-clicking-with-no-privilege---vkbd); `wdotool keys`
+has [its own help](#which-key-was-that-wdotool-keys).
 
 ### The option surface, per command
 
@@ -116,9 +141,7 @@ that are (`--layout` and `--vkbd`) go **before** the command and are
 
 `--sync` is bounded everywhere it appears: [`--sync` waits are
 bounded](#--sync-waits-are-bounded). `search --title` is upstream's deprecated
-spelling of `--name` and behaves as one. `scripts/check-docs.py` reads this table's
-neighbourhood the hard way, by running every one of those help texts and comparing
-the options in them against the documents.
+spelling of `--name` and behaves as one. `scripts/check-docs.py` compares the options in command help with this table.
 
 Desktops map to workspaces (0-based). `windowunmap`/`windowminimize` use the
 scratchpad on sway. GNOME has a longer list of honest differences (shell grabs, the
@@ -365,6 +388,8 @@ sent; `--info` summarises it (groups, active group, whether the US bypass takes 
 a group other than the active one, and `--keymap PATH` reads a keymap from a file.
 For "what do I press for this character?" the documented command is
 `wdotool keys explain`, below.
+
+<a id="typing-and-clicking-with-no-privilege---vkbd"></a>
 
 ## Typing and clicking with no privilege (`--vkbd`)
 
@@ -948,6 +973,40 @@ and the way out. It does not take DisplayConfig's number for the pointer: that w
 tried, and since Mutter's absolute-input mapping uses the stale rectangle too, it lands
 every target at twice the coordinate asked for (`wdotool/layoutbox.py`). Changing the
 scale once clears the whole state; 26.04 and Plasma never enter it.
+
+## Architecture
+
+- **Input injection**: virtual evdev devices via `/dev/uinput` (keyboard, relative
+  mouse, absolute pointer mimicking a QEMU USB tablet). Compositor-agnostic — injection
+  happens at the kernel input layer, so it works on GNOME, KDE, wlroots, everything.
+  Both halves have a second path where the kernel one is closed:
+  `zwp_virtual_keyboard_v1` (`vkbd.py`) for keys and `zwlr_virtual_pointer_v1`
+  (`vptr.py`) for the pointer, neither of which needs any privilege on wlroots — see
+  [Typing and clicking with no privilege](#typing-and-clicking-with-no-privilege---vkbd)
+  for the one policy that picks them.
+- **Daemon**: first invocation auto-spawns itself as a daemon (`argv[1] == "__daemon"`,
+  double-fork; see `__main__.py`). The daemon owns the uinput devices (device creation
+  costs ~600ms of compositor hotplug latency — pay it once), tracks the injected cursor
+  position, and serves JSON-lines on a unix socket in `session.runtime_dir()`.
+- **Window management**: per-compositor backends behind `backend.WindowBackend`.
+  Detection uses an explicit `WDOTOOL_BACKEND` first, then sway/i3 IPC,
+  Hyprland IPC, KWin/GNOME/Cinnamon on the session bus, Wayfire IPC, and finally
+  the advertised wlr or COSMIC toplevel protocols. GNOME detection checks for
+  Mutter or the bridge as well as `org.gnome.Shell`; if those are absent, it
+  checks the registry so Budgie is not mistaken for GNOME. See
+  [window backend detection](Technical.md#4-window-backends) for the precise
+  rule and failure handling. A detected GNOME session without the bridge fails
+  with installation instructions. Window IDs are backend-native
+  numeric ids (sway: node id; GNOME: `Meta.Window.get_id()`), printed in decimal
+  like xdotool.
+- **Running under sudo / as root over ssh**: the session's sockets, bus and X cookie
+  are found for us by `w11common/session.py`. What it looks at, in which order, and
+  why `session.py` and `passthrough.py` answer different questions, is
+  [Technical.md § Session discovery](Technical.md#2-session-discovery-and-the-x11-handover).
+- **On an X11 session wdotool does not run at all**: it `execve`s the real `xdotool`
+  with argv untouched. [Technical.md § The X11 handover](Technical.md#2-session-discovery-and-the-x11-handover)
+  is the contract, including the four "not us" guards and what stays ours (`keys`,
+  `__keymap`, `--layout`, `--vkbd`).
 
 ## Command dispatch contract
 

@@ -2,8 +2,8 @@
 
 This is the orientation document. It describes the tree **as it is now**, after the
 0.3 subtraction: one hit-test, one number parser, one layout decision, one detach
-protocol, one transform table, a shared `w11common/` package, and four display
-backends that are one shape. Read it if you are about to change something and want to
+protocol, one transform table, a shared `w11common/` package, and display
+backends with a shared interface. Read it if you are about to change something and want to
 know where that something lives.
 
 The user-facing documents are elsewhere and this file does not repeat them: the
@@ -12,6 +12,12 @@ contract of its own — [WDOTOOL.md](WDOTOOL.md), [WWMCTL.md](WWMCTL.md),
 [WXPROP.md](WXPROP.md), [WXRANDR.md](WXRANDR.md), [WARANDR.md](WARANDR.md),
 [WMIRROR.md](WMIRROR.md), plus [gnome/README.md](../gnome/README.md) for the bridge
 extension and [vm/README.md](../vm/README.md) for the rig.
+
+Terminology used here: an **oracle** is an original X tool used for comparison;
+a **golden image** is a prepared VM image reused by tests; a **test seam** is an
+interface replaced by a test double. The **X plane** means the X11 connection used
+for properties and identities, while the **compositor interface** handles native
+window operations. User guides use these explicit descriptions where possible.
 
 ## 1. The six tools
 
@@ -63,7 +69,7 @@ numbers (`1.07`, `xprop 1.2.8`) and deliberately not ours.
 
 `scripts/build-pyz.sh` writes one zipapp per tool into `dist/`. Each is a plain
 `python3 -m zipapp` with a `/usr/bin/env python3` shebang and a
-`w11-clone:` stamp in its first few hundred bytes, which is the head sniff
+`w11-clone:` stamp in its first few hundred bytes, which is the file-signature check
 `w11common.passthrough.is_us()` uses to recognise a copy of ourselves installed under
 an original's name. What each bundle contains:
 
@@ -205,7 +211,7 @@ tests hermetic):
 is not us. Four independent "not us" guards, because each alone has a hole:
 `samestat` against our own entry points; `basename(realpath(cand))` in
 `{wdotool, wwmctl, wxprop, wxrandr, warandr}` (the normal install, where
-`xdotool` is a *symlink* to our `wdotool`); a 4 KiB head sniff for the
+`xdotool` is a *symlink* to our `wdotool`); a signature check in the first 4 KiB for the
 `w11-clone:` stamp `scripts/build-pyz.sh` writes into every zipapp
 (the build fails without it) or for an import of one of our packages, which
 is what a `pip`-generated console script looks like — never an ELF, and
@@ -505,6 +511,19 @@ Pure-stdlib D-Bus client for the session bus and any `unix:` address (QEMU's
   properties, `SetUIInfo`).
 
 ## 4. Window backends
+
+`wdotool/backend_detect.py` chooses in this order: `WDOTOOL_BACKEND`, sway/i3 IPC,
+Hyprland IPC, KWin, GNOME, Cinnamon, Wayfire IPC, then the wlr or COSMIC toplevel
+protocols. Failed sway/Hyprland connection attempts can fall through. The bus-based
+backends report their own failures instead of silently switching implementations.
+
+GNOME detection requires `org.gnome.Shell` plus either the bridge or Mutter's
+DisplayConfig name. If neither companion name is present, a toplevel protocol
+identifies a different compositor (such as Budgie's labwc session); without such a
+protocol the GNOME backend supplies the bridge diagnostic. At the final registry
+step wlr wins when advertised; COSMIC requires both its toplevel-info protocol and
+the standard foreign-toplevel-list protocol. Otherwise detection reports an error.
+
 
 Eight backends implement one interface, `wdotool/backend.py:WindowBackend`, and three
 tools drive them: `wdotool`'s window commands, all of `wwmctl`, and `wxprop` for
@@ -2052,13 +2071,13 @@ way out and make the status 120 exactly as stdout's do.
 
 ## 8. The environment
 
-Eighteen rows below, and rather more names than rows, because some of them group.
+Related environment variables are grouped in the table below.
 All but seven are also written down in the README, in a tool contract or in
 `gnome/README.md`; the seven in **bold** are written down only here.
 
 | variable | read by | effect |
 |---|---|---|
-| `W11_PASSTHROUGH` | all six | `never` runs our own code whatever the session, `always` hands over whatever the session. `WDOTOOL_PASSTHROUGH`, `WWMCTL_PASSTHROUGH`, `WXPROP_PASSTHROUGH` and `WXRANDR_PASSTHROUGH` do the same per tool |
+| `W11_PASSTHROUGH` | `wdotool`, `wwmctl`, `wxprop`, `wxrandr` | `never` runs our own code whatever the session, `always` hands over whatever the session. `WDOTOOL_PASSTHROUGH`, `WWMCTL_PASSTHROUGH`, `WXPROP_PASSTHROUGH` and `WXRANDR_PASSTHROUGH` do the same per tool |
 | `WDOTOOL_REAL_XDOTOOL` and friends | `passthrough` | where the original is. Also `WWMCTL_REAL_WMCTRL`, `WXPROP_REAL_XPROP`, `WXRANDR_REAL_XRANDR`. Set but unusable is an error naming the variable, never a silent fallback |
 | `WDOTOOL_LAYOUT`, `WDOTOOL_XKB_KEYMAP` | the daemon | the character table, a keymap from a file |
 | `WDOTOOL_XKB_GROUP` | the **command**, carried to the daemon on the request | the layout group to pin. Read where the user set it, like `--layout`, because the daemon keeps the environment it was spawned with and outlives it |
@@ -2077,6 +2096,9 @@ All but seven are also written down in the README, in a tool contract or in
 | `WDOTOOL_GNOME_AUTOLOAD=1` | `backend_gnome` | opt in to one `org.gnome.Shell.Eval` that tries to load the installed extension. Eval is a privileged interface and this is off by default |
 | **`XPROPFORMATS`** | `wxprop.cli` | a format file, exactly as real xprop's `-fs` and `$XPROPFORMATS` do |
 | **`DEBUG`** | `wdotool` | set to anything: print the traceback instead of the one-line error. Every `main()` catches broadly, which is right for users and wrong for whoever is debugging |
+
+`warandr` selects a child command and ignores `W11_PASSTHROUGH` when detecting
+the session. `wmirror` has no original tool to hand over to.
 
 `WARANDR_TEST_*`, `FAKE_XRANDR_*`, `FAKE_REAL_*`, `W11_SHIM_SEAMS`, `WD_TEST_*` and
 `SLOW_QUERY` are test seams and are documented where they are used, in
@@ -2457,21 +2479,15 @@ licence that is not one of `/usr/share/licenses/common/` — and both build scri
 identifier back out of `LICENSE` (an `SPDX-License-Identifier:` header verbatim, otherwise a
 heading table) and refuse the build if the spec or the recipe disagrees with it.
 
-One thing the project has not settled and this file will not settle for it: the upstream URL
-is spelled **three** ways. `debian/copyright`'s `Source:` says github.com/zardus/w11;
-`README.md`'s install section, `debian/control`'s `Homepage:`, the spec's `URL:` and the
-PKGBUILD's `url=` say github.com/zardus/w11; and the flake's own invocation
-— `nix run github:emolabs/w11`, in `nix/package.nix`'s `meta.homepage`, in README.md's
-Nix bullet and in this file's own flake section — says emolabs. Whoever settles it should change
-every one of them in the same commit — `debian/copyright`, `debian/control`, `README.md` (which
-carries two of the three spellings), the spec, the PKGBUILD, `nix/package.nix` — and re-measure
-the PKGBUILD's pinned `sha256sums` against the tarball at whichever host wins (today's pin is
-the GitHub tarball, 3,952,338 bytes). CI never uses either line — `build-pkgbuild.sh`
-rewrites the `url=` and `nix build` here is always a local path — so nothing is red today.
+The canonical repository is `https://github.com/fixing-wayland/w11`. Installation
+examples, package homepages and extension metadata use that address. The Arch
+recipe retains its existing release-archive checksum. Before publishing it to the
+AUR, verify the archive at the canonical address and update the tag and checksum
+together; the current CI build uses a local source archive instead.
 
 ### The flake, and the NixOS module
 
-`nix run github:emolabs/w11 -- --version` runs the tools without installing anything.
+`nix run github:fixing-wayland/w11 -- --version` runs the tools without installing anything.
 The flake is six packages rather than one: `w11` (five of the six tools, stdlib,
 216.0 MiB of closure), `warandr` (the one GTK program, 546.9 MiB), `gnome-bridge`,
 `gnome-overlap`, `udev-rules` and `x11-shadows`. The two installable ones have deliberately

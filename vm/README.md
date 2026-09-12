@@ -45,8 +45,8 @@ $ vm/vmctl shot gnome1 --all /tmp/gnome1     # -> /tmp/gnome1-0.png, -1.png, -2.
 $ vm/vmctl head gnome1 3 1280x1024           # 4th monitor (Virtual-4) appears in GNOME
 $ vm/vmctl head gnome1 3 off                 # ...and goes away again
 $ vm/vmctl heads gnome1                      # guest connectors after a forced re-probe
-$ vm/vmctl scp gnome1 dist/wxrandr.pyz gnome1:/home/test/
-$ vm/vmctl user gnome1 -- python3 /home/test/wxrandr.pyz --query
+$ vm/vmctl scp gnome1 dist/wxrandr gnome1:/home/test/
+$ vm/vmctl user gnome1 -- python3 /home/test/wxrandr --query
 $ vm/vmctl stop gnome1                       # or: destroy (also deletes the overlay)
 $ vm/selftest.sh noble-gnome                 # the whole thing end to end, ~40 s (see below)
 $ vm/selftest.sh resolute-kde                # same check, Plasma's own tools (see below)

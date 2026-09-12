@@ -36,34 +36,32 @@ def parser() -> argparse.ArgumentParser:
         prog="wmirror", add_help=True,
         usage="%(prog)s SOURCE --to TARGET [options]\n"
               "       %(prog)s --list | --stop TARGET | --stop-all | --check",
-        description="Mirror an output, or a region of one, onto another "
-                    "output on wlroots compositors, by running wl-mirror "
-                    "and owning its lifetime.",
-        epilog="Only for what the layout cannot express: two outputs of the "
-               "same size at the same position already mirror, byte for "
-               "byte, with `wxrandr --output TARGET --same-as SOURCE`, and "
-               "wmirror sends you there. A running mirror is a resident "
-               "process that keeps the compositor compositing every frame; "
-               "`--list` shows it, `--stop` ends it. wlroots only.")
+        description="Mirror an output or region onto another output by "
+                    "starting and stopping wl-mirror. Requires output-management "
+                    "and capture protocols (including on COSMIC); use --check.",
+        epilog="For same-size outputs, use wxrandr --output TARGET --same-as SOURCE, "
+               "or --keep-layout to keep TARGET at its separate position. "
+               "The mirror keeps running after this command exits; "
+               "--list shows it and --stop TARGET ends it.")
+
     p.add_argument("source", nargs="?", metavar="SOURCE", help="the output to capture")
-    p.add_argument("--to", metavar="TARGET", dest="to", help="the output to paint it on")
+    p.add_argument("--to", metavar="TARGET", dest="to", help="destination output")
     p.add_argument("--region", metavar="WxH+X+Y",
-                   help="capture only this rectangle of SOURCE, in layout "
-                        "coordinates (the ones `wxrandr --query` and slurp "
-                        "print)")
+                   help="capture WIDTHxHEIGHT+X+Y within SOURCE; X and Y are "
+                        "measured from the desktop origin, as in wxrandr --query")
     p.add_argument("--scaling", choices=core.SCALINGS,
                    default=core.DEFAULT_SCALING,
-                   help="how the picture meets the target: fit "
+                   help="resize the captured image: fit "
                         "(letterbox, default), cover (fill and crop), exact "
-                        "(whole multiples only)")
+                        "(enlarge by 2x, 3x, etc. or reduce to 1/2, 1/3, etc.)")
     p.add_argument("--keep-layout", action="store_true",
                    help="mirror even where a shared position would do it, "
                         "so TARGET keeps its own place in the layout")
     p.add_argument("--replace", action="store_true", help="stop the mirror already running on TARGET first")
     p.add_argument("--dry-run", action="store_true", help="print the wl-mirror command line and stop")
     p.add_argument("--list", action="store_true",
-                   help="what is mirroring now (verified, stale records "
-                        "reaped)")
+                   help="list running mirrors and remove records for "
+                        "processes that have exited")
     p.add_argument("--stop", metavar="TARGET", help="stop the mirror on TARGET")
     p.add_argument("--stop-all", action="store_true", help="stop every mirror we started")
     p.add_argument("--check", action="store_true",

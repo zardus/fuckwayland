@@ -1394,7 +1394,7 @@ class Application:
                        "X11 through xrandr.\nA drop-in arandr clone; layout "
                        "scripts are interchangeable.\n\n"
                        + self.backend.detail())
-        d.set_website("https://github.com/zardus/w11")
+        d.set_website("https://github.com/fixing-wayland/w11")
         d.set_logo_icon_name("video-display")
         d.run()
         d.destroy()

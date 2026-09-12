@@ -39,7 +39,7 @@ Summary:        X11 power tools as drop-in clones for Wayland
 # disagrees with this tag (spdx_id() there is the reader), so a relicence that
 # edits one file and not the other cannot ship.
 License:        BSD-2-Clause
-URL:            https://github.com/zardus/w11
+URL:            https://github.com/fixing-wayland/w11
 Source0:        %{name}-%{version}.tar.gz
 
 # noarch, and one build covers Fedora 43 and 44: both ship python3 3.14.7, so

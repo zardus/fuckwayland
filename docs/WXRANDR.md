@@ -5,58 +5,31 @@ reshape real multi-output layouts — relative positioning, mirroring, rotation,
 reflection, per-output scale, custom modes, monitors — the crazy configurations are
 the point, not an afterthought. House rules per Technical.md.
 
-## Planes / backends
+## Common commands
 
-- **sway/i3-compatible (flagship)**: query from `GET_OUTPUTS` (+ `w11common.wayland_mini`
-  wl_output for physical mm sizes); mutate via `output ...` IPC commands
-  (mode/--custom, position, transform, scale, enable/disable, dpms).
-- **Generic wlroots**: `zwlr_output_management_unstable_v1` over `wayland_mini` —
-  atomic apply of whole-layout configurations, which is exactly xrandr's model. This is the
-  backend that makes crazy configs atomic: build the full config, apply once, handle
-  `succeeded/failed/cancelled` events.
-- **wlroots scale arithmetic** (`core.wlr_scale` / `core.logical_size`, both
-  backends above): sway quantises any scale it is handed to 120ths —
-  fractional-scale-v1's unit — in float32 (`scale = round(scale * 120) / 120`,
-  sway 1.9 `output.c`), and `wlr_output_effective_resolution` then divides the
-  pixel size by that float and truncates. **What it is handed depends on the
-  transport**: the sway IPC takes the number as text (`output NAME scale 1.03`),
-  while `zwlr_output_management` takes a `wl_fixed` that `wayland_mini`'s
-  marshaller truncates to 256ths — so `--scale 1.03` runs as 1.0333 on the sway
-  backend and as 1.025 on the wlr one, and `--query` will say so. Both steps are
-  single precision and both matter: a double division puts 1920 ÷ 1.6 at 1199
-  where the compositor has 1200. The wlr backend is one atomic call with no
-  phase-2 re-read, so a position computed from the number the user typed is the
-  position the layout keeps — measured against a live sway at 201 scales per
-  backend (`tests/test_wxrandr_unit.py::WlrootsScale` pins the captures,
-  `test_wxrandr_live.py::test_42` re-measures).
-- **--brightness**: gamma via `zwlr_gamma_control_manager_v1` (ramps computed like
-  xrandr's gamma math, passed over an fd). The control dies with its client, so a
-  non-1.0 brightness forks a tiny detached holder process per output (pattern: the
-  wdotool daemon fork, simplified); brightness 1.0 kills the holder. Insane, works.
-  Headless outputs (WLR_BACKENDS=headless sway) have no gamma LUT, so the
-  compositor refuses the control immediately — `--brightness`/`--gamma` there exit
-  1 with `xrandr: Gamma size is 0.` (verified live). The holder lifecycle is
-  therefore proven against a wire-level mock (tests/test_wxrandr_gamma.py), not a
-  headless session. A typo'd `--output NAME --brightness` prints only the bare
-  not-found warning and exits 0, like real xrandr (no holder is spawned).
-- **GNOME / Mutter**: `org.gnome.Mutter.DisplayConfig` on the session bus over the
-  pure-stdlib `w11common.dbus_mini` — see "Mutter backend" below. Stock Ubuntu 24.04
-  (GNOME 46) and 26.04 (GNOME 50), no extension, no root.
-- **KDE Plasma / KWin**: the plasma-wayland-protocols pair `kde_output_device_v2`
-  (read) + `kde_output_management_v2` (write) over `wayland_mini` — see "KWin
-  backend" below. Unauthenticated (no portal, no polkit): the same path
-  kscreen-doctor and the System Settings KCM take. Plasma 5.27 (Ubuntu 24.04)
-  through 6.7+, no extension, no root.
-- **Hyprland**: `hyprctl -j monitors all` to read, `hyprctl keyword monitor` to write,
-  both over Hyprland's own IPC socket — see "Hyprland backend" below. It is second in the
-  auto order, after sway, so a Hyprland box never touches the session bus to choose a
-  backend.
-- **Cinnamon / muffin**: `org.cinnamon.Muffin.DisplayConfig` — Mutter's DisplayConfig
-  under Muffin's bus name, and the Mutter backend with three names swapped. See "Mutter
-  backend" below; everything it says about adjacency, gaps, mirroring and one-primary
-  holds verbatim, because muffin carries Mutter's validator with Mutter's strings.
+The command-line tool needs Python and a supported compositor interface. GNOME and
+KDE display configuration do not require the GNOME bridge or input-device access.
 
-## xrandr options that mean nothing here
+```sh
+wxrandr --query
+wxrandr --print-backend --verbose
+wxrandr --output DP-1 --right-of eDP-1
+wxrandr --output DP-1 --same-as eDP-1
+```
+
+Replace connector names with those printed by `--query`. Backend-specific limits
+on mirroring, scaling and overlaps are described below.
+
+### Help and additional options
+
+`--help` preserves xrandr's original text. Project-specific options are documented
+here: [backend selection and inspection](#backend-selection), persistence
+(`--persistent` / `WXRANDR_PERSIST`, described in the backend sections), and
+[GNOME overlap flags](#--unsafe-gnome-overlap-the-one-route-through).
+See [current compatibility differences](#current-compatibility-differences) before
+reusing options that address X server resources.
+
+## Current compatibility differences
 
 The usage text is xrandr's, byte for byte, so it lists options that describe an X
 server rather than a compositor. They are accepted rather than refused, because a
@@ -68,15 +41,23 @@ script written for an X11 machine should keep working, and what each one does is
 | `--screen N` | accepted, ignored. Wayland has one screen and it is 0 |
 | `--display D`, `-d D` | the compositor to talk to, not an X display: a Wayland socket name such as `wayland-1`. On an X11 session it is handed to the real xrandr and means what it always meant |
 | `--q12`, `--q1` | accepted, ignored. They pick an X extension version to speak |
-| `--fb WxH` | accepted, ignored: the desktop size follows the monitors, and no compositor lets a client set it directly |
+| `--fb WxH` | Accepted, ignored: the current backends derive desktop size from the outputs. Independent framebuffer sizing is not yet implemented; see the routes below. |
 | `--fbmm WxH` | accepted, ignored, as above but in millimetres |
 | `--dpi N` | accepted, ignored. Scaling is `--scale` and the compositor's own factor |
 | `--crtc N` | accepted, ignored, and still refused before `--output` as xrandr refuses it. A CRTC is a piece of X server bookkeeping |
 | `--prop`, `--properties` | **does something**: adds each output's properties under it, the way xrandr does |
-| `--delmonitor NAME` | accepted, ignored: the monitor list is the compositor's and cannot be edited |
+| `--delmonitor NAME` | Accepted, ignored: removing a named logical monitor independently of outputs is not yet implemented. |
 | `--orientation R` | xrandr's own spelling of `--rotate`, taken as an alias for it |
 | `--refresh N` | xrandr's own spelling of `--rate`, taken as an alias for it |
-| `--panning` | parsed and refused by name, because a compositor that could pan would have to be asked for it and none of the four can |
+| `--panning` | Parsed and refused: panning is not yet implemented by the current backends. |
+
+For independent framebuffer geometry, physical-size/DPI overrides, logical monitor
+objects and panning, the next route is a compositor display or scripting API
+(route 2), where one provides the necessary operation. Otherwise a compositor
+extension (route 3), or a patch (route 6), must supply it. The cost is a per-backend
+implementation of the missing state and coordinate transformations. For XWayland
+RandR objects, an Xwayland patch or X11 proxy (route 5) is another route. These are
+implementation gaps; accepting an option today does not mean it changes that state.
 
 Ignored means exactly that: the option is consumed, nothing changes, and the rest of
 the command runs. Nothing here warns about them, because a script that carries
@@ -198,6 +179,57 @@ socket or bus is touched: precedence, the detection order, the look-ahead in
 both directions, the two outputs byte for byte, every error path) and, for
 the handover itself, `BackendFlag` in `tests/test_passthrough_exec.py`
 against the fake install tree.
+
+## Planes / backends
+
+- **sway/i3-compatible (flagship)**: query from `GET_OUTPUTS` (+ `w11common.wayland_mini`
+  wl_output for physical mm sizes); mutate via `output ...` IPC commands
+  (mode/--custom, position, transform, scale, enable/disable, dpms).
+- **Generic wlroots**: `zwlr_output_management_unstable_v1` over `wayland_mini` —
+  atomic apply of whole-layout configurations, which is exactly xrandr's model. This is the
+  backend that makes crazy configs atomic: build the full config, apply once, handle
+  `succeeded/failed/cancelled` events.
+- **wlroots scale arithmetic** (`core.wlr_scale` / `core.logical_size`, both
+  backends above): sway quantises any scale it is handed to 120ths —
+  fractional-scale-v1's unit — in float32 (`scale = round(scale * 120) / 120`,
+  sway 1.9 `output.c`), and `wlr_output_effective_resolution` then divides the
+  pixel size by that float and truncates. **What it is handed depends on the
+  transport**: the sway IPC takes the number as text (`output NAME scale 1.03`),
+  while `zwlr_output_management` takes a `wl_fixed` that `wayland_mini`'s
+  marshaller truncates to 256ths — so `--scale 1.03` runs as 1.0333 on the sway
+  backend and as 1.025 on the wlr one, and `--query` will say so. Both steps are
+  single precision and both matter: a double division puts 1920 ÷ 1.6 at 1199
+  where the compositor has 1200. The wlr backend is one atomic call with no
+  phase-2 re-read, so a position computed from the number the user typed is the
+  position the layout keeps — measured against a live sway at 201 scales per
+  backend (`tests/test_wxrandr_unit.py::WlrootsScale` pins the captures,
+  `test_wxrandr_live.py::test_42` re-measures).
+- **--brightness**: gamma via `zwlr_gamma_control_manager_v1` (ramps computed like
+  xrandr's gamma math, passed over an fd). The control dies with its client, so a
+  non-1.0 brightness forks a tiny detached holder process per output (pattern: the
+  wdotool daemon fork, simplified); brightness 1.0 kills the holder. Insane, works.
+  Headless outputs (WLR_BACKENDS=headless sway) have no gamma LUT, so the
+  compositor refuses the control immediately — `--brightness`/`--gamma` there exit
+  1 with `xrandr: Gamma size is 0.` (verified live). The holder lifecycle is
+  therefore proven against a wire-level mock (tests/test_wxrandr_gamma.py), not a
+  headless session. A typo'd `--output NAME --brightness` prints only the bare
+  not-found warning and exits 0, like real xrandr (no holder is spawned).
+- **GNOME / Mutter**: `org.gnome.Mutter.DisplayConfig` on the session bus over the
+  pure-stdlib `w11common.dbus_mini` — see "Mutter backend" below. Stock Ubuntu 24.04
+  (GNOME 46) and 26.04 (GNOME 50), no extension, no root.
+- **KDE Plasma / KWin**: the plasma-wayland-protocols pair `kde_output_device_v2`
+  (read) + `kde_output_management_v2` (write) over `wayland_mini` — see "KWin
+  backend" below. Unauthenticated (no portal, no polkit): the same path
+  kscreen-doctor and the System Settings KCM take. Plasma 5.27 (Ubuntu 24.04)
+  through 6.7+, no extension, no root.
+- **Hyprland**: `hyprctl -j monitors all` to read, `hyprctl keyword monitor` to write,
+  both over Hyprland's own IPC socket — see "Hyprland backend" below. It is second in the
+  auto order, after sway, so a Hyprland box never touches the session bus to choose a
+  backend.
+- **Cinnamon / muffin**: `org.cinnamon.Muffin.DisplayConfig` — Mutter's DisplayConfig
+  under Muffin's bus name, and the Mutter backend with three names swapped. See "Mutter
+  backend" below; everything it says about adjacency, gaps, mirroring and one-primary
+  holds verbatim, because muffin carries Mutter's validator with Mutter's strings.
 
 ## Overlapping outputs
 

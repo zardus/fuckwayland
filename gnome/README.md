@@ -127,133 +127,48 @@ kept apart from it on purpose — its own uuid, its own installer
 carries its files, and carries nothing that turns it on: no autostart entry enables it
 the way one enables the bridge, so on a machine installed from the .deb it sits in
 `/usr/share/gnome-shell/extensions` doing nothing until somebody enables it by hand
-(`gnome-extensions enable w11-overlap@w11`, then log out and back in).
+(`gnome-extensions enable w11-overlap@w11`). Log out and back in first if the
+package was installed during the current session, so Shell discovers the directory.
 Nobody gets this one by accident, and nothing else in w11 needs it.
 
-Why separate, in one line each:
-
-* the bridge calls **public** Shell API and feature-detects everything, so it works on
-  45 through 51, which is the whole of its `shell-version` list (51 was added after a
-  measured run on Ubuntu 26.10's GNOME Shell 51.beta: every window, desktop, input and
-  display operation, the maximize pair included, through the feature-detected 49+
-  path). This one ships a **compiled type description of a private structure
-  layout** and works on exactly the three builds it has been measured on;
-* the bridge is a dependency of three tools and is installed by the package. This one
-  is a dependency of nothing, is installed by hand, and is off in the tool as well;
-* the worst a bridge bug can do is answer wrongly. The worst this one can do is kill
-  `gnome-shell`, and on Wayland `gnome-shell` is the session.
-
-It exists for one thing: `wxrandr --unsafe-gnome-overlap`, which places two GNOME
-monitors so that they share screen area — a layout Mutter's configuration API refuses
-on adjacency grounds and nothing else in the compositor needs
-([docs/Technical.md § 6](../docs/Technical.md#why-mutter-refuses-monitors-that-share-area)).
-To do it, it writes two 32-bit words per monitor into the running `gnome-shell` and
-then asks Mutter to apply the result.
-
-```
-gnome/
-  w11-overlap@w11/
-    generations.json              THE TABLE: one record per measured GNOME, holding
-                                  the soname, the Meta typelib version, the
-                                  namespace, the struct size and where it was
-                                  measured.  Everything else here is generated
-                                  from it, or read from it at run time
-    metadata.json                 uuid, and shell-version generated from the table
-    extension.js                  the guards, the bounded reader, the write
-    rules.js                      the pure decisions (no gi: node can run it, and the
-                                  tests do)
-    org.w11.Overlap1.xml          Probe / ApplyOverlap, JSON in, JSON out
-    typelib/W11Overlap14-1.0.typelib   the description for libmutter 14 (GNOME 46)
-    typelib/W11Overlap18-1.0.typelib   ... for libmutter 18 (GNOME 50)
-    typelib/W11Overlap51-1.0.typelib   ... and for libmutter 51 (GNOME 51), which is
-                                       mutter 18's layout under a new soname
-  overlap-typelib/gen-gir.py      reads the table and writes all three of those:
-                                  the .gir, the .typelib and metadata.json.
-                                  `--check` proves none of them has gone stale
-  install-overlap.sh              install / --check / --uninstall; reads the table
-                                  for which typelibs to require and which shells to
-                                  warn about
-```
-
-The typelibs are checked in because compiling one needs `g-ir-compiler`, which no
-desktop has installed. `python3 gnome/overlap-typelib/gen-gir.py` rebuilds them from
-the table, and `--check` is what notices a `.gir` edited without a rebuild.  Adding a
-GNOME release is one record in `generations.json`, the same record in `GENERATIONS`
-in `wxrandr/gnome_overlap.py` (a test proves the two identical), one run of that
-script, and then the measurement:
-[docs/Technical.md § The table](../docs/Technical.md#the-table-and-adding-a-gnome-generation).
-The structure they describe, field by field and offset by offset on both of the two
-shapes it has had, and what to do to add the next generation, is
-[docs/Technical.md § The private structure](../docs/Technical.md#the-private-structure-and-the-descriptions-that-describe-it);
-what the two bus methods take and answer, request by request, is
-[§ The bus interface](../docs/Technical.md#the-bus-interface-request-by-request).
-
-**Three properties, and it is worth nothing without all three:** it does nothing at
-login (`enable()` exports one D-Bus object and stops, so it is safe to leave installed
-and enabled for ever while never being called, which is measured over fifteen logins
-across the two releases); every check runs before every write, not once at install,
-because an upgrade can replace libmutter under a running session; and no pointer is
-ever dereferenced by the type system — everything is a number, `g_memdup2` of a
-bounded range, and an address checked against `/proc/self/maps` first, so a wrong
-offset reads garbage that the comparison rejects instead of walking into a SIGSEGV.
-The six checks, and what each was measured catching, are in
-[docs/Technical.md § 6](../docs/Technical.md#why-mutter-refuses-monitors-that-share-area)
-and in [docs/WXRANDR.md](../docs/WXRANDR.md#--unsafe-gnome-overlap-the-one-route-through).
+### Install, check and remove
 
 ```sh
-sh gnome/install-overlap.sh          # then log out and back in once (exit 1 until you do)
-sh gnome/install-overlap.sh --check  # state, bus name, and a Probe: every guard, nothing applied
+sh gnome/install-overlap.sh          # then log out and back in on first install
+sh gnome/install-overlap.sh --check  # run the compatibility probe without applying a layout
 sh gnome/install-overlap.sh --uninstall
 ```
 
-`--check` is the honest way to ask whether your GNOME is one of the ones this has been
-measured on: it runs every guard against the running libmutter and changes nothing the
-session can see, the only write anywhere being the sentinel into a throwaway
-configuration object of the extension's own making. On
-a stock 26.04 it says `W11Overlap18, MetaMonitorsConfig 80 bytes as declared`, on
-24.04 `W11Overlap14 … 72 bytes`, and on 26.10 `W11Overlap51 … 80 bytes` — GNOME 51 keeps
-mutter 18's private layout under a library called something else entirely. On a GNOME
-that is in none of those records it says `OUT_OF_DATE` until the installer has been run
-once on that build, because gnome-shell will not load an extension whose
-`metadata.json` does not name the running Shell major, and then it says
-`refused (shell-version)`, which is the honest answer with the numbers a maintainer
-needs in it. Those numbers held across every update either LTS
-can deliver today — eight version pairs, seven distinct libmutter builds,
-including 26.04's `-proposed` pair and the GA library under a newer shell — so an
-ordinary update is not what this breaks on; a release upgrade is, and there it refuses
-at `shell-version` ([docs/WXRANDR.md § What ordinary updates actually
-do](../docs/WXRANDR.md#what-ordinary-updates-actually-do)).
+Unlike `wxrandr --gnome-overlap-status`, the installer's `--check` runs the extension's
+probe, including the private-structure checks. It does not change the visible layout;
+the sentinel write uses a temporary configuration object.
 
-Once it is installed, `wxrandr` prints the whole risk paragraph before every
-overlapping apply until it is agreed to, once, for the build the checks passed on
-(`wxrandr --gnome-overlap-allow`, withdrawn with `--gnome-overlap-forget`), and
-`warandr` asks the same question in a dialog the first time an overlapping layout is
-applied. The agreement covers the *risk* and never the *checking*: every check in this
-extension runs on every call whatever is recorded, which is
-[docs/WXRANDR.md § Agreeing once](../docs/WXRANDR.md#agreeing-once-and-withdrawing).
-The extension's answer carries `instance_size`, the `MetaMonitorsConfig` size the
-struct-size check just read out of this build's GType registry, and `libmutter_build`,
-the GNU build id of the library it ran them against, so what is agreed to is what was
-measured rather than a number written somewhere else. The build id is in there because
-`ShellVersion` cannot see an `apt upgrade` that replaces libmutter alone, which Ubuntu
-does inside a stable release: with it, the first overlapping run after such an update
-says which build replaced which and asks in full again next time.
+The compiled typelibs are included in the tree, so users do not need a compiler.
+Maintainers regenerate them with `python3 gnome/overlap-typelib/gen-gir.py` and use
+its `--check` mode to detect stale generated files. See
+[adding a GNOME generation](../docs/Technical.md#the-table-and-adding-a-gnome-generation)
+for the generation table and measurement requirements, and
+[the bus interface](../docs/Technical.md#the-bus-interface-request-by-request)
+for the probe and apply requests.
 
-To get rid of it from a text console, when there is no desktop to do it from:
-`gnome-extensions disable w11-overlap@w11` works from a real login
-(one with `XDG_RUNTIME_DIR`), but in a bare shell with no session bus it prints
-`dconf-WARNING … failed to commit` and exits **0 having changed nothing** — measured,
-and a `gnome-extensions` behaviour rather than something this project can fix. Deleting
-`~/.local/share/gnome-shell/extensions/w11-overlap@w11` always works,
-which is why the tool prints that too.
+### Scope and reference
 
-It cannot write `~/.config/monitors.xml`: its type description does not name Mutter's
-writer, the apply method is a constant, and it reports the file's digest from before
-and after every call. The one route by which an overlap could still have got in there
-was a *Keep changes?* dialog confirmed while this had moved a monitor, and the
-`pending-dialog` guard refuses on any modal grab for exactly that reason. What
-`--unsafe-gnome-overlap` prints, refuses and undoes is
-[docs/WXRANDR.md](../docs/WXRANDR.md#--unsafe-gnome-overlap-the-one-route-through).
+The bridge uses public Shell APIs. The overlap extension uses a compiled description
+of private Mutter structures and supports only builds that pass its compatibility
+checks. It can end the session if an incompatible structure evades those checks.
+
+For the command flags, supported operations, saved acknowledgment and build checks,
+use [WXRANDR.md](../docs/WXRANDR.md#--unsafe-gnome-overlap-the-one-route-through).
+For the GUI warning and its checkbox, use
+[WARANDR.md](../docs/WARANDR.md#overlapping-monitors-on-gnome). The structure layouts,
+measurements and recovery procedures are maintained in
+[Technical.md](../docs/Technical.md#why-mutter-refuses-monitors-that-share-area).
+
+An acknowledgment applies to the measured GNOME build; it does not bypass checks
+and is invalidated by a library update. Keep recovery instructions available before
+using the extension. To disable it, run
+`gnome-extensions disable w11-overlap@w11`; see the technical reference if the
+graphical session is unavailable.
 
 ## Security note
 

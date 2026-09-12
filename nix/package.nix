@@ -37,7 +37,7 @@
 }:
 
 let
-  homepage = "https://github.com/emolabs/w11";
+  homepage = "https://github.com/fixing-wayland/w11";
 
   commonMeta = {
     inherit homepage;

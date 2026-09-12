@@ -1,7 +1,7 @@
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: w11
 Upstream-Contact: Antonio Bianchi <antonio.bianchi.333@gmail.com>
-Source: https://github.com/zardus/w11
+Source: https://github.com/fixing-wayland/w11
 
 Files: *
 Copyright: 2026 the w11 authors: Yan (zardus) and Antonio Bianchi
