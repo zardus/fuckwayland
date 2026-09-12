@@ -2,10 +2,11 @@
 
 **X11 was the X that stuck. w11 is the Wayland that behaves like it.**
 
-The X11 power tools, `xdotool`, `wmctrl`, `xprop` and `xrandr`, reborn as no-bullshit
-drop-in clones that work on Wayland. Same commands, same flags, same output bytes (or, at least, we tried),
-same scripts, bugs faithfully included. Symlink them over the originals and your
-muscle memory never finds out the compositor changed underneath it.
+The X11 power tools, `xdotool`, `wmctrl`, `xprop` and `xrandr`, rebuilt as drop-in
+clones for Wayland. They accept the same commands and flags and produce the same
+output bytes (or, at least, we tried). They even preserve the bugs that scripts may
+depend on. Put them ahead of the originals on `PATH`, and old habits and old scripts
+keep working after the desktop moves to Wayland.
 
 <p align="center">
 <img src="media/meme.svg" width="880" alt="reject modernity, embrace tradition">
@@ -13,12 +14,13 @@ muscle memory never finds out the compositor changed underneath it.
 
 In the box:
 
-- **wdotool**, xdotool, all 48 commands, byte-parity
-- **wwmctl**, wmctrl, for native Wayland *and* legacy X apps in one list
-- **wxprop**, xprop, real X properties for XWayland windows and synthesized ones for native windows
-- **wxrandr**, xrandr, with first-class multimonitor: reshape crazy layouts in one atomic call
-- **warandr**, arandr, the drag-your-monitors GUI, on Wayland (via wxrandr) and X11 (via xrandr)
-- **wmirror**, the one that clones nothing: mirror a *region*, or an odd-shaped output, on wlroots
+- **wdotool** reproduces all 48 xdotool commands with byte-level output parity.
+- **wwmctl** gives wmctrl one list containing native Wayland and XWayland windows.
+- **wxprop** reads real X properties from XWayland windows and synthesizes the same
+  interface for native windows.
+- **wxrandr** applies complex multi-monitor layouts in one atomic operation.
+- **warandr** brings arandr's drag-and-drop display editor to Wayland and X11.
+- **wmirror** mirrors a region or an irregular output layout on wlroots compositors.
 
 ## Motivation
 
@@ -33,19 +35,19 @@ look at what it is up against.
 
 ## Philosophy
 
-One rule decides what goes in here, and it is written down in
-[AGENTS.md](AGENTS.md): **if X supports it, we support it.** What Wayland forbids is
-a cost to be paid, never a reason. Where a compositor will not do a thing the X
-tools did, that is a gap in this tree with a route beside it, not a policy, and the
-[per-tool tables](docs/WDOTOOL.md#what-differs-from-x-on-kde-plasma) say which.
+One rule decides what belongs here: **if X supports it, we support it.**
+[AGENTS.md](AGENTS.md) states that rule in full. A missing Wayland capability is an
+implementation gap to investigate, not a reason to drop the feature. The
+[per-tool tables](docs/WDOTOOL.md#what-differs-from-x-on-kde-plasma) record each gap
+and the most practical route to closing it.
 
 ## Install
 
-On a default Ubuntu 24.04 or 26.04 desktop, one file and one command. The built
-package is in the clone, at
-[`release/w11_0.4.0_all.deb`](release/w11_0.4.0_all.deb), and on the
-[releases page](https://github.com/fixing-wayland/w11/releases). From the
-top of a clone:
+On a default Ubuntu 24.04 or 26.04 desktop, installation takes one package and one
+command. The package is available at
+[`release/w11_0.4.0_all.deb`](release/w11_0.4.0_all.deb) in the clone and on the
+[releases page](https://github.com/fixing-wayland/w11/releases). Run this command
+from the top of a clone:
 
 ```sh
 sudo apt install ./release/w11_0.4.0_all.deb
@@ -53,31 +55,32 @@ sudo apt install ./release/w11_0.4.0_all.deb
 
 `sh scripts/build-deb.sh` rebuilds that same file in place from the source beside it.
 
-That is the six tools in `/usr/bin`, the GNOME Shell bridge extension where
-`gnome-shell` looks for it, the udev rule that opens `/dev/uinput` to whoever is at
-the seat, the `warandr` menu entry, and one thing that is put there and left switched
-off, the [overlap extension](#overlapping-monitors-on-gnome). **One**
-`Architecture: all` package for **both** releases, because (almost) every module here is pure
-standard library and your own `python3` byte compiles it at install time. The real `xdotool`, `wmctrl`, `xprop` and
-`xrandr` stay exactly as they were, so a script that calls both keeps working, and
-`sudo apt remove w11` takes every piece away again. The GUI needs the system
-PyGObject/GTK 3 bindings, and mirroring needs the external `wl-mirror` program.
+The package installs the six tools in `/usr/bin`, the GNOME Shell bridge, the
+`/dev/uinput` access rule, and a menu entry for `warandr`. It also installs the
+[GNOME overlap extension](#overlapping-monitors-on-gnome), but leaves that extension
+disabled. One `Architecture: all` package works on both Ubuntu releases because
+(almost) every module uses only the Python standard library and is byte-compiled by
+the system Python during installation.
+
+The original `xdotool`, `wmctrl`, `xprop` and `xrandr` packages remain untouched, so
+scripts can call either implementation. `sudo apt remove w11` removes everything
+installed by this package. `warandr` uses the system PyGObject and GTK 3 bindings,
+while `wmirror` uses the external `wl-mirror` program.
 
 **Upgrading from the legacy package:** uninstall the package published under the
 previous project name before installing `w11`. Both packages own some of the same
 files, and the current packages do not declare automatic replacement.
 
-**On GNOME, log out and back in once.** That is the whole of the manual procedure.
-`gnome-shell` reads extension directories only when a session starts, so until you do
-that the window commands say the bridge is not running. The package enables the
-extension for you inside that first session. Everything else works the moment apt
-finishes: the display commands, the GUI, typing and clicking.
+**On GNOME, log out and back in once.** GNOME Shell discovers new extension
+directories only when a session starts. Until the next login, window commands report
+that the bridge is not running. The package enables the bridge automatically, and
+all features that do not use it work as soon as installation finishes. This includes
+display commands, the GUI, keyboard input and pointer input.
 
-Then [check it worked](#check-it-worked). If the package is not what you want, the
-other routes are [a clone with pip](#from-a-clone-with-pip), which is the normal one
-for development, and [pipx, the user site, one venv for the whole machine, the
-single-file builds and nix](#other-ways-to-install). What the package puts where, and
-why the extension and the rule are handled the way they are, is
+Next, [check that it worked](#check-it-worked). Developers can instead install from
+[a clone with pip](#from-a-clone-with-pip). [Other installation methods](#other-ways-to-install)
+cover pipx, the user site, a machine-wide virtual environment, single-file builds
+and Nix. For package contents and design details, see
 [debian/README.Debian](debian/README.Debian) and
 [docs/Technical.md § 11](docs/Technical.md#11-installing-what-each-route-costs).
 
@@ -118,23 +121,21 @@ bridge. Keyboard and pointer injection use separate input paths. `wxrandr` and
 bridge. See [the bridge reference](gnome/README.md) for its interface and
 [Threat model](#threat-model) for the access it grants.
 
-The package carries a **second, separate** extension that almost nobody needs, for
-the one thing GNOME will not do at all: place two monitors so that they share screen
-area. On Fedora it is a second, separate *package* instead
-(`gnome-shell-extension-w11-overlap`), with no `Supplements:`, so nothing
-installs it for you. Nothing turns it on and nothing uses it, and it is the only thing here that can
-cost you the session you are sitting in, so it has a section of its own:
-[Overlapping monitors on GNOME](#overlapping-monitors-on-gnome).
+The package also carries a separate extension for overlapping monitors, a feature
+GNOME does not normally permit. The extension is disabled by default and no command
+enables it automatically. On Fedora it is a separate package named
+`gnome-shell-extension-w11-overlap`, without a `Supplements:` rule. This extension
+can crash the current shell session if its private-structure checks are wrong, so
+read [Overlapping monitors on GNOME](#overlapping-monitors-on-gnome) before using it.
 
 #### KDE Plasma
 
-Stock Plasma Wayland sessions, Plasma 5.27 (Ubuntu 24.04) and Plasma 6.6 (26.04),
-work with **nothing to install**. `org.kde.kwin.Scripting.loadScript()` is plain
-`Q_SCRIPTABLE` with no polkit action and no bus policy on both, so `wdotool` pushes
-one small JavaScript file into KWin per command and unloads it again, and `wwmctl`,
-`wxprop` and `wxrandr` come along with it. That is also a security note in the GNOME
-sense: any client on your session bus can already do this, with or without these
-tools.
+Stock Plasma Wayland sessions need no extension or helper service. This applies to
+Plasma 5.27 on Ubuntu 24.04 and Plasma 6.6 on Ubuntu 26.04. For each window command,
+the tools load a small JavaScript file through KWin's
+`org.kde.kwin.Scripting.loadScript()` method and unload it afterwards. The method has
+no polkit action or D-Bus policy, so every process on the session bus already has
+this access whether or not w11 is installed.
 
 What KWin does differently from X, per command, is the table in
 [docs/WDOTOOL.md](docs/WDOTOOL.md#what-differs-from-x-on-kde-plasma): no per-window
@@ -169,38 +170,40 @@ check reports that it cannot inspect the ACL; this does not change the rule itse
 
 #### COSMIC
 
-COSMIC needs no extension or session-bus service, and socket discovery identifies
-the session even when its environment variables are missing. The udev rule is needed for the
-**pointer** only: cosmic-comp publishes `zwp_virtual_keyboard_manager_v1` and no virtual
-pointer, so `wdotool type` needs no privilege at all and `wdotool mousemove` needs the rule
-or root. For capture, `wmirror` uses `ext_image_copy_capture_manager_v1` there
-(with wl-mirror 0.17 or newer); it also needs the output-management protocol.
-The window backend currently has no move, resize, raise, lower or pid operation;
-see [COSMIC backend details](docs/WDOTOOL.md#the-wlroots-floor-and-cosmic).
+COSMIC needs no extension or session-bus service. Socket discovery also finds the
+session when its environment variables are missing. Only pointer injection needs
+the udev rule: cosmic-comp provides `zwp_virtual_keyboard_manager_v1`, but no virtual
+pointer protocol. As a result, `wdotool type` is unprivileged, while
+`wdotool mousemove` needs the rule or root.
+
+For capture, `wmirror` uses `ext_image_copy_capture_manager_v1` with wl-mirror 0.17
+or newer, and it also requires the output-management protocol. The current COSMIC
+window backend cannot yet move, resize, raise or lower windows, and it cannot obtain
+process IDs. See [COSMIC backend details](docs/WDOTOOL.md#the-wlroots-floor-and-cosmic).
 Its live CI coverage is listed separately from implementation support in
 [Desktop support](#desktop-support), because no COSMIC VM image has been built in CI yet.
 
 #### Cinnamon, on Wayland or on X11
 
-**Nothing to install**, and for a blunter reason than KDE's. Cinnamon exports
-`org.Cinnamon.Eval` on the session bus and implements it as a bare
-`JSON.stringify(eval(code))`, with no unsafe-mode gate anywhere in its JS tree, so the
-window-management interface needs no extension of any kind; displays go over
-`org.cinnamon.Muffin.DisplayConfig`, which is Mutter's DisplayConfig under Cinnamon's
-own bus name, likewise with nothing to install. That is the KDE security note, only
-stronger: the method is there whether or not this project exists, and what `wdotool`
-sends is one constant program per operation with only integers ever interpolated into
-it. Cinnamon 6.4 requires `/dev/uinput` for input injection because Muffin advertises
-neither a virtual-keyboard nor a virtual-pointer protocol. Install the udev rule
-or run the input command as root, as on GNOME and KDE. **Cinnamon on X11** is a plain [X11](#x11-sessions) session and is handled as one.
+Cinnamon needs no extension. Its session bus exposes `org.Cinnamon.Eval`, implemented
+as `JSON.stringify(eval(code))`, without an unsafe-mode gate. Display configuration
+uses `org.cinnamon.Muffin.DisplayConfig`, Cinnamon's version of Mutter's
+DisplayConfig interface. These interfaces exist independently of w11. For each
+window operation, `wdotool` sends a fixed program with only numeric window IDs,
+coordinates and workspace numbers inserted into it.
+
+Cinnamon 6.4 needs `/dev/uinput` for keyboard and pointer injection because Muffin
+provides neither virtual-input protocol. Install the udev rule or run input commands
+as root, as on GNOME and KDE. **Cinnamon on X11** is handled as a regular
+[X11 session](#x11-sessions).
 
 #### X11 sessions
 
 **What to install:** the real tools, if they are not already there,
 `sudo apt install xdotool wmctrl`. (`xprop` and `xrandr` come with every X11 desktop,
 in `x11-utils` and `x11-xserver-utils`.) Nothing else: no extension, no udev rule, no
-`/dev/uinput`. Without them you get exit **127** and a line naming the package to
-install, and the package manager it names is your own box's, read from
+`/dev/uinput`. Without the originals you get exit **127** and a line naming the
+package to install, and the package manager it names is your own box's, read from
 `/etc/os-release`: `apt install x11-utils` on Debian and Ubuntu, `dnf install xprop` on
 Fedora, `pacman -S xorg-xprop` on Arch, `nix-env -iA nixpkgs.xorg.xprop` on NixOS. A
 distribution it cannot identify gets Debian's, which is what every box printed before.
@@ -215,10 +218,11 @@ recognize. `--backend` controls the handover and is removed before executing
 xrandr; `--persistent` is removed with a diagnostic, and
 `--unsafe-gnome-overlap` is rejected on X11.
 
-One script then runs on both session types. Run under `sudo`, over `ssh root@box` or
-from cron and we find the session's `DISPLAY` and `XAUTHORITY` and hand those over
-too, so `sudo xdotool key a` works *through* us where `sudo /usr/bin/xdotool key a`
-says `Can't open display`.
+Because the handover keeps the interface, the same script runs on either session
+type. When invoked through
+`sudo`, `ssh root@box` or cron, w11 locates the session's `DISPLAY` and `XAUTHORITY`
+before starting the original tool. This makes `sudo xdotool key a` work in cases
+where `sudo /usr/bin/xdotool key a` reports `Can't open display`.
 
 ```console
 $ W11_PASSTHROUGH=never xdotool key a   # our own code, whatever the session
@@ -233,14 +237,16 @@ and what a Plasma X11 session in particular does are all in
 
 ### Input access
 
-Injecting input goes through the kernel's `/dev/uinput`, which is `root:root 0600` on
-a stock Ubuntu, so `wdotool`'s **input** commands (`key`, `type`, `click`,
-`mousemove`, `mousedown` and `mouseup`, `behave`, and any chain containing one) need
-either root or the udev rule this repo ships. On **sway and the wlroots family** they
-need neither, because the compositor offers both input paths as unprivileged Wayland
-protocols and wdotool uses them exactly where the kernel device is closed. Everything
-else needs nothing at all: the window commands, all of `wwmctl`, `wxprop`, `wxrandr`
-and `warandr` reach the compositor over your own session bus and run as you.
+On stock Ubuntu, `/dev/uinput` is owned by `root:root` with mode `0600`. Therefore,
+`wdotool` input commands need root or the udev rule included with w11. This applies to
+`key`, `type`, `click`, `mousemove`, `mousedown`, `mouseup`, `behave`, and any command
+chain containing them. Sway and most wlroots compositors provide unprivileged Wayland
+protocols for both keyboard and pointer input, so neither root nor the rule is needed
+there: wdotool uses those protocols wherever the kernel device is closed to it.
+
+Every other command needs no extra access. The window commands and all of `wwmctl`,
+`wxprop`, `wxrandr` and `warandr` reach the compositor over your own session bus and
+run as your own user.
 
 **Run as root** and no rule is needed: `sudo wdotool key a` works as installed,
 because the session's sockets are found by scanning `/run/user/*`, which is also what
@@ -253,17 +259,19 @@ sudo sh gnome/install-bridge.sh --udev --check    # what is the node now?
 sudo sh gnome/install-bridge.sh --udev --uninstall # put it back
 ```
 
-It tags the node `uaccess`, so systemd-logind gives the user of the *active seat* an
-ACL on it: applied immediately (no relogin needed) and again at every login. The node
-itself stays `root:root 0600`, no `input` group is involved, and `--uninstall`
-restores exactly that. Despite living under `gnome/`, none of this is GNOME's
-business: the same command installs the same rule on a Plasma, sway or Xfce session,
-and `--udev` never touches the bridge extension. Read the [Threat
-model](#threat-model) first, because anyone who can open `/dev/uinput` can type as
-you, and know one gotcha while you experiment: `wdotool` keeps the virtual devices
-alive in a small `__daemon` process, and one started while access existed keeps
-injecting after the rule is removed. Log out and it is gone within seconds, stop it
-by hand, or leave it alone for the quarter of an hour of idleness that ends it.
+The rule tags the device with `uaccess`. systemd-logind then grants access to the
+user at the active seat, immediately and at each login. The device remains
+`root:root 0600`, and no `input` group is involved. `--uninstall` restores the
+original state. Although the installer lives under `gnome/`, this rule works the same
+way on Plasma, sway, Xfce and other desktops. The `--udev` option never changes the
+bridge extension.
+
+Read the [Threat model](#threat-model) before installing the rule, because a process
+that can open `/dev/uinput` can type as you. Also remember that wdotool keeps its
+virtual devices open in a small `__daemon` process. A daemon started while access was
+available can continue injecting after the rule is removed. It exits within seconds
+of logout or after fifteen minutes without a command, and it can also be stopped by
+hand.
 
 ### From a clone, with pip
 
@@ -482,8 +490,8 @@ The display backend token depends on the desktop:
 | Hyprland | `hypr` |
 | Cinnamon | `cinnamon` |
 | Generic output-management protocol | `wlr` |
- The
-second line of `wxrandr --version` is whatever RandR version your own session
+
+The second line of `wxrandr --version` is whatever RandR version your own session
 reports. `wwmctl -l` on GNOME is the one that needs the [bridge
 extension](#gnome). If it says so instead of listing windows, that is the step still
 missing, and `wxrandr` above will have worked anyway.
