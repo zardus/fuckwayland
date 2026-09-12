@@ -94,10 +94,14 @@ typed hooks — `views()`, `workspaces()`, `x_info()`, `events()`,
   window's dump and fed to a real X tool fails loudly instead of naming a
   plausible wrong atom.
 * **Native windows** synthesize, in this order and in xprop's grammar:
-  `_NET_WM_STATE` (Mutter's own atom order: `SKIP_TASKBAR`,
+  `_NET_WM_STATE` (Mutter's own atom order, with `SHADED` at the front on
+  Cinnamon only: `SHADED`, `SKIP_TASKBAR`,
   `MAXIMIZED_HORZ`, `MAXIMIZED_VERT`, `FULLSCREEN`, `HIDDEN` (minimized or
-  show-desktop), `ABOVE`, `DEMANDS_ATTENTION`, `STICKY` — sway's
-  synthesis keeps its `FULLSCREEN, HIDDEN, STICKY` subset),
+  show-desktop; a shaded window is HIDDEN too, since muffin's own
+  `meta_window_x11_set_net_wm_state` writes the pair for a window still
+  showing on its workspace), `ABOVE`, `DEMANDS_ATTENTION`, `STICKY` — sway's
+  synthesis keeps its `FULLSCREEN, HIDDEN, STICKY` subset, and every backend
+  but muffin leaves `View.shaded` False so no other desktop's dump moves),
   `_NET_WM_WINDOW_TYPE` from `Meta.WindowType` (`DESKTOP`, `DOCK`,
   `DIALOG` (also for `MODAL_DIALOG`), `TOOLBAR`, `MENU`, `UTILITY`,
   `SPLASH`, `DROPDOWN_MENU`, `POPUP_MENU`, `TOOLTIP`, `NOTIFICATION`,

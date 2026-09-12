@@ -13,7 +13,7 @@ the original is exec'd with `DISPLAY` pointing at [`xw11`](XW11.md), which answe
 native Wayland windows as well as for Xwayland's. The clone still runs when the original
 is not installed, when `W11_PROXY=never` (or `WWMCTL_PROXY=never`) asks for it, when
 `W11_PASSTHROUGH=never` is set, and whenever the command uses one of our own options --
-of which `wmctrl` has none: every byte this clone takes, wmctrl takes too.
+of which `wmctrl` has one, `--true-geometry`; every other byte this clone takes, wmctrl takes too.
 Everything this document says about the clone's output is still what the clone prints;
 through the proxy the output is the original's, byte for byte, because it **is** the
 original. The six rules in order are
@@ -123,6 +123,18 @@ target of this clone.
   `wmctrl -l` prints `N/A` for a window whose `WM_NAME` is Latin-1 rather than
   the title.
 
+**`--true-geometry` (a flag wmctrl 1.07 never had, the way `wxrandr --persistent` is
+one).** Default `-G` reproduces wmctrl's `XTranslateCoordinates`-from-`x,y` doubling
+for byte parity — a window at `100,100` prints as `200,200` in the `-G` columns,
+because that is the bug the bullet above keeps. `--true-geometry` turns the doubling
+off and prints the compositor's own rectangle instead, the one `xdotool
+getwindowgeometry` and `xwininfo` agree on: the same window prints `100 100 800 600`
+(measured on hypr 0.56.2 against a `foot` placed at `100,100`, `wwmctl --true-geometry
+-lGpx`). It is intercepted a screen above the X11 handover by `wwmctl.cli.own_flags_in`
+(the `--persistent` pattern) and is listed in `xw11/wrap.py:CLONE_ONLY["wmctrl"]` as
+the clone's own token, so a `wmctrl --true-geometry` typed on Wayland keeps our code
+rather than reaching the original — which would answer `invalid option`.
+
 `-d` rows are sorted by that desktop id — ascending and positionally indexed,
 as real `wmctrl -d` always is. sway answers `GET_WORKSPACES` in *creation*
 order, which is what wwmctl used to print, so "the third line is desktop 2"
@@ -207,8 +219,12 @@ untouched) and the generic `list()` fallback.
   `Xwayland` process exists (`session.xwayland_running()`); listing a
   purely native desktop never starts an X server.
 * **`-d`** comes from `ListWorkspaces`: `DG` is `global.display.get_size()`,
-  `VP` is `0,0` for the current workspace and `N/A` for the rest (one
-  EWMH viewport pair), `WA` is the workspace's work area over all monitors
+  `VP` is Mutter's own `_NET_DESKTOP_VIEWPORT` when Xwayland is up — one
+  pair, so the current workspace's row prints it (`0,0`) and every other
+  prints `N/A`, which is what real `wmctrl -d` prints on that session — and
+  `0,0` on every row when there is no X plane at all, the origin each
+  desktop begins at and the pair the `xw11` proxy publishes for a session
+  with no X of its own, `WA` is the workspace's work area over all monitors
   (what Mutter writes into `_NET_WORKAREA`: `0,32 1920x1048` under the top
   bar), the name is `Meta.prefs_get_workspace_name(i)` (`Workspace 1`, …,
   the strings in `_NET_DESKTOP_NAMES`; a nameless workspace prints its
@@ -392,12 +408,16 @@ nothing installed. wwmctl consumes the same typed hooks as on GNOME
   constraints, so a resize larger than the work area is clamped to it; its
   own EWMH path is not, which is why real `wmctrl -e` grows the window and
   ours stops at the work area. Plasma 6 does not clamp.
-* **`-d`.** The VP column is `_NET_DESKTOP_VIEWPORT` read from the X server
-  when one is already up, exactly as wmctrl reads it — KWin publishes one
-  pair per desktop, so every row prints `VP: 0,0`; a WM that publishes a
-  single pair prints it against the current desktop only. With no X plane
-  (no Xwayland process) the current desktop's origin is all that is claimed;
-  no Wayland compositor implements viewports, and `-o` says so. On Plasma 6
+* **`-d`.** The VP column is `_NET_DESKTOP_VIEWPORT`, and it follows the
+  same two-case rule the GNOME `-d` bullet above spells out. With an X plane
+  already up it is read from the X server, exactly as wmctrl reads it — KWin
+  publishes one pair per desktop, so every row prints `VP: 0,0`; a WM that
+  publishes a single pair prints it against the current desktop only. With no
+  X plane (no Xwayland process) there is no property to read, so every row
+  prints `VP: 0,0` — the origin each desktop begins at and the same pair the
+  `xw11` proxy publishes for a session with no X of its own (`wwmctl/core.py`,
+  which is what makes real `wmctrl -d` through `xw11` and `wwmctl -d` agree on
+  this column). On Plasma 6
   KWin's X root does not follow desktops created over D-Bus, so `wmctrl -d`
   there lists fewer desktops than we do and the rows past its array print
   `VP: N/A`; on 5.27 the two are byte-identical.
