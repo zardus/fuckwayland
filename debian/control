@@ -44,6 +44,3 @@ Description: X11 power tools as drop-in clones for Wayland
  Shell extension is carried for wxrandr --unsafe-gnome-overlap and is enabled
  for nobody: nothing in this package turns it on, and it does nothing until
  somebody enables it by hand.  See README.Debian.
-# the package this one was called through 0.4: the same files under the old name
-Conflicts: fuckwayland
-Replaces: fuckwayland

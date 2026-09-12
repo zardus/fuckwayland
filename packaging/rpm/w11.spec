@@ -39,9 +39,6 @@ Summary:        X11 power tools as drop-in clones for Wayland
 # disagrees with this tag (spdx_id() there is the reader), so a relicence that
 # edits one file and not the other cannot ship.
 License:        BSD-2-Clause
-# the package this one was called through 0.4: the same files under the old name
-Obsoletes:      fuckwayland < 0.4.1
-Conflicts:      fuckwayland
 URL:            https://github.com/zardus/w11
 Source0:        %{name}-%{version}.tar.gz
 

@@ -46,9 +46,6 @@ license=('BSD-2-Clause')
 # Pure standard library: python and nothing else.  Everything the six tools
 # reach for at run time is optional and named below, one clause each.
 depends=('python')
-# the package this one was called through 0.4: the same files under the old name
-conflicts=('fuckwayland')
-replaces=('fuckwayland')
 makedepends=('python-build' 'python-installer' 'python-wheel' 'python-setuptools'
              'gobject-introspection' 'python-gobject')
 optdepends=('python-gobject: the warandr GUI'
