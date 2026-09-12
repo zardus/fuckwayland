@@ -27,7 +27,7 @@
 # reparenting WM moved too (100,100 asked, 102,140 read back under openbox).  The rounding is the window
 # manager's business on X and the client's on Wayland, and both sides of that fork fit inside one cell.
 
-SMOKE_PHASES="busrec install windows wm input desktops display mirror root nodialog"
+SMOKE_PHASES="busrec install windows wm proxy input desktops display mirror root nodialog"
 EDITOR_CLASS=foot
 
 # The X client the WM_CLASS-instance and _NET_CLIENT_LIST checks need; started by phase_wm and killed there.
@@ -260,14 +260,14 @@ layout_phase() {
     same "--vkbd on types byte-exact with no uinput and no privilege" "vkbd: yz@" "$(editor_text)"
     local ex; ex=$(guest 'wdotool keys explain --chars z' || true)
     want "keys explain reads the keymap off the wire" "^layout: .* -- group [0-9]+ of [0-9]+" "$ex"
-    # WayfireLayouts is in the tree and cannot be reached on this image: the ini vm/build-image.sh writes has
-    # one xkb_layout, so the keymap has one group, choose_group is CERTAIN and fetch() never asks anybody.
-    # The route to a second group is the ini and only the ini -- `wayfire/set-config-options
-    # {"input/xkb_layout": "us,de"}` answered `{"result":"ok"}` and left get-keyboard-state reporting one
-    # layout (measured on this box 2026-09-08, wayfire 0.10.0), and `set-keyboard-state` corrupts the layout
-    # list [recon2/wayfire 2.7].  A second layout in the golden's ini turns this line green.
-    xwant "keys explain names wayfire as the group's source (until the ini carries a second xkb_layout)" \
-          "from wayland \+ wayfire" "$ex"
+    # A plain `want` since the golden's ini carries the second layout: vm/build-image.sh writes
+    # `xkb_layout = us,de` into wayfire.ini, so the keymap has two groups, choose_group is no
+    # longer CERTAIN and fetch() asks WayfireLayouts -- which is what puts wayfire's name in the
+    # clause.  The route was the ini and only the ini: `wayfire/set-config-options
+    # {"input/xkb_layout": "us,de"}` answered `{"result":"ok"}` and left get-keyboard-state
+    # reporting one layout (measured on this box 2026-09-08, wayfire 0.10.0), and
+    # `set-keyboard-state` corrupts the layout list [recon2/wayfire 2.7].
+    want "keys explain names wayfire as the group's source" "from wayland \+ wayfire" "$ex"
     note "get-keyboard-state: $(ev "$(wfipc wayfire/get-keyboard-state || true)")"
 }
 
@@ -345,9 +345,19 @@ phase_mirror() {
         # a few seconds after the started line (CI run 34329371964 measured the target painted; run
         # 34336882062, same tree for this phase, took the one shot early and saw it flat): poll, and only
         # a head still flat after ten seconds is a mirror that delivered nothing.
-        local painted=false i
+        # Relative to the head's own reading before the mirror, not the rig's 0.02
+        # line: a region of wf-background is nearly one colour, and CI run
+        # 34567497131 read 0.016 during the mirror against exactly 0 before it --
+        # something arrived, and 0.02 was measured on a busier region.
+        local painted=false i before now
+        before=$(head_sd "$second" || echo 0)
+        note "head $second standard deviation before the mirror: ${before:-0}"
         for i in 1 2 3 4 5 6 7 8 9 10; do
-            if ! head_dark "$second"; then painted=true; break; fi
+            now=$(head_sd "$second" || echo 0)
+            note "head $second standard deviation $now"
+            if awk -v a="${now:-0}" -v b="${before:-0}" 'BEGIN { exit !(a + 0 > b + 0.005 || a + 0 >= 0.02) }'; then
+                painted=true; break
+            fi
             sleep 1
         done
         if $painted; then
