@@ -18,10 +18,10 @@ across compositor-specific protocols, D-Bus methods, scripting interfaces, porta
 and kernel devices. A program that once spoke to one X server now needed a different
 answer for every desktop.
 
-This raised a narrower and more useful question: had the capability disappeared, or
-had its address changed?
+I started with a narrower and more useful question: had the capability disappeared,
+or had its address changed?
 
-The answer was that its address had changed. GNOME, KWin, sway and the other
+What I found was that its address had changed. GNOME, KWin, sway and the other
 compositors still know where every window is, which output it occupies and which
 window has focus. They expose different portions of that state through different
 interfaces. Rebuilding the old tools therefore meant finding those interfaces,
@@ -91,13 +91,76 @@ The implementation selects one of these routes at runtime. On an X11 session it 
 out of the way and executes the original program. On Wayland it presents the same
 interface over whichever route the compositor supplies.
 
-Finding an interface was usually straightforward. The interesting part was learning
-when its apparently simple answer could not be trusted.
+### Why GNOME needs two JavaScript extensions
 
-## APIs that almost tell the truth
+GNOME was where this stopped looking like a normal compatibility project. Display
+control worked first: Mutter already had a D-Bus interface for reading and applying
+monitor layouts. Window control did not. Mutter plainly knew the title, process ID,
+position and workspace of every window because GNOME Shell displayed and managed all
+of them, but I could not find an interface that gave an ordinary client the same
+view.
 
-Compositor APIs tend to describe their own internal model accurately. Problems begin
-when that model is translated into an X11 interface with different assumptions.
+I tried several doors that looked almost right. The generic toplevel protocols
+were either absent or lacked the required actions. `org.gnome.Shell.Introspect` was
+read-only and restricted its callers. `org.gnome.Shell.Eval` could run code inside
+the shell, but only after enabling GNOME's unsafe mode. None was an interface that an
+old `xdotool` or `wmctrl` script could depend on.
+
+The remaining place to stand was inside GNOME Shell itself. A Shell extension can use
+Mutter's public JavaScript APIs, so `w11-bridge` does exactly that and exports the
+needed operations over a small D-Bus interface. It accepts defined requests rather
+than code to evaluate, and it never injects input. From the command line, it is simply
+the missing bridge to state that GNOME already owns. `wdotool`, `wwmctl` and `wxprop`
+use it. Display tools do not, because Mutter's existing DisplayConfig interface is
+already sufficient for ordinary monitor layouts.
+
+Then came overlapping monitors.
+
+On X11, two outputs may cover some or all of the same desktop rectangle. That is how
+output-level mirroring has traditionally been expressed, and scripts also use partial
+overlap for unusual display walls. Mutter's public configuration method rejects such
+a layout before applying it. Saving the same coordinates in
+`~/.config/monitors.xml` does not help because the file passes through the same
+validator, and one rejected entry causes Mutter to discard the whole file.
+
+At first that looked like a limit of the compositor. It was actually a limit of the
+configuration path. Mutter's internal monitor objects can represent overlapping
+rectangles, and GNOME on Xorg can place them there. The renderer knows what to do;
+the public Wayland configuration route simply refuses to ask it.
+
+Bypassing that refusal requires a much less comfortable extension. `w11-overlap`
+loads a description of Mutter's private monitor structures, finds the configuration
+used by the running shell, changes the 32-bit `x` and `y` fields for the monitors that
+must move, and asks Mutter to apply that object. In plain terms, it patches the memory
+of the running `gnome-shell`. A wrong offset can corrupt the heap and end the desktop
+session.
+
+That code is deliberately kept out of `w11-bridge`. The bridge uses public APIs and
+is meant to remain enabled; the overlap extension is installed disabled and is needed
+only by someone who chooses this specific layout. Before every write it runs six
+compatibility checks, verifies addresses against the shell's mapped memory, bounds
+every read and list walk, and reads the result back. These checks make a measured
+private layout less reckless to use. They do not make it a public API.
+
+`wxrandr` still tries Mutter's public DisplayConfig route first. It contacts the
+overlap extension only when Mutter rejects the requested positions and the user has
+supplied the explicit unsafe option. The exact checks, warning and recovery path are
+documented in [WXRANDR.md](WXRANDR.md#--unsafe-gnome-overlap-the-one-route-through).
+
+Once the tools could reach each compositor, the next surprises came from the answers
+they received.
+
+## When correct APIs produce incompatible answers
+
+The first replies looked reasonable. GNOME returned a workspace count, KWin returned
+a handle for each window, and the display APIs accepted new layouts. Only when those
+answers were fed back into old commands did their different meanings become visible.
+
+X11 tools assume that a desktop count is fixed, a window ID is numeric and a display
+change can be temporary. The compositor APIs describe newer models in which none of
+those assumptions necessarily holds. The APIs were answering correctly, but a direct
+translation would still lie to the script. Each case below forced a choice between an
+exact mapping, a stable substitute and an explicit refusal.
 
 ### The workspace that exists only to remain empty
 
@@ -110,9 +173,9 @@ overview appears to show only one in use. Mutter also refuses a request such as
 `wdotool set_num_desktops 4`, because a fixed count is incompatible with dynamic
 workspaces.
 
-Neither result is a transport error. The count is Mutter's real count, and the setter
-has no honest implementation while dynamic workspaces are enabled. w11 reports both
-facts rather than inventing a second workspace model.
+w11 had not misread the reply. The count was Mutter's real count, and a fixed setter
+had no honest implementation while dynamic workspaces were enabled. The only useful
+answer was to report Mutter's count and explain why the setter was refused.
 
 ### The window ID that KWin does not have
 
@@ -129,21 +192,10 @@ window cannot be mistaken for an X window in a mixed listing. If two UUIDs colli
 the 30-bit space, the second receives another value rather than disappearing from the
 list.
 
-XWayland windows are harder. Plasma 6 removed the scriptable X11 properties that once
-exposed their X IDs. `wwmctl` still needs to print those real IDs because users pass
-them to `xprop` and other X11 programs. w11 reads `_NET_CLIENT_LIST` from XWayland and
-matches it against KWin's window list using process ID and `WM_CLASS`, followed by
-title and geometry.
-
-The first matcher looked convincing until it met an adversarial case: one X client
-created two top-level windows with the same process ID, class, title and rectangle.
-Only `WM_WINDOW_ROLE`, which the matcher deliberately did not use, distinguished
-them. The matcher swapped the IDs in six of eight runs.
-
-The fix was a refusal rule rather than a more elaborate score. A pair must agree on
-process ID or class before it can receive an X ID. If the available evidence cannot
-separate two candidates, both retain ID 0. An unknown ID is safer and more useful
-than a plausible ID for the wrong window.
+That gives native Wayland windows an ID that old scripts can carry between commands.
+XWayland windows are a separate problem because those scripts need the real X ID, not
+a substitute. The first solution appeared to work until a deliberately ambiguous
+pair of windows exposed it. That failure is the fourth story in the next section.
 
 ### A display change that is always permanent
 
@@ -167,16 +219,25 @@ output as a `kde_output_device_v2` global in the Wayland registry. Starting with
 `wxrandr` now supports both discovery mechanisms, with a wire-level KWin test double
 covering each one.
 
-## Four failures found by running the tools
+## What only a running desktop revealed
 
-Specifications established which requests existed. They did not establish how a
-complete desktop behaved while those requests were in flight. The following failures
-came from real sessions, screenshots and deliberately hostile test cases.
+The mismatches above could be found by comparing the X11 model with each compositor's
+API. The next problems were less polite. In each case, the protocol connection
+worked, the request was valid and at least one component believed it had succeeded.
+The result on the desktop was still wrong.
+
+That distinction changed how the tools had to be tested. A reply from the compositor
+was no longer enough. The tests also had to watch the window after it acknowledged a
+resize, the X server chosen by a root process, and the pixels displayed after a
+capture began. The four stories below are the failures that made those observations
+part of the contract.
 
 ### 1. Mirroring turned both displays black
 
-`wmirror` captures a region of one output and displays it in a fullscreen
-`wl-mirror` window on another. This is safe while the two outputs occupy separate
+The purpose of `wmirror` sounds simple: capture a region of one output and display it
+in a fullscreen `wl-mirror` window on another. This is useful when the source is only
+part of a display or when the two displays have shapes that output-level mirroring
+cannot represent. It is also safe while the source and target occupy separate
 rectangles.
 
 Now place both outputs at the same coordinates, as is commonly done to mirror a
@@ -184,23 +245,23 @@ wlroots layout. The fullscreen target window occupies pixels that also belong to
 source. The next captured frame therefore contains the window displaying the previous
 captured frame.
 
-The expected failure was a video-feedback tunnel. On a live sway session, both
-screens instead became completely black and stayed that way until `wl-mirror` was
-killed from another tty.
-
+I expected a video-feedback tunnel. On a live sway session, both screens instead
+became completely black and stayed that way until I killed `wl-mirror` from another
+tty.
 For this reason, `wmirror` does not merely warn when source and target overlap. It
 refuses to start, identifies the conflicting geometry and prints the `wxrandr`
 command for output-level mirroring when that is the operation the user intended.
 
 ### 2. The valid X cookie belonged to the wrong display
 
-w11 supports commands invoked through `sudo`, root SSH sessions and cron. On an X11
-desktop, that requires recovering the active user's `DISPLAY` and `XAUTHORITY` before
-executing the original tool.
+The next failure started with a common administrative task: run an existing desktop
+script through `sudo`, a root SSH session or cron. On an X11 desktop, w11 hands the
+command to the original tool. Before it can do that, it must recover the active
+user's `DISPLAY` and `XAUTHORITY` so the tool can open the correct X server.
 
 The obvious search checks the caller's environment, the runtime directory and
-`~/.Xauthority`. On a Plasma session started by SDDM 0.20, that search found a real
-cookie and the X server still rejected it:
+`~/.Xauthority`. On a Plasma session started by SDDM 0.20, I found a real cookie and
+the X server still rejected it:
 
 ```text
 Authorization required, but no authorization protocol specified
@@ -218,7 +279,9 @@ rather than the logged-in user.
 
 ### 3. Two maximize requests raced each other
 
-On X11, this command is one client message containing two state atoms:
+Maximizing a window looks like one action to a person, but wmctrl represents the two
+axes separately. On X11, the following command becomes one client message containing
+both state atoms:
 
 ```sh
 wmctrl -b add,maximized_vert,maximized_horz
@@ -242,62 +305,87 @@ the state has settled enough for the next command to observe it.
 
 ### 4. A matching algorithm was confidently wrong
 
-The KWin X-ID case revealed a broader testing lesson. Normal applications supplied
-enough distinguishing information that the original matcher appeared exact. Only a
-client designed to create indistinguishable windows exposed the ambiguity.
+The window-ID problem returned when native and XWayland windows had to appear in the
+same `wwmctl` list. Plasma 6 removed the scriptable properties that once exposed an
+XWayland window's real X ID. KWin still described the window, and XWayland still
+listed the ID in `_NET_CLIENT_LIST`, but neither side supplied a value that directly
+joined the two records.
 
-The useful assertion was not that the matcher usually found an ID. It was that every
-ID it returned had enough evidence behind it. Once the test was phrased that way, ID
-0 became a successful result for an ambiguous pair rather than a failure to be hidden.
+The first matcher filtered on process ID and `WM_CLASS`, then scored the remaining
+pairs by title and geometry. It looked exact with ordinary applications. To test the
+assumption, I wrote one X client that created two top-level windows with the same
+process ID, class, title and rectangle. `WM_WINDOW_ROLE` recorded which was which for
+the test, but the matcher did not use it. With no meaningful difference between the
+candidates, their order decided the answer. The matcher swapped the two IDs in six of
+eight runs.
 
-This pattern appears throughout w11: a refusal with a specific reason is preferable
-to an operation that reports success while acting on the wrong object.
+A more complicated score could only hide the ambiguity. The fix was to state when an
+answer was justified: a pair must agree on process ID or class, and candidates that
+cannot be distinguished keep ID 0. The useful promise is not that every window gets
+an ID. It is that an ID, when present, belongs to the right window.
 
-## Input injection is a keyboard-layout problem
+This became a rule for the rest of w11. A specific refusal is better than a successful
+command aimed at the wrong object.
 
-The portable input path is `/dev/uinput`. wdotool creates a virtual keyboard, a
-relative mouse and an absolute tablet. Compositors process those devices like physical
-hardware, so the path works on GNOME, KDE and desktops without a virtual-input
-protocol. It requires root or a udev rule. Device creation also causes roughly 600
-milliseconds of hotplug settling, so a small daemon owns the devices and later
-commands connect to it.
+## Why typing text becomes a keyboard-layout problem
 
-Many wlroots compositors provide a better route for an unprivileged client.
+Window management varies visibly between compositors. Typing the letter `a` looks as
+if it should be the easy part. The command receives a character, the virtual keyboard
+presses a key, and the focused application receives that character.
+
+The missing step is the one a physical keyboard normally hides. Input interfaces do
+not send a character; they send a keycode. A keymap turns that keycode, together with
+modifiers and the selected layout, into `a`, `A`, `ä` or something else. wdotool must
+therefore answer three questions for every piece of text: how to inject the event,
+which keymap will interpret it, and which configured layout is active now.
+
+The portable answer to the first question is `/dev/uinput`. wdotool creates a virtual
+keyboard, a relative mouse and an absolute tablet. Compositors process those devices
+like physical hardware, so the path works on GNOME, KDE and desktops without a
+virtual-input protocol. It requires root or a udev rule. Device creation also causes
+roughly 600 milliseconds of hotplug settling, so a small daemon owns the devices and
+later commands connect to it.
+
+Many wlroots compositors provide a second answer that needs no special access.
 `zwp_virtual_keyboard_v1` accepts an uploaded keymap and key events, while
 `zwlr_virtual_pointer_v1` accepts motion, buttons and scrolling. sway advertises both
 interfaces to every client on its Wayland socket. wdotool uses them when the kernel
 device is unavailable.
 
-The protocol path avoids one class of layout errors because the compositor interprets
-keycodes through the keymap supplied by wdotool. That keymap is currently US, so this
-path cannot produce every character from layouts such as German. The kernel path has
-the opposite problem: it must send keycodes that the desktop interprets through the
-user's active XKB layout. A fixed US table types `z` when a German user asks for `y`.
+That solves the transport question, but each path answers the keymap question
+differently. With the Wayland protocol, the compositor interprets keycodes through a
+keymap uploaded by wdotool. That keymap is currently US, so this path cannot produce
+characters absent from that keymap, such as `ü`. With `/dev/uinput`, the compositor
+uses the desktop's active XKB keymap. A fixed US table then types `z` when a German
+user asks for `y`.
 
 wdotool solves this by reading the compositor's keymap and constructing the mapping
 in reverse: character to keycode plus modifier mask. AltGr is discovered from the
 keymap rather than assumed to be Right Alt, and dead-key characters become two key
 presses that the application composes.
 
-The active layout introduces another problem. Wayland sends the active XKB group to
-the focused client, but an input injector is never that client. wdotool asks each
-desktop through the best interface it provides: KWin's keyboard-layout method,
-GNOME's input-source setting, Hyprland's device state, Wayfire's keyboard state and
-Cinnamon's input-source setting. sway and COSMIC provide the required state on the
-Wayland connection itself. Where no source exists, wdotool states which layout it
-has assumed.
+That leaves the third question: which configured layout is active? XKB calls the
+selected layout a group. Wayland sends the current group to the focused client, but
+an input injector is never that client. wdotool therefore asks each desktop through
+the best interface it provides: KWin's keyboard-layout method, GNOME's input-source
+setting, Hyprland's device state, Wayfire's keyboard state and Cinnamon's input-source
+setting. sway and COSMIC provide the state on the Wayland connection itself. Where no
+source exists, wdotool states which layout it has assumed.
 
-One kernel detail placed a hard limit on `--clearmodifiers`. Linux discards a key-up
-event when the emitting device does not hold that key. A virtual keyboard therefore
-cannot release Shift or Control held on a physical keyboard. Trying to fake the
-release can leave the modifier stuck because Mutter and KWin combine key state across
-the seat's devices. wdotool clears only modifiers held by its own device and reports
-the physical modifier when it can identify one.
+A final trap appeared in `--clearmodifiers`. Linux discards a key-up event when the
+emitting device does not hold that key. A virtual keyboard therefore cannot release
+Shift or Control held on a physical keyboard. Trying to fake the release can leave
+the modifier stuck because Mutter and KWin combine key state across the seat's
+devices. wdotool clears only modifiers held by its own device and reports the
+physical modifier when it can identify one.
 
 ## What the test environment had to model
 
-The repository currently contains 4302 tests. The count matters less than the kinds
-of disagreement they are designed to expose.
+By this point, a valid reply from a protocol no longer looked like proof that a tool
+worked. The test environment had to reproduce the layers around the protocol: the
+client responding to a configure event, the display manager choosing an authority
+file, and the pixels produced by a capture loop. The repository currently contains
+4302 tests, but the useful part is the range of disagreements they can expose.
 
 Parity tests run the real `xdotool`, `wmctrl`, `xprop` and `xrandr`, then compare
 their output and exit status with the corresponding w11 tool. Other tests use small
@@ -326,10 +414,10 @@ reader to notice it.
 
 ## What long-lived desktops found
 
-Disposable VMs are good at reproducing installation and protocol behavior. They are
-bad at reproducing a desktop that logs out, sits idle, changes keyboard layouts and
-survives upgrades. Running w11 that way produced several failures that short-lived
-tests had missed.
+The VM tests still had a blind spot: they behaved like test machines. They booted,
+ran a workload and disappeared. A real desktop logs out, sits idle for an afternoon,
+changes keyboard layouts and survives upgrades. When I began using w11 that way,
+several failures appeared that the short-lived tests had never created.
 
 The input daemon originally lived until the machine shut down. Logout removed its
 socket but left the process and lock alive, so no client could reach the old daemon
@@ -352,19 +440,21 @@ in a different coordinate space. Before saving a persistent layout, `wxrandr` no
 checks whether Mutter has already discarded the file, warns about layouts vulnerable
 to this change and keeps a copy of the file it replaces.
 
-The most invasive feature is deliberately separate. GNOME rejects overlapping
-monitor rectangles in every public configuration route. w11 can bypass that check
-through an optional Shell extension that writes into a private Mutter structure. The
-extension is disabled by default and guarded by six checks tied to measured GNOME
-builds. Tests install twelve deliberately incorrect structure descriptions and
-verify that every one is rejected before a write occurs. This reduces the risk; it
-does not make the private interface stable. The README documents the route and its
-cost before showing how to enable it.
+The overlap extension raised a different long-term question: what happens when an
+upgrade moves the private fields it writes? To exercise that failure before a real
+upgrade did, the tests installed twelve deliberately incorrect structure
+descriptions. Every one had to be rejected by the six compatibility checks before a
+write occurred, with the shell session still alive. This is why the extension checks
+the running build on every use rather than trusting what was true when the package was
+installed. It reduces the risk described earlier; it does not make the private
+interface stable.
 
 ## The security boundary is part of the interface
 
-These tools exist to give scripts powers that ordinary Wayland clients do not have.
-That fact should be visible in the design rather than buried in an installation note.
+One question remained after the tools worked: who had received the power to use them?
+These commands exist to give scripts access that ordinary Wayland clients do not
+have, so the answer had to be part of the interface rather than an installation
+footnote.
 
 On GNOME, installing the bridge lets processes on the user's session bus list and
 control windows. Installing the udev rule lets the user at the active seat inject
