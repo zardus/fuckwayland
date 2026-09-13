@@ -492,10 +492,13 @@ The display backend token depends on the desktop:
 | Cinnamon | `cinnamon` |
 | Generic output-management protocol | `wlr` |
 
-The second line of `wxrandr --version` is whatever RandR version your own session
-reports. `wwmctl -l` on GNOME is the one that needs the [bridge
-extension](#gnome). If it says so instead of listing windows, that is the step still
-missing, and `wxrandr` above will have worked anyway.
+The second line of `wxrandr --version` reports the RandR version supported by your
+current session.
+
+On GNOME, `wwmctl -l` requires the [bridge extension](#gnome). If the command reports
+that the bridge is unavailable instead of listing windows, complete that installation
+step and log in again. The bridge is not used by `wxrandr`, so the display check above
+can still succeed.
 
 On an **X11** session that block is not what you get, and that is the handover
 working: the four command-line tools *are* the originals there, so they print the
